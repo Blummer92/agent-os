@@ -346,7 +346,9 @@ class WorkflowSchedulerCLI:
             updated_at=workflow.updated_at.isoformat(),
         )
 
-    def run_workflow(self, workflow_id: str) -> Dict[str, Any]:
+    def run_workflow(
+        self, workflow_id: str, *, _approval_continuation: bool = False,
+    ) -> Dict[str, Any]:
         """Execute workflow.
 
         Args:
@@ -382,9 +384,16 @@ class WorkflowSchedulerCLI:
                 error="Workflow is paused; resume it with resume-workflow before running.",
             )
 
-        workflow.mark_running()
-        self.audit_logger.log_workflow_started(workflow)
-        self.repository.update_workflow(workflow)
+        if workflow.status != WorkflowStatus.RUNNING:
+            workflow.mark_running()
+            if self.repository.update_workflow(workflow):
+                self.audit_logger.log_workflow_started(workflow)
+            else:
+                # A competing start may legitimately win. Reuse its fresh
+                # RUNNING snapshot; do not dispatch after pause/cancel won.
+                workflow = self.repository.get_workflow(workflow_id)
+                if workflow is None or workflow.status != WorkflowStatus.RUNNING:
+                    return self._workflow_write_refused(workflow_id)
 
         tasks = self.repository.list_workflow_tasks(workflow_id)
         tasks_by_id = {t.id: t for t in tasks}
@@ -394,7 +403,8 @@ class WorkflowSchedulerCLI:
         has_cycle, cycle_path = resolver.has_cycle()
         if has_cycle:
             workflow.mark_failed(reason=f"Circular dependency detected: {' -> '.join(cycle_path)}")
-            self.repository.update_workflow(workflow)
+            if not self.repository.update_workflow(workflow):
+                return self._workflow_write_refused(workflow_id)
             return self._format_response(
                 status="fail",
                 checks_failed=["cycle_detected"],
@@ -415,11 +425,51 @@ class WorkflowSchedulerCLI:
         blocked: set[str] = set()
         approval_pending: set[str] = set()
         retry_pending: set[str] = set()
+        in_flight_elsewhere: set[str] = set()
+        state_conflicts: set[str] = set()
+
+        def reconcile_task(task_id: str) -> None:
+            current = self.repository.get_task(task_id)
+            if current is None:
+                state_conflicts.add(task_id)
+                return
+            settled = {
+                TaskStatus.COMPLETED: completed,
+                TaskStatus.CANCELLED: cancelled,
+                TaskStatus.PAUSED: paused,
+                TaskStatus.FAILED: failed,
+                TaskStatus.GOVERNANCE_BLOCKED: blocked,
+                TaskStatus.APPROVAL_PENDING: approval_pending,
+                TaskStatus.RETRY_SCHEDULED: retry_pending,
+            }
+            bucket = settled.get(current.status)
+            if current.status == TaskStatus.RUNNING or current.lease_lock is not None:
+                in_flight_elsewhere.add(task_id)
+            elif bucket is not None:
+                bucket.add(task_id)
+            else:
+                state_conflicts.add(task_id)
+
+        def settle_in_flight() -> bool:
+            # Another runner may have settled work this runner observed in
+            # flight. Re-read it once more before giving up, so concurrent
+            # runners cannot all exit "executing elsewhere" and strand the
+            # workflow RUNNING after every task has settled.
+            settled_any = False
+            for task_id in sorted(in_flight_elsewhere):
+                current = self.repository.get_task(task_id)
+                if current is not None and current.status != TaskStatus.RUNNING and current.lease_lock is None:
+                    in_flight_elsewhere.discard(task_id)
+                    reconcile_task(task_id)
+                    settled_any = True
+            return settled_any
 
         while (
             len(completed) + len(cancelled) + len(paused) + len(failed)
             + len(blocked) + len(approval_pending) + len(retry_pending)
-        ) < len(tasks):
+            + len(in_flight_elsewhere)
+            + len(state_conflicts)
+        ) < len(tasks) or settle_in_flight():
             raw_ready = [
                 task_id
                 for task_id in resolver.get_ready_tasks(completed)
@@ -429,8 +479,12 @@ class WorkflowSchedulerCLI:
                 and task_id not in blocked
                 and task_id not in approval_pending
                 and task_id not in retry_pending
+                and task_id not in in_flight_elsewhere
+                and task_id not in state_conflicts
             ]
             if not raw_ready:
+                if settle_in_flight():
+                    continue
                 break
 
             # Group batch members contiguously (first-seen order preserved
@@ -448,9 +502,13 @@ class WorkflowSchedulerCLI:
             # task execution, and preserves `ready`'s deterministic order
             # for the classification pass below.
             dispatchable: list[Task] = []
+            waiting = (
+                self._workflow_approval_waits(workflow)[0] if _approval_continuation else set()
+            )
             for task_id in ready:
                 task = self.repository.get_task(task_id)
                 if not task:
+                    state_conflicts.add(task_id)
                     continue
 
                 if task.batch_id:
@@ -462,8 +520,33 @@ class WorkflowSchedulerCLI:
                     retry_pending.add(task_id)
                     continue
 
-                task.status = TaskStatus.QUEUED
-                self.repository.update_task(task)
+                if task.status not in {
+                    TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.APPROVED,
+                    TaskStatus.QUEUED, TaskStatus.RETRY_SCHEDULED,
+                } or task.lease_lock is not None:
+                    reconcile_task(task.id)
+                    continue
+                if _approval_continuation and task.id not in waiting:
+                    approval = self.repository.get_approval_request(task.id)
+                    if task.status == TaskStatus.APPROVED or (
+                        approval is not None and approval.decision == ApprovalDecision.APPROVED
+                    ):
+                        # Automatic continuation consumes only approval
+                        # decisions that belong to this workflow run.
+                        state_conflicts.add(task.id)
+                        continue
+
+                task._require_running_workflow = True
+                if task.status != TaskStatus.QUEUED:
+                    task.status = TaskStatus.QUEUED
+                    if not self.repository.update_task(task):
+                        # Two runners may race to move the same task to
+                        # QUEUED. Only reuse that newly persisted snapshot.
+                        task = self.repository.get_task(task_id)
+                        if task is None or task.status != TaskStatus.QUEUED or task.lease_lock is not None:
+                            reconcile_task(task_id)
+                            continue
+                        task._require_running_workflow = True
                 dispatchable.append(task)
 
             # Phase 2: run every dispatchable task in this pass, one
@@ -483,7 +566,11 @@ class WorkflowSchedulerCLI:
                     completed.add(task.id)
                 elif result.status == "retry_scheduled":
                     retry_pending.add(task.id)
-                elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
+                elif {"lease_acquisition", "task_state_conflict"}.intersection(result.checks_failed):
+                    reconcile_task(task.id)
+                elif result.status == "blocked" and result.blockers in (
+                    [StopConditionChecker.APPROVAL_ENGINE_DEFERRED], ["adapter_approval_required"],
+                ):
                     approval_pending.add(task.id)
                 elif result.status == "blocked":
                     blocked.add(task.id)
@@ -499,6 +586,38 @@ class WorkflowSchedulerCLI:
                         workflow, batch_id=batch_id, status=rollup, task_ids=[m.id for m in members]
                     )
 
+        if in_flight_elsewhere or state_conflicts:
+            current_workflow = self.repository.get_workflow(workflow_id)
+            if current_workflow is None or current_workflow.status in {WorkflowStatus.PAUSED, WorkflowStatus.CANCELLED}:
+                return self._workflow_write_refused(workflow_id)
+            live_tasks = self.repository.list_workflow_tasks(workflow_id)
+            if (
+                current_workflow is not None
+                and current_workflow.status == WorkflowStatus.COMPLETED
+                and live_tasks
+                and all(t.status == TaskStatus.COMPLETED for t in live_tasks)
+            ):
+                return self._format_response(
+                    status="pass",
+                    checks_passed=["workflow_completed_elsewhere"],
+                    next_owner="system",
+                    workflow_id=workflow_id,
+                    completed=len(live_tasks),
+                    final_status=current_workflow.status.value,
+                )
+            # No failure or completion is inferred from a lost claim.
+            # The winning runner remains responsible for reconciliation.
+            reason = "tasks_executing_elsewhere" if in_flight_elsewhere else "task_state_conflict"
+            return self._format_response(
+                status="blocked",
+                blockers=[reason],
+                checks_failed=[reason],
+                next_owner="system",
+                workflow_id=workflow_id,
+                in_flight_task_ids=sorted(in_flight_elsewhere),
+                conflict_task_ids=sorted(state_conflicts),
+            )
+
         if (approval_pending or retry_pending or paused) and not failed and not blocked and not cancelled:
             # Waiting on an explicit human decision, a retry backoff window,
             # and/or an explicit pause — all resumable states, not terminal
@@ -507,7 +626,8 @@ class WorkflowSchedulerCLI:
             workflow.metadata["tasks_awaiting_approval"] = sorted(approval_pending)
             workflow.metadata["tasks_awaiting_retry"] = sorted(retry_pending)
             workflow.metadata["tasks_paused"] = sorted(paused)
-            self.repository.update_workflow(workflow)
+            if not self.repository.update_workflow(workflow):
+                return self._workflow_write_refused(workflow_id)
 
             blockers = []
             checks_failed = []
@@ -543,7 +663,7 @@ class WorkflowSchedulerCLI:
 
         if failed or blocked or cancelled:
             reason = f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
-            workflow.mark_failed(reason=reason)
+            settle = lambda plan: plan.mark_failed(reason=reason)  # noqa: E731
             status = "fail"
             checks_failed = [
                 c
@@ -554,14 +674,33 @@ class WorkflowSchedulerCLI:
                 )
                 if c
             ]
-            self.audit_logger.log_workflow_failed(workflow, reason=reason)
         else:
-            workflow.mark_completed()
+            settle = lambda plan: plan.mark_completed()  # noqa: E731
             status = "pass"
             checks_failed = []
-            self.audit_logger.log_workflow_completed(workflow)
 
-        self.repository.update_workflow(workflow)
+        # Retry a verdict only over a fresh RUNNING snapshot of the same
+        # plan. Never place a prior verdict on a replaced task/dependency set,
+        # nor reverse a concurrent pause/cancel/terminal transition.
+        plan_shape = (workflow.mode, workflow.tasks, workflow.dependencies)
+        for _attempt in range(3):
+            settle(workflow)
+            if status == "pass":
+                workflow._require_completed_workflow_tasks = True
+            if self.repository.update_workflow(workflow):
+                break
+            current = self.repository.get_workflow(workflow_id)
+            if current is None or current.status != WorkflowStatus.RUNNING:
+                return self._workflow_write_refused(workflow_id)
+            if (current.mode, current.tasks, current.dependencies) != plan_shape:
+                return self._workflow_write_refused(workflow_id)
+            workflow = current
+        else:
+            return self._workflow_write_refused(workflow_id)
+        if status == "pass":
+            self.audit_logger.log_workflow_completed(workflow)
+        else:
+            self.audit_logger.log_workflow_failed(workflow, reason=reason)
 
         return self._format_response(
             status=status,
@@ -574,6 +713,15 @@ class WorkflowSchedulerCLI:
             blocked=len(blocked),
             cancelled=len(cancelled),
             final_status=workflow.status.value,
+        )
+
+    def _workflow_write_refused(self, workflow_id: str) -> Dict[str, Any]:
+        current = self.repository.get_workflow(workflow_id)
+        return self._format_response(
+            status="blocked", blockers=["workflow_update_refused"],
+            checks_failed=["workflow_update_refused"], next_owner="system",
+            workflow_id=workflow_id,
+            final_status=current.status.value if current is not None else None,
         )
 
     def _group_ready_by_batch(self, ready: List[str], tasks_by_id: Dict[str, Task]) -> List[str]:
@@ -610,134 +758,211 @@ class WorkflowSchedulerCLI:
 
         return grouped
 
-    def _get_pending_approval_or_block(self, task_id: str, approver: str) -> tuple:
-        """Look up a task and its approval request, enforcing that the task is
-        actually awaiting approval before allowing a decision to be recorded.
-
-        A task may only be approved or rejected if:
-          - it exists
-          - its status is APPROVAL_PENDING (it went through the executor's
-            approval-pending path; it was never proactively approvable from
-            Draft/Pending/Queued/Running/etc.)
-          - its approval request (created by the executor) is still PENDING
-
-        If the task is APPROVAL_PENDING but its approval request is missing
-        (a recovery case — e.g. the record was lost), one is created here so
-        the decision can still be recorded.
-
-        Returns:
-            Tuple of (task, approval, error_response). Exactly one of
-            (task/approval) or error_response is populated.
-        """
+    def _decide_task(self, task_id, approver, decision, reason=None):
         task = self.repository.get_task(task_id)
-        if not task:
-            return None, None, self._format_response(
-                status="fail",
-                checks_failed=["task_not_found"],
-                next_owner="user",
-                error=f"Task not found: {task_id}",
+        if task is None:
+            return None, self._format_response(
+                status="fail", checks_failed=["task_not_found"],
+                next_owner="user", error=f"Task not found: {task_id}",
             )
-
         if task.status != TaskStatus.APPROVAL_PENDING:
-            return None, None, self._format_response(
+            return None, self._format_response(
                 status="blocked",
                 blockers=["task_not_awaiting_approval"],
                 checks_failed=["task_not_awaiting_approval"],
                 next_owner="user",
                 error=f"Task is not awaiting approval (status: {task.status.value})",
             )
-
-        approval = self.repository.get_approval_request(task_id)
-        if approval is None:
-            # Recovery case: task is APPROVAL_PENDING but has no approval
-            # record on file (should not normally happen; the executor
-            # always creates one when it moves a task into this state).
-            approval = ApprovalRequest(
-                id=str(uuid.uuid4()),
-                task_id=task_id,
-                requested_by=approver,
-                decision=ApprovalDecision.PENDING,
-            )
-            self.repository.create_approval_request(approval)
-        elif approval.decision != ApprovalDecision.PENDING:
-            return None, None, self._format_response(
+        if not self.repository.try_decide_pending_approval(
+            task_id, approver, decision, reason
+        ):
+            return None, self._format_response(
                 status="blocked",
                 blockers=["approval_already_decided"],
                 checks_failed=["approval_already_decided"],
                 next_owner="user",
-                error=f"Approval already decided: {approval.decision.value}",
+                error="Approval already decided or task state changed",
             )
-
-        return task, approval, None
+        return self.repository.get_task(task_id), None
 
     def approve(self, task_id: str, approver: str) -> Dict[str, Any]:
-        """Explicitly approve a task currently awaiting approval.
-
-        Args:
-            task_id: Task ID to approve
-            approver: Name/identifier of the human approver
-
-        Returns:
-            Dict with approval result
-        """
-        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
-        if error_response is not None:
-            return error_response
-
-        self.repository.update_approval_decision(
-            task_id=task_id,
-            decision=ApprovalDecision.APPROVED,
-            approver=approver,
+        task, error = self._decide_task(
+            task_id, approver, ApprovalDecision.APPROVED
         )
-
-        task.mark_approved()
-        self.repository.update_task(task)
+        if error is not None:
+            return error
         self.audit_logger.log_task_approved(task, approved_by=approver)
-
-        return self._format_response(
-            status="pass",
-            checks_passed=["approval_granted"],
-            next_owner="system",
-            task_id=task_id,
-            decision="approved",
-            approver=approver,
+        result = self._format_response(
+            status="pass", checks_passed=["approval_granted"],
+            next_owner="system", task_id=task_id,
+            decision="approved", approver=approver,
         )
+
+        # Resume only a workflow that was already running and waiting
+        # specifically for this task. All existing executor guards remain.
+        workflow = self.repository.get_workflow(task.workflow_id)
+        if (
+            workflow is not None
+            and workflow.status == WorkflowStatus.RUNNING
+            and task.id in self._workflow_approval_waits(workflow)[0]
+            and not task.has_active_lease(
+                timeout_seconds=self.executor.lease_timeout_seconds
+            )
+        ):
+            result["continuation"] = self.run_workflow(task.workflow_id, _approval_continuation=True)
+        return result
 
     def reject(self, task_id: str, approver: str, reason: str) -> Dict[str, Any]:
-        """Explicitly reject a task currently awaiting approval.
-
-        Args:
-            task_id: Task ID to reject
-            approver: Name/identifier of the human approver
-            reason: Rejection reason
-
-        Returns:
-            Dict with rejection result
-        """
-        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
-        if error_response is not None:
-            return error_response
-
-        self.repository.update_approval_decision(
-            task_id=task_id,
-            decision=ApprovalDecision.REJECTED,
-            approver=approver,
+        task, error = self._decide_task(
+            task_id, approver, ApprovalDecision.REJECTED, reason
+        )
+        if error is not None:
+            return error
+        self.audit_logger.log_task_cancelled(
+            task, previous_status=TaskStatus.APPROVAL_PENDING.value,
             reason=reason,
         )
-
-        previous_status = task.status.value
-        task.mark_cancelled(reason=reason)
-        self.repository.update_task(task)
-        self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
-
         return self._format_response(
-            status="pass",
-            checks_passed=["approval_rejected"],
-            next_owner="user",
-            task_id=task_id,
-            decision="rejected",
-            approver=approver,
-            reason=reason,
+            status="pass", checks_passed=["approval_rejected"],
+            next_owner="user", task_id=task_id,
+            decision="rejected", approver=approver, reason=reason,
+        )
+
+    def _workflow_approval_waits(self, workflow: WorkflowPlan) -> tuple[set[str], set[str]]:
+        current, request_bound = self.repository.workflow_approval_waits(workflow.workflow_id)
+        # Existing databases may only have the original workflow metadata.
+        # Never let that fallback revive a superseded request-bound wait.
+        legacy = workflow.metadata.get("tasks_awaiting_approval", ())
+        eligible = set(current)
+        if isinstance(legacy, (list, tuple)):
+            for task_id in legacy:
+                if not isinstance(task_id, str) or task_id in request_bound:
+                    continue
+                task = self.repository.get_task(task_id)
+                if task is None or task.workflow_id != workflow.workflow_id:
+                    continue
+                approval = self.repository.get_approval_request(task_id)
+                expected = {
+                    TaskStatus.APPROVAL_PENDING: ApprovalDecision.PENDING,
+                    TaskStatus.APPROVED: ApprovalDecision.APPROVED,
+                    TaskStatus.RUNNING: ApprovalDecision.APPROVED,
+                }.get(task.status)
+                if approval is not None and approval.decision == expected:
+                    eligible.add(task_id)
+        return eligible, current
+
+    def recover_pending_continuations(self, workflow_id: str) -> Dict[str, Any]:
+        """Resume approved work whose continuation was interrupted (Repair A).
+
+        Durability argument, using only existing persisted state: when a
+        workflow first waits on approval, the guarded pending transition
+        records the exact request as a workflow wait in the same transaction.
+        The normal end-of-pass metadata is not required for recovery.
+        When approval is granted, try_decide_pending_approval
+        atomically commits the decision and the APPROVED task status in
+        one transaction. A crash after that commit but before approve()
+        dispatches run_workflow therefore leaves exactly this state:
+        workflow RUNNING, task APPROVED, task still in
+        the recorded workflow wait, no claim yet. That state — and only that
+        state — is recoverable here, without a second human approval,
+        by re-running the workflow once through the normal executor
+        guards (single-winner claim, dependency order, separate
+        downstream approvals, rejection never dispatching).
+
+        Fail-closed limits, deliberately not recovered:
+        - a workflow that is not RUNNING (paused, terminal, never
+          started) is never dispatched by recovery;
+        - only an approved wait or a request-bound first dispatch queued
+          before any claim may resume, never a retry or an unindexed approval;
+        - a task with an active lease is reported as an unresolved
+          claim and is never stolen, even if a timeout has elapsed;
+          if its claim later blocks the run, the run's own
+          tasks_executing_elsewhere outcome is reported, not hidden;
+        - an unresolved prior claim (adapter may or may not have run)
+          is never retried by recovery, because a retry could duplicate
+          an external side effect whose outcome is uncertain.
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if workflow is None:
+            return self._format_response(
+                status="fail", checks_failed=["workflow_not_found"],
+                next_owner="user", error=f"Workflow not found: {workflow_id}",
+                workflow_id=workflow_id,
+            )
+        if workflow.status != WorkflowStatus.RUNNING:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_not_running"],
+                checks_failed=["workflow_not_running"],
+                next_owner="user",
+                error=f"Workflow is not running (status: {workflow.status.value}); recovery does not dispatch it",
+                workflow_id=workflow_id,
+            )
+        waiting, current_waiting = self._workflow_approval_waits(workflow)
+        recoverable: list[str] = []
+        unresolved_claim: list[str] = []
+        still_pending: list[str] = []
+        for task_id in waiting:
+            task = self.repository.get_task(task_id)
+            if task is None or task.workflow_id != workflow_id:
+                continue
+            if task.status == TaskStatus.RUNNING:
+                unresolved_claim.append(task_id)
+            elif task.status == TaskStatus.APPROVED or (
+                task.status == TaskStatus.QUEUED and task.id in current_waiting
+            ):
+                if task.lease_lock is not None:
+                    unresolved_claim.append(task_id)
+                else:
+                    recoverable.append(task_id)
+            elif task.status == TaskStatus.APPROVAL_PENDING:
+                still_pending.append(task_id)
+            # COMPLETED / CANCELLED / FAILED / GOVERNANCE_BLOCKED and
+            # anything else: already resolved; recovery leaves it alone.
+        if unresolved_claim and not recoverable:
+            return self._format_response(
+                status="blocked",
+                blockers=["unresolved_execution_claim"],
+                checks_failed=["unresolved_execution_claim"],
+                next_owner="system",
+                error="Approved work is held by an active execution claim; recovery does not steal it",
+                workflow_id=workflow_id,
+                recovered_task_ids=[],
+                unresolved_claim_task_ids=sorted(unresolved_claim),
+                still_pending_task_ids=sorted(still_pending),
+            )
+        if not recoverable:
+            return self._format_response(
+                status="pass", checks_passed=["no_pending_continuation"],
+                next_owner="system", workflow_id=workflow_id,
+                recovered_task_ids=[],
+                unresolved_claim_task_ids=sorted(unresolved_claim),
+                still_pending_task_ids=sorted(still_pending),
+            )
+        continuation = self.run_workflow(workflow_id, _approval_continuation=True)
+        in_flight = continuation.get("in_flight_task_ids", [])
+        # recovered_task_ids = eligible tasks dispatched for recovery;
+        # completed_task_ids = the subset actually COMPLETED after the
+        # run (read back fresh, not assumed from the dispatch). QA
+        # caveat (a) addressed: eligibility is never reported as
+        # completion.
+        completed = []
+        for task_id in recoverable:
+            task = self.repository.get_task(task_id)
+            if task is not None and task.status == TaskStatus.COMPLETED:
+                completed.append(task_id)
+        return self._format_response(
+            status=continuation.get("status", "blocked"),
+            checks_passed=["continuation_recovered"]
+            if continuation.get("status") == "pass" else [],
+            checks_failed=continuation.get("checks_failed", []),
+            blockers=continuation.get("blockers", []),
+            next_owner="system", workflow_id=workflow_id,
+            recovered_task_ids=sorted(recoverable),
+            completed_task_ids=sorted(completed),
+            unresolved_claim_task_ids=sorted(set(unresolved_claim) | set(in_flight)),
+            still_pending_task_ids=sorted(still_pending),
+            continuation=continuation,
         )
 
     def pause_task(self, task_id: str) -> Dict[str, Any]:
@@ -778,7 +1003,18 @@ class WorkflowSchedulerCLI:
 
         previous_status = task.status.value
         task.mark_paused()
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            # D1 fix: a guarded write refusal (e.g. an execution claim
+            # held by another runner, with an expired lease timestamp)
+            # must not be reported — or audited — as a pause.
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task pause was refused by the guarded update; the task was not paused",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_paused(task, previous_status=previous_status)
 
         return self._format_response(
@@ -828,7 +1064,15 @@ class WorkflowSchedulerCLI:
             )
 
         restored_status = task.status.value
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task resume was refused by the guarded update; the task was not resumed",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_resumed(task, restored_status=restored_status)
 
         return self._format_response(
@@ -878,7 +1122,16 @@ class WorkflowSchedulerCLI:
 
         previous_status = task.status.value
         task.mark_cancelled(reason=reason)
-        self.repository.update_task(task)
+        if not self.repository.update_task(task):
+            # D1 fix: see pause_task — a refused write is not a cancel.
+            return self._format_response(
+                status="blocked",
+                blockers=["task_update_refused"],
+                checks_failed=["task_update_refused"],
+                next_owner="system",
+                error="Task cancel was refused by the guarded update; the task was not cancelled",
+                task_id=task_id,
+            )
         self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
 
         return self._format_response(
@@ -936,7 +1189,15 @@ class WorkflowSchedulerCLI:
 
         previous_status = workflow.status.value
         workflow.mark_paused()
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow pause was refused by the guarded update; the workflow was not paused",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_paused(workflow, previous_status=previous_status)
 
         return self._format_response(
@@ -974,7 +1235,15 @@ class WorkflowSchedulerCLI:
             )
 
         workflow.resume()
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow resume was refused by the guarded update; the workflow was not resumed",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_resumed(workflow)
 
         return self._format_response(
@@ -1014,24 +1283,52 @@ class WorkflowSchedulerCLI:
 
         previous_status = workflow.status.value
         workflow.mark_cancelled(reason=reason)
-        self.repository.update_workflow(workflow)
+        if not self.repository.update_workflow(workflow):
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_update_refused"],
+                checks_failed=["workflow_update_refused"],
+                next_owner="system",
+                error="Workflow cancel was refused by the guarded update; the workflow was not cancelled",
+                workflow_id=workflow_id,
+            )
         self.audit_logger.log_workflow_cancelled(workflow, previous_status=previous_status, reason=reason)
 
         # Cascade: cancel every non-terminal task, sequentially. Tasks
         # already COMPLETED, FAILED, CANCELLED, or GOVERNANCE_BLOCKED are
-        # left untouched.
+        # left untouched. D1 fix: a task whose guarded write is refused
+        # (e.g. it holds an execution claim) is NOT logged or listed as
+        # cancelled — it is reported separately as refused, and the
+        # overall response is blocked, not a pass claiming full cancel.
         cancelled_task_ids = []
+        refused_task_ids = []
         for task in self.repository.list_workflow_tasks(workflow_id):
             if task.status in _TERMINAL_TASK_STATUSES:
                 continue
 
             task_previous_status = task.status.value
             task.mark_cancelled(reason=f"{reason} (cascaded from workflow cancellation)")
-            self.repository.update_task(task)
+            if not self.repository.update_task(task):
+                refused_task_ids.append(task.id)
+                continue
             self.audit_logger.log_task_cancelled(
                 task, previous_status=task_previous_status, reason=f"{reason} (cascaded from workflow cancellation)"
             )
             cancelled_task_ids.append(task.id)
+
+        if refused_task_ids:
+            return self._format_response(
+                status="blocked",
+                blockers=["tasks_not_cancelled"],
+                checks_failed=["tasks_not_cancelled"],
+                next_owner="system",
+                workflow_id=workflow_id,
+                reason=reason,
+                cancelled_task_count=len(cancelled_task_ids),
+                cancelled_task_ids=cancelled_task_ids,
+                refused_task_ids=sorted(refused_task_ids),
+                error="Workflow is cancelled, but the refused tasks were not cancelled (guarded write refused, e.g. execution claim held); they must not be treated as stopped",
+            )
 
         return self._format_response(
             status="pass",
@@ -1139,6 +1436,14 @@ def main() -> None:
     cancel_workflow_parser.add_argument("--reason", required=True, help="Reason for cancellation")
     cancel_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
 
+    # recover-continuations command (Repair A: crash recovery, no new approval)
+    recover_parser = subparsers.add_parser(
+        "recover-continuations",
+        help="Resume approved work whose continuation was interrupted",
+    )
+    recover_parser.add_argument("workflow_id", help="Workflow ID")
+    recover_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
     # audit command
     audit_parser = subparsers.add_parser("audit", help="View audit log")
     audit_parser.add_argument("--workflow-id", help="Filter by workflow ID")
@@ -1179,6 +1484,8 @@ def main() -> None:
             result = cli.pause_workflow(args.workflow_id)
         elif args.command == "resume-workflow":
             result = cli.resume_workflow(args.workflow_id)
+        elif args.command == "recover-continuations":
+            result = cli.recover_pending_continuations(args.workflow_id)
         elif args.command == "cancel-workflow":
             result = cli.cancel_workflow(args.workflow_id, args.reason)
         elif args.command == "audit":
