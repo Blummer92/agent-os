@@ -38,8 +38,7 @@ REPOSITORY_ENV = "AGENT_OS_EXECUTION_INTERFACE_REPOSITORY"
 
 _ISSUE_RE = re.compile(r"#(\d{1,7})(?![\w#])", re.ASCII)
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", re.ASCII)
-# Match a complete Git config section header; never accept `origin` prefixes
-# or suffixes and never fold case inside the case-sensitive subsection name.
+# Git section names are case-insensitive; remote subsection names are not.
 _ORIGIN_SECTION_RE = re.compile(r'^\[\s*(?i:remote)\s+"origin"\s*\]
 # GitHub remote forms only: scp-like ``git@github.com:owner/name`` and
 # ``https|ssh://[userinfo@]host[:port]/owner/name``. The URL is parsed (not
