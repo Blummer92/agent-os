@@ -61,6 +61,36 @@ rejects such an output as `input-output-path-collision` before writing.
 Exit code 0 for `no-deterministic-finding` and `review`; exit code 1 for `fail`,
 `blocked` and input errors, mirroring `preview-worksheet`.
 
+### Examples of repaired input boundaries
+
+- **Nonblank minimum:** If `--min-questions 4` is supplied and the draft
+  contains one substantive question, two empty strings and one whitespace-only
+  question, evaluation reports `draft-structure-below-request-declared-minimum`
+  with status `fail`. `draft_counts.questions` still records all four authored
+  list entries; it is not the number of substantive questions. In contrast,
+  `--min-slides` counts slide entries, not nonblank slide headings.
+- **Metadata-only resubmission:** If `--prior-draft` is supplied and only
+  `lesson_identity`, `context_tokens` or `prerequisite_tutorials` changes, the
+  unchanged-draft finding still applies. Changes to the student-facing title,
+  objectives, slide content/indexes or questions can clear that finding. The
+  comparison folds whitespace only; it is not a semantic similarity check.
+- **YAML expansion:** A draft with a YAML alias, or with a composed node/depth
+  bound violation, is rejected as `input-unreadable` before a receipt is
+  produced. Raw-file size alone is not sufficient to bound alias expansion.
+- **Contradictory declarations:** A supplied MaterialRequirement declaring
+  `worksheet` together with `--artifact-type slide-deck` is rejected as
+  `artifact-type-conflict`; omitting the flag is allowed, but explicitly
+  supplying `--artifact-type ""` is invalid.
+- **Safe receipt destination:** `--receipt-out` cannot target the input
+  draft, prior draft, requirement or lesson evidence, including symlink and
+  hardlink aliases. A collision returns `input-output-path-collision` without
+  overwriting the input.
+
+These input-rejection codes are **not** additional finding codes and do not
+alter the eight-code `imc-draft-evaluation-v1` finding vocabulary. Invalid input
+exits nonzero with no evaluation receipt; the resulting status is not a
+classroom-readiness judgment.
+
 ## Identity modes
 The five identity arguments are all-or-none.
 
@@ -88,9 +118,9 @@ delete the flagged item to clear a finding.
 | `draft-teacher-voice-in-student-copy` | fail | `scan_teacher_voice` matches a student-facing string |
 | `draft-instruction-line-over-35-words` | manual-review | a worksheet question or slide bullet longer than 35 words (the rubric's advisory Quick QA heuristic "about 35 words") |
 | `draft-ungrounded-claim-pattern` | manual-review | a match of one of four closed pattern families (percentages, multiplicative claims, attributions, absolute quantifiers) that is not a substring of the verified lesson fields after `normalize_text` and case folding; the grounding set is empty without verified identity |
-| `draft-structure-below-request-declared-minimum` | fail | fewer substantive (nonblank) questions or slides than `--min-questions` or `--min-slides`; applies only when supplied, never defaulted, recorded as request-declared and unverified |
+| `draft-structure-below-request-declared-minimum` | fail | fewer substantive (nonblank) worksheet questions than `--min-questions`, or fewer slide entries than `--min-slides`; applies only when supplied, never defaulted, and both minima are request-declared and unverified |
 | `draft-revision-items-removed` | manual-review | with `--prior-draft`, fewer slides or fewer questions than the prior draft (counts only) |
-| `draft-unchanged-since-prior-draft` | manual-review | with `--prior-draft`, the parsed draft equals the prior draft after `normalize_text` on every string |
+| `draft-unchanged-since-prior-draft` | manual-review | with `--prior-draft`, the normalized student-facing title, objectives, slide indexes/headings/bullets, and questions match the prior draft; provenance and context metadata are excluded |
 | `draft-ai-generation-not-permitted` | blocked | a supplied MaterialRequirement has `ai_review.ai_assisted_generation_permitted` false |
 | `draft-artifact-type-not-supported` | blocked | a declared artifact type is not `worksheet` or `slide-deck`; `teacher-guide` and `teacher-modeling-package` also carry a routing note to the Teacher Modeling Coach (#3562) |
 
