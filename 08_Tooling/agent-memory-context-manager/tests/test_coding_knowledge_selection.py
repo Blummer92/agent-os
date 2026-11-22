@@ -6,6 +6,7 @@ import pytest
 
 from agent_memory_context_manager import (
     MAX_CANDIDATES,
+    MAX_SELECTED,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
