@@ -29,6 +29,7 @@ import dataclasses
 import hashlib
 import json
 import re
+import unicodedata
 from typing import Any, Mapping
 
 import yaml
@@ -177,11 +178,37 @@ def _require_bounded(data: object, label: str) -> bytes:
     return bytes(data)
 
 
+# Parsed YAML may be much larger than its input bytes when aliases reuse a
+# nested sequence. Student drafts do not require aliases; reject them before
+# construction instead of relying on the raw-file size bound alone.
+MAX_DRAFT_YAML_DEPTH = 64
+MAX_DRAFT_YAML_NODES = 8192
+
+
+class _BoundedDraftLoader(yaml.SafeLoader):
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self._draft_depth = 0
+        self._draft_nodes = 0
+
+    def compose_node(self, parent: object, index: object) -> yaml.Node:
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.YAMLError("YAML aliases are not supported for draft content")
+        self._draft_depth += 1
+        self._draft_nodes += 1
+        try:
+            if self._draft_depth > MAX_DRAFT_YAML_DEPTH or self._draft_nodes > MAX_DRAFT_YAML_NODES:
+                raise yaml.YAMLError("draft YAML structure exceeds the allowed bound")
+            return super().compose_node(parent, index)
+        finally:
+            self._draft_depth -= 1
+
+
 def parse_draft(data: bytes, label: str = "draft") -> LessonContent:
-    """Parse one draft with the existing fail-closed content-spec parser."""
+    """Parse bounded draft YAML without expanding aliases or excessive nesting."""
     raw = _require_bounded(data, label)
     try:
-        return content_from_dict(yaml.safe_load(raw.decode("utf-8")))
+        return content_from_dict(yaml.load(raw.decode("utf-8"), Loader=_BoundedDraftLoader))
     except UnicodeDecodeError as exc:
         raise DraftEvaluationInputError("input-unreadable", f"{label} is not UTF-8 text") from exc
     except yaml.YAMLError as exc:
@@ -197,18 +224,26 @@ def _tokens(content: LessonContent) -> list[tuple[str, str]]:
         raise DraftEvaluationInputError("input-unreadable", f"draft token collision: {str(exc)[:200]}") from exc
 
 
-def _normalized(value: Any) -> Any:
-    if isinstance(value, str):
-        return normalize_text(value)
-    if isinstance(value, Mapping):
-        return {str(key): _normalized(value[key]) for key in sorted(value, key=str)}
-    if isinstance(value, (list, tuple)):
-        return [_normalized(item) for item in value]
-    return value
-
-
 def _comparable(content: LessonContent) -> Any:
-    return _normalized(dataclasses.asdict(content))
+    """Compare authored student-facing content, not mutable provenance metadata.
+
+    A2's unchanged-resubmission check must survive changes to the bound lesson,
+    host-supplied context, or other non-instructional metadata. Preserve slide
+    order/indices and all student-facing strings; fold only whitespace.
+    """
+    return {
+        "title": normalize_text(content.title),
+        "objectives": [normalize_text(value) for value in content.objectives],
+        "slides": [
+            {
+                "index": slide["index"],
+                "heading": normalize_text(slide.get("heading", "")),
+                "bullets": [normalize_text(value) for value in slide.get("bullets", [])],
+            }
+            for slide in content.slides
+        ],
+        "worksheet_questions": [normalize_text(value) for value in content.worksheet_questions],
+    }
 
 
 def _finding(code: str, locations: list[str], *, routing_note: str | None = None) -> dict[str, Any]:
@@ -277,16 +312,7 @@ def evaluate_draft(
     Findings are never suppressed, downgraded or defaulted by any input: an
     absent declaration is recorded as not applicable, never as permission.
     """
-    draft_bytes = _require_bounded(draft, "draft")
-    content = parse_draft(draft_bytes)
-    tokens = _tokens(content)
-
-    prior_content: LessonContent | None = None
-    prior_bytes: bytes | None = None
-    if prior_draft is not None:
-        prior_bytes = _require_bounded(prior_draft, "prior draft")
-        prior_content = parse_draft(prior_bytes, "prior draft")
-
+    # Fail cheaply on invalid scalar arguments, before doing YAML work.
     for name, value in (("min_questions", min_questions), ("min_slides", min_slides)):
         if value is not None and (type(value) is not int or value < 1):
             raise DraftEvaluationInputError("declared-minimum-invalid", f"{name} must be a positive integer")
@@ -294,6 +320,15 @@ def evaluate_draft(
         raise DraftEvaluationInputError("artifact-type-invalid", "artifact type must be a lowercase token")
     if (lesson_content_evidence is None) != (selection is None):
         raise DraftEvaluationInputError("identity-group-incomplete", "evidence and selection must be supplied together")
+
+    draft_bytes = _require_bounded(draft, "draft")
+    content = parse_draft(draft_bytes)
+    tokens = _tokens(content)
+    prior_content: LessonContent | None = None
+    prior_bytes: bytes | None = None
+    if prior_draft is not None:
+        prior_bytes = _require_bounded(prior_draft, "prior draft")
+        prior_content = parse_draft(prior_bytes, "prior draft")
 
     # ----- identity (existing adapter, existing preview) ---------------------------------
     identity_reason: str | None = None
@@ -322,6 +357,10 @@ def evaluate_draft(
         requirement_type, ai_permitted = _requirement_facts(material_bytes)
         declared_types.append(requirement_type)
     if artifact_type is not None:
+        if declared_types and declared_types[0] != artifact_type:
+            raise DraftEvaluationInputError(
+                "artifact-type-conflict", "explicit artifact type conflicts with the governed requirement"
+            )
         declared_types.append(artifact_type)
     declared_types = sorted(set(declared_types))
 
@@ -360,8 +399,13 @@ def evaluate_draft(
         findings[CODE_UNGROUNDED_CLAIM] = _finding(CODE_UNGROUNDED_CLAIM, claim_locations)
 
     question_count, slide_count = len(content.worksheet_questions), len(content.slides)
+    # Empty/format-only placeholders do not satisfy a request-declared minimum.
+    substantive_question_count = sum(
+        bool("".join(ch for ch in question if unicodedata.category(ch) != "Cf").strip())
+        for question in content.worksheet_questions
+    )
     below = []
-    if min_questions is not None and question_count < min_questions:
+    if min_questions is not None and substantive_question_count < min_questions:
         below.append(LOCATION_QUESTIONS)
     if min_slides is not None and slide_count < min_slides:
         below.append(LOCATION_SLIDES)
