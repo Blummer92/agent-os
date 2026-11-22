@@ -35,16 +35,17 @@ def toy_result(arm, number, case, ordered_pool):
             picked = 2
     if number == 9 and arm == "B":
         picked = 2
-    if picked is None:
+    best = f"SYN-LESSON-{picked}" if picked is not None else None
+    if best not in ordered_pool:
         return dict(status="abstained", reason="no-relevant-evidence", shortlist=[],
                     selected=[], revisions={}, tie_groups=[])
     # Every invocation sorts the actual shuffled input. The four tied low-scoring
     # candidates exercise stable equal-score ordering and a competing-budget cut.
-    best = f"SYN-LESSON-{picked}"
     ordered = sorted(ordered_pool, key=lambda lesson: (lesson != best, lesson))
     shortlist = ordered[:5]
     return dict(status="selected", reason=None, shortlist=shortlist, selected=shortlist[:1],
-                revisions={i:case["revisions"][i] for i in shortlist}, tie_groups=[shortlist[:1], shortlist[1:]])
+                revisions={i:case["revisions"][i] for i in shortlist},
+                tie_groups=[group for group in (shortlist[:1], shortlist[1:]) if group])
 
 def toy_outputs(protocol, cohort):
     outputs = {}

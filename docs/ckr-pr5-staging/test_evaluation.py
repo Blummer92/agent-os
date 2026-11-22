@@ -284,3 +284,118 @@ def test_candidate_and_selection_caps_independent(pack, extra_shortlist, selecte
     else:
         assert case not in result["common_case_ids"]
         assert {error["code"] for error in result["violations"][case]["C"]} == {"budget-exceeded"}
+
+
+def test_independent_thresholds_accept_a_feasible_protocol(pack):
+    """A total-case floor is not a cap on the two disjoint class floors."""
+    p, c, *_ = pack
+    p["min_cases"] = 12
+    f = freeze(p, c)
+    r = rerun((p, c, f, toy_outputs(p, c), None, None))
+    assert len(r["common_case_ids"]) == 24
+    assert r["common_by_label"]["positive"] == r["common_by_label"]["hard-negative"] == 8
+    assert r["common_minima_met"]
+
+
+def test_impossible_disjoint_class_minima_still_rejected(pack):
+    from evaluation import MAX_CASES
+
+    p, c, *_ = pack
+    p.update(min_cases=MAX_CASES - 3, min_positives=MAX_CASES - 1, min_hard_negatives=2)
+    with pytest.raises(ValueError, match="infeasible-minimum"):
+        freeze(p, c)
+
+
+@pytest.mark.parametrize("eligible", [[], ["SYN-LESSON-2", "SYN-LESSON-3"]])
+def test_demo_never_substitutes_another_lesson_for_missing_planned_lesson(pack, eligible):
+    p, c, *_ = pack
+    identity = "SYN-CASE-01"
+    case = c[identity]
+    case["eligible"] = eligible
+    case["revisions"] = {item: case["revisions"][item] for item in eligible}
+    f = freeze(p, c)
+    o = toy_outputs(p, c)
+    r = rerun((p, c, f, o, None, None))
+    expected = dict(status="abstained", reason="no-relevant-evidence", shortlist=[],
+                    selected=[], revisions={}, tie_groups=[])
+    for arm in ("baseline", "A", "C"):
+        row = o[identity][arm]
+        assert {key: row[key] for key in expected} == expected
+        assert all(replay == expected for replay in row["shuffles"].values())
+    assert identity in r["common_case_ids"] and not r["violations"]
+    assert r["metrics_common"]["baseline"]["positive_hits"] == 0
+    assert r["metrics_common"]["baseline"]["false_abstentions"] == 7
+
+
+def test_demo_single_eligible_best_does_not_create_an_empty_tie_group(pack):
+    p, c, *_ = pack
+    identity = "SYN-CASE-01"
+    case = c[identity]
+    best = "SYN-LESSON-1"
+    case["eligible"] = [best]
+    case["revisions"] = {best: case["revisions"][best]}
+    f = freeze(p, c)
+    o = toy_outputs(p, c)
+    r = rerun((p, c, f, o, None, None))
+    row = o[identity]["baseline"]
+    assert row["selected"] == [best]
+    assert row["tie_groups"] == [[best]]
+    assert r["metrics_common"]["baseline"]["positive_hits"] == 1
+    assert not r["violations"]
+
+
+def test_paired_metrics_use_overlap_not_the_union_of_arm_successes(pack):
+    p, original, *_ = pack
+    identities = [f"SYN-CASE-0{number}" for number in (1, 2, 3)]
+    c = {key: original[key] for key in identities}
+    f = freeze(p, c)
+    o = toy_outputs(p, c)
+    for arm, identity in (("A", identities[2]), ("C", identities[0])):
+        row = o[identity][arm]
+        for receipt in (row, *row["shuffles"].values()):
+            receipt.update(status="blocked", reason="runner-unavailable", shortlist=[],
+                           selected=[], tie_groups=[], revisions={})
+    s = seal(p, c, f, o)
+    l = toy_labels(s)
+    l["labels"] = {key: l["labels"][key] for key in identities}
+    r = score(p, c, f, o, s, l)
+    assert r["common_case_ids"] == [identities[1]]
+    assert not r["common_minima_met"] and not r["violations"]
+    assert all(r["metrics_available_only"][arm]["positive_hits"] == 2 for arm in ("A", "C"))
+    pairing = r["paired_common"]["C_vs_A"]
+    assert pairing["positive_denominator"] == pairing["both_hit"] == 1
+    assert pairing["gains"] == pairing["losses"] == 0
+
+
+def test_exact_revision_in_position_four_does_not_count_as_top_three(pack):
+    p, c, f, original, _, _ = pack
+    identity = "SYN-CASE-01"
+
+    def run_three(order):
+        o = deepcopy(original)
+        row = o[identity]["C"]
+        for receipt in (row, *row["shuffles"].values()):
+            receipt.update(shortlist=order, selected=order[:3], tie_groups=[[item] for item in order])
+        s = seal(p, c, f, o)
+        l = toy_labels(s)
+        l["labels"][identity]["relevant"] = {"SYN-LESSON-4": toy_revision("SYN-LESSON-4")}
+        return s, score(p, c, f, o, s, l)
+
+    ordered = [f"SYN-LESSON-{position}" for position in range(1, 6)]
+    old, before = run_three(ordered)
+    ordered[2], ordered[3] = ordered[3], ordered[2]
+    new, after = run_three(ordered)
+    assert old["outputs_digest"] != new["outputs_digest"]
+    assert old["cohort_digest"] == new["cohort_digest"] and not before["violations"] and not after["violations"]
+    b, a = (r["metrics_common"]["C"] for r in (before, after))
+    assert b["recommended"] == a["recommended"] and a["relevant_recommended"] == b["relevant_recommended"] + 1
+    assert after["paired_common"]["C_vs_A"]["gains"] == before["paired_common"]["C_vs_A"]["gains"] + 1
+
+
+def test_roster_key_order_changes_neither_seal_nor_report_bytes(pack):
+    import json
+
+    p, c, f, o, s, l = pack
+    rev = lambda obj: dict(reversed(tuple(obj.items())))
+    assert freeze(p, rev(c)) == f and seal(p, rev(c), f, rev(o)) == s
+    assert json.dumps(score(p, c, f, o, s, l)) == json.dumps(score(p, rev(c), f, rev(o), s, l))

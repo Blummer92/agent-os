@@ -55,7 +55,8 @@ def protocol_check(protocol):
     require(len(set(protocol["recipes"].values())) == len(ARMS), "duplicate-recipe-digests")
     for name in ("min_cases", "min_positives", "min_hard_negatives"):
         require(type(protocol[name]) is int and 0 < protocol[name] <= MAX_CASES, "bad-minimum")
-    require(protocol["min_positives"] + protocol["min_hard_negatives"] <= protocol["min_cases"],
+    # The total floor can be lower than the sum of the disjoint class floors.
+    require(protocol["min_positives"] + protocol["min_hard_negatives"] <= MAX_CASES,
             "infeasible-minimum")
 
 def cohort_check(cohort):
