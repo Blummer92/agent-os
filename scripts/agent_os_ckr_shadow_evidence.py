@@ -12,8 +12,9 @@ import io
 import json
 import re
 import zipfile
+import zlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -118,6 +119,18 @@ def _time(value: object) -> bool:
     return type(value) is datetime and value.tzinfo is timezone.utc
 
 
+def _same_case(candidate: object, expected: FrozenCase) -> bool:
+    """Preserve exact types and UTC in nested receipt subjects."""
+    if type(candidate) is not FrozenCase:
+        return False
+    for field in fields(FrozenCase):
+        actual, wanted = getattr(candidate, field.name), getattr(expected, field.name)
+        if (type(actual) is not type(wanted) or
+            (type(wanted) is datetime and not _time(actual)) or actual != wanted):
+            return False
+    return True
+
+
 def annotation_digest(record: ApplicabilityRecord) -> str:
     """Stable digest of the complete PR2 annotation, not just its lesson revision."""
     raw = json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -172,6 +185,13 @@ def _execution(case: FrozenCase, evidence: object) -> tuple[str, datetime | None
             matching_steps[0].get("conclusion") != job["conclusion"]
         ):
             return "aggregate-step-mismatch", None
+        # The shared resolver permits number coercion. The exact integer row
+        # must itself be the completed aggregate step, not an unrelated row
+        # occupying the same integer slot as malformed aggregate metadata.
+        if (matching_steps[0].get("name"), matching_steps[0].get("status")) != (
+            AGGREGATE_STEP_NAME, "completed"
+        ):
+            return "aggregate-step-mismatch", None
         finished = datetime.fromisoformat(job["completed_at"])
         if not _time(finished) or not case.not_before <= finished <= case.cutoff:
             return "execution-outside-window", None
@@ -183,7 +203,7 @@ def _execution(case: FrozenCase, evidence: object) -> tuple[str, datetime | None
         output = evidence.output
         if type(output) is not VerifiedJobOutput:
             return "authenticated-job-output-unavailable", None
-        if output.case != case:
+        if not _same_case(output.case, case):
             return "verified-job-output-subject-mismatch", None
         if type(evidence.archive) is not bytes or len(evidence.archive) > MAX_ARCHIVE_BYTES:
             return "archive-unavailable-or-oversized", None
@@ -215,7 +235,7 @@ def _execution(case: FrozenCase, evidence: object) -> tuple[str, datetime | None
         if ids.count(case.reporter_test_id) != 1 or counts["skipped"] or counts["errors"]:
             return "named-test-not-confirmed", None
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError,
-            EOFError, OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError):
+            EOFError, OSError, RuntimeError, zipfile.BadZipFile, zlib.error, NotImplementedError):
         return "execution-evidence-malformed", None
     return "execution-confirmed", finished
 
@@ -301,6 +321,9 @@ def evaluate_shadow_case(
     review = reviews[0]
     if any(r != review for r in reviews[1:]):
         return blocked("conflicting-attestations", execution_id)
+    if any(type(r.output) is not VerifiedJobOutput or not _same_case(r.output.case, case)
+           for r in reviews):
+        return blocked("attestation-subject-mismatch", execution_id)
     if (review.output, review.lesson_id, review.lesson_revision, review.annotation_sha256,
         review.policy_revision) != (
         output, record.lesson_id, record.source_revision, annotation_digest(record), policy.revision,

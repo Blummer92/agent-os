@@ -25,6 +25,8 @@ NOW = datetime(2026, 11, 22, 4, tzinfo=timezone.utc)
 FINISH = NOW - timedelta(hours=2)
 START = FINISH - timedelta(hours=1)
 XML = b'<testsuite name="suite" tests="1" failures="0" errors="0" skipped="0"><testcase classname="fixture" name="named"/></testsuite>'
+# SHA-256 of compact UTF-8 [42,80,2,90,3,<checkout SHA>,"suite::fixture::named"].
+EXECUTION_ID = "b7303d378a206b9d2bb0dccfaa83293b8bab758f9ca22b55e5b00cc866732e86"
 
 
 def digest(data):
@@ -38,9 +40,9 @@ def archive_for(member, data):
     return stream.getvalue()
 
 
-def fixture():
-    case = FrozenCase(REPO, 42, TASK, 4054, 71, "a" * 40, "b" * 40, 80, 2, 90, 3, 100,
-                      "junit.xml", "suite::fixture::named", START, NOW)
+def fixture(*, xml=XML, **case_updates):
+    case = replace(FrozenCase(REPO, 42, TASK, 4054, 71, "a" * 40, "b" * 40, 80, 2, 90, 3, 100,
+                               "junit.xml", "suite::fixture::named", START, NOW), **case_updates)
     task = TaskEvidence(TASK, REPO)
     record = ApplicabilityRecord("LL-12", REV, (MECHANISM,),
                                  (InvariantRef(BOUNDARY, "production-boundary"),),
@@ -49,17 +51,18 @@ def fixture():
     lesson = ShadowLessonState("LL-12", REV, "fixture", False, True, "current")
     policy = ShadowPolicy("fixture-v1", frozenset({(MECHANISM, BOUNDARY)}),
                           "fixture-issuer", "fixture-reviewer")
-    run = dict(id=80, path=VALIDATION_WORKFLOW_PATH, head_sha=case.run_head_sha,
-               status="completed", repository=dict(id=42, full_name=REPO),
-               event="pull_request", pull_requests=[dict(number=71)], run_attempt=2)
-    job = dict(id=90, run_id=80, run_attempt=2, head_sha=case.run_head_sha,
+    run = dict(id=case.run_id, path=VALIDATION_WORKFLOW_PATH, head_sha=case.run_head_sha,
+               status="completed", repository=dict(id=case.repository_id, full_name=REPO),
+               event="pull_request", pull_requests=[dict(number=case.pr_number)], run_attempt=case.attempt)
+    job = dict(id=case.job_id, run_id=case.run_id, run_attempt=case.attempt, head_sha=case.run_head_sha,
                name=AGGREGATE_STEP_NAME, status="completed", conclusion="success",
                completed_at=FINISH.isoformat(), steps=[dict(name=AGGREGATE_STEP_NAME,
-               number=3, status="completed", conclusion="success")])
-    archive = archive_for(case.member, XML)
-    artifact = dict(id=100, expired=False, digest="sha256:" + digest(archive),
-                    workflow_run=dict(id=80, repository_id=42, head_sha=case.run_head_sha))
-    output = VerifiedJobOutput(case, digest(archive), digest(XML))
+               number=case.step_number, status="completed", conclusion="success")])
+    archive = archive_for(case.member, xml)
+    artifact = dict(id=case.artifact_id, expired=False, digest="sha256:" + digest(archive),
+                    workflow_run=dict(id=case.run_id, repository_id=case.repository_id,
+                                      head_sha=case.run_head_sha))
+    output = VerifiedJobOutput(case, digest(archive), digest(xml))
     evidence = CollectedExecution(run, job, artifact, archive, output)
     review = ReviewedAttestation(output, record.lesson_id, REV, annotation_digest(record), policy.revision,
                                  policy.issuer, policy.reviewer, MECHANISM, BOUNDARY,
@@ -84,20 +87,24 @@ def assert_blocked(result, reason):
     assert (result.status, result.reason, result.match) == ("blocked", reason, None)
 
 
+def assert_review_blocked(result, reason):
+    assert_blocked(result, reason)
+    assert (result.execution_id, result.job_conclusion) == (EXECUTION_ID, "success")
+
+
 def test_confirmed_execution_and_independent_attestation_reach_pr2():
     result = evaluate()
     assert (result.status, result.reason) == ("qualified", "reviewed-observation")
     assert result.match is not None
     assert result.match.matched
-    assert len(result.execution_id) == 64
+    assert result.execution_id == EXECUTION_ID
     assert result.job_conclusion == "success"
     assert result == evaluate()
 
 
 def test_ci_success_is_not_a_mechanism_attestation():
     result = evaluate(reviews=lambda _: ())
-    assert_blocked(result, "authenticated-attestation-unavailable")
-    assert result.execution_id is not None
+    assert_review_blocked(result, "authenticated-attestation-unavailable")
 
 
 def test_no_reader_no_acquisition_and_no_static_signal():
@@ -183,13 +190,13 @@ def test_only_executed_consistent_named_junit(xml, reason):
     ("annotation_sha256", "0" * 64, "attestation-subject-mismatch"),
 ])
 def test_independently_approved_binding(field, value, reason):
-    assert_blocked(evaluate(review_change=lambda r: replace(r, **{field: value})), reason)
+    assert_review_blocked(evaluate(review_change=lambda r: replace(r, **{field: value})), reason)
 
 
 def test_duplicate_and_conflicting_reviews():
     assert evaluate(reviews=lambda r: (r, r)) == evaluate()
     for reverse in (False, True):
-        assert_blocked(evaluate(reviews=lambda r: (
+        assert_review_blocked(evaluate(reviews=lambda r: (
             r, replace(r, boundary="other"),
         )[::(-1 if reverse else 1)]), "conflicting-attestations")
 
@@ -250,3 +257,313 @@ def test_multisuite_report_is_outside_first_slice():
         return replace(e, archive=archive, artifact={**e.artifact, "digest": "sha256:" + digest(archive)},
                        output=replace(e.output, archive_sha256=digest(archive), member_sha256=digest(xml)))
     assert_blocked(evaluate(evidence_change=change), "junit-contradiction")
+
+
+def evaluate_coherent_fixture(**case_updates):
+    case, task, record, lesson, policy, evidence, review = fixture(**case_updates)
+    return evaluate_shadow_case(case, task, record, lesson, policy=policy, as_of=NOW,
+                                collect=lambda _: evidence, read_review=lambda *_: (review,))
+
+
+@pytest.mark.parametrize("updates", [
+    {"repository_id": 43}, {"run_id": 81}, {"attempt": 3}, {"job_id": 91},
+    {"step_number": 4}, {"checkout_sha": "c" * 40},
+    {"reporter_test_id": "suite::fixture::alternate", "xml": XML.replace(b'"named"', b'"alternate"')},
+])
+def test_distinct_bound_executions_cannot_share_observation_identity(updates):
+    # Vary one verified identity dimension at a time, rather than making the
+    # frozen case disagree with its synthetic provider source.
+    first = evaluate()
+    other = evaluate_coherent_fixture(**updates)
+    assert first.status == other.status == "qualified"
+    assert first.execution_id != other.execution_id
+
+
+@pytest.mark.parametrize("member", ["junit.txt", "junit.XML", "x"])
+def test_non_xml_member_rejected_even_when_present_and_digest_bound(member):
+    assert_blocked(evaluate_coherent_fixture(member=member), "junit-member-unavailable")
+
+
+def test_missing_xml_member_reports_unavailable_before_archive_read():
+    def change(evidence):
+        archive = archive_for("unrelated.xml", XML)
+        return replace(evidence, archive=archive,
+                       artifact={**evidence.artifact, "digest": "sha256:" + digest(archive)},
+                       output=replace(evidence.output, archive_sha256=digest(archive)))
+
+    assert_blocked(evaluate(evidence_change=change), "junit-member-unavailable")
+
+
+@pytest.mark.parametrize("task", [
+    type("DerivedTask", (TaskEvidence,), {})(TASK, REPO),
+    TaskEvidence(f"https://github.com/{REPO}/issues/4055", REPO),
+])
+def test_subject_type_and_exact_task_binding_precede_reader_calls(task):
+    def unexpected(*_):
+        pytest.fail("invalid task accessed a reader")
+
+    assert_blocked(evaluate(task=task, collect=unexpected, read_review=unexpected),
+                   "task-binding-mismatch")
+
+
+def test_review_reader_requires_verified_output_lesson_and_revision():
+    _, _, _, _, _, evidence, review = fixture()
+    received = []
+
+    def exact_receipt_reader(output, lesson_id, revision):
+        received.append((output, lesson_id, revision))
+        return (review,) if (output, lesson_id, revision) == (evidence.output, "LL-12", REV) else ()
+
+    assert evaluate(read_review=exact_receipt_reader).status == "qualified"
+    assert received == [(evidence.output, "LL-12", REV)]
+
+
+def test_alternate_xml_encoding_does_not_qualify_a_well_formed_report():
+    # BOM-less UTF-16LE can be auto-detected by XML parsers; its zero bytes
+    # must not be silently accepted as UTF-8 JUnit.
+    xml = XML.decode("ascii").encode("utf-16le")
+    assert_blocked(evaluate_coherent_fixture(xml=xml), "execution-evidence-malformed")
+
+
+def test_review_annotation_digest_matches_frozen_canonical_record():
+    # An independently serialized compact, sorted-key UTF-8 fixture. A reader
+    # must not derive its expected digest using the implementation under test.
+    reference_digest = "7e8bc3258aefc8aa3ee5e0b305d29b1fbb84d7c9d4da78c7481028ffee17cd8e"
+    assert evaluate(review_change=lambda r: replace(r, annotation_sha256=reference_digest)).status == "qualified"
+
+
+def test_duplicate_step_number_is_ambiguous_even_when_only_one_name_matches():
+    def duplicated(evidence):
+        original = evidence.job["steps"][0]
+        job = {**evidence.job, "steps": [original, {**original, "name": "Unrelated step"}]}
+        return replace(evidence, job=job)
+
+    assert_blocked(evaluate(evidence_change=duplicated), "aggregate-step-mismatch")
+
+
+def test_aggregate_step_binds_among_distinct_provider_steps():
+    def multistep(evidence):
+        aggregate = evidence.job["steps"][0]
+        steps = [
+            {**aggregate, "name": "Check out source", "number": 2},
+            aggregate,
+            {**aggregate, "name": "Upload evidence", "number": 4},
+        ]
+        return replace(evidence, job={**evidence.job, "steps": steps})
+
+    assert evaluate(evidence_change=multistep) == evaluate()
+
+
+@pytest.mark.parametrize("invalid_number", ["3", 3.0])
+def test_noninteger_aggregate_number_cannot_borrow_unrelated_integer_step(invalid_number):
+    def malformed(evidence):
+        original = evidence.job["steps"][0]
+        steps = [{**original, "number": invalid_number}, {**original, "name": "Unrelated step"}]
+        return replace(evidence, job={**evidence.job, "steps": steps})
+
+    assert_blocked(evaluate(evidence_change=malformed), "aggregate-step-mismatch")
+
+
+def test_corrupted_compression_fails_closed_before_review_lookup():
+    # Keep the ZIP directory recognizable; only the ordinary member stream is
+    # damaged. A matching outer digest identifies bytes, not ZIP integrity.
+    def corrupted(evidence):
+        member = evidence.output.case.member
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(member, XML)
+        contents = bytearray(stream.getvalue())
+        # Local file header is 30 bytes before its filename and compressed data.
+        contents[30 + len(member.encode("ascii"))] = 0xFF
+        archive = bytes(contents)
+        return replace(evidence, archive=archive,
+                       artifact={**evidence.artifact, "digest": "sha256:" + digest(archive)},
+                       output=replace(evidence.output, archive_sha256=digest(archive)))
+
+    def unexpected(*_):
+        pytest.fail("corrupted evidence was offered for review")
+
+    assert_blocked(evaluate(evidence_change=corrupted, read_review=unexpected),
+                   "execution-evidence-malformed")
+
+
+@pytest.mark.parametrize("changes", [
+    {"attempt": 2.0},
+    {"repository_id": 42.0},
+    {"not_before": START.astimezone(timezone(timedelta(hours=1)))},
+])
+def test_issued_case_requires_exact_field_types_and_canonical_utc(changes):
+    def malformed(evidence):
+        output = replace(evidence.output, case=replace(evidence.output.case, **changes))
+        return replace(evidence, output=output)
+
+    assert_blocked(evaluate(evidence_change=malformed), "verified-job-output-subject-mismatch")
+
+
+def test_reviewed_output_does_not_inherit_loose_case_equality():
+    def malformed(review):
+        output = replace(review.output, case=replace(review.output.case, attempt=2.0))
+        return replace(review, output=output)
+
+    assert_blocked(evaluate(review_change=malformed), "attestation-subject-mismatch")
+
+    # An earlier valid entry must not hide a subsequent malformed entry that
+    # compares equal under ordinary dataclass equality.
+    assert_review_blocked(evaluate(reviews=lambda r: (r, malformed(r))),
+                          "attestation-subject-mismatch")
+
+
+@pytest.mark.parametrize("before,cutoff,reviewed_at", [
+    (FINISH, NOW, FINISH), (START, FINISH, NOW), (FINISH, FINISH, FINISH),
+])
+def test_inclusive_execution_and_review_boundaries(before, cutoff, reviewed_at):
+    case, task, record, lesson, policy, evidence, review = fixture(not_before=before, cutoff=cutoff)
+    assert evaluate_shadow_case(
+        case, task, record, lesson, policy=policy, as_of=NOW,
+        collect=lambda pinned: evidence if pinned == case else None,
+        read_review=lambda *_: (replace(review, reviewed_at=reviewed_at),),
+    ).status == "qualified"
+
+
+def test_noncanonical_utc_and_inverted_windows_fail_before_reading():
+    def unexpected(*_):
+        pytest.fail("invalid timing accessed a reader")
+
+    offset = timezone(timedelta(hours=1))
+    for clock in (NOW.replace(tzinfo=None), NOW.astimezone(offset)):
+        result = evaluate(as_of=clock, collect=unexpected, read_review=unexpected)
+        assert_blocked(result, "case-incomplete")
+        assert (result.execution_id, result.job_conclusion) == (None, None)
+    assert_blocked(evaluate(collect=unexpected, changes=lambda c, *_: {
+        "case": replace(c, not_before=NOW, cutoff=FINISH),
+    }), "case-window-invalid")
+    assert_review_blocked(evaluate(review_change=lambda r: replace(
+        r, reviewed_at=r.reviewed_at.astimezone(offset),
+    )), "attestation-stale-or-future")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("attempt", 0), ("attempt", True), ("checkout_sha", "A" * 40),
+    ("job_id", "90"), ("member", "a" * 509 + ".xml"),
+])
+def test_malformed_case_identity_and_bounds_stop_before_reading(field, value):
+    def unexpected(*_):
+        pytest.fail("invalid case accessed a reader")
+
+    assert_blocked(evaluate(collect=unexpected, changes=lambda c, *_: {
+        "case": replace(c, **{field: value}),
+    }), "case-incomplete")
+
+
+def test_first_attempt_and_longest_supported_member_name_succeed():
+    assert evaluate_coherent_fixture(attempt=1, member="a" * 508 + ".xml").status == "qualified"
+
+
+def test_frozen_case_and_reviewed_lesson_require_exact_models():
+    def unexpected(*_):
+        pytest.fail("invalid subject accessed a reader")
+
+    assert_blocked(evaluate(collect=unexpected, changes=lambda c, *_: {
+        "case": type("DerivedCase", (FrozenCase,), {})(**asdict(c)),
+    }), "task-binding-mismatch")
+    assert_blocked(evaluate(record=None, collect=unexpected), "lesson-binding-missing")
+    assert_blocked(evaluate(lesson=None, collect=unexpected), "lesson-binding-missing")
+    assert_blocked(evaluate(collect=unexpected, changes=lambda c, t, r, l, p: {
+        "record": replace(r, review_status="pending"),
+    }), "lesson-not-eligible")
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"revision": ""}, "policy-or-vocabulary-unapproved"),
+    ({"revision": 12}, "policy-or-vocabulary-unapproved"),
+    ({"approved_pairs": {(MECHANISM, BOUNDARY)}}, "policy-or-vocabulary-unapproved"),
+    ({"issuer": " "}, "independent-authority-unavailable"),
+])
+def test_invalid_policy_never_reaches_the_provider(changes, reason):
+    def unexpected(*_):
+        pytest.fail("invalid policy accessed a reader")
+
+    assert_blocked(evaluate(collect=unexpected, changes=lambda c, t, r, l, p: {
+        "policy": replace(p, **changes),
+    }), reason)
+
+
+def test_review_read_failure_retains_execution_identity_and_opaque_error():
+    def unavailable(*_):
+        raise OSError("private-reader-detail")
+
+    result = evaluate(read_review=unavailable)
+    assert_review_blocked(result, "review-read-failed")
+    assert "private-reader-detail" not in repr(result)
+
+
+def test_review_batch_bound_includes_16_excludes_17_records():
+    assert evaluate(reviews=lambda r: (r,) * 16) == evaluate()
+    assert_review_blocked(evaluate(reviews=lambda r: (r,) * 17),
+                          "authenticated-attestation-unavailable")
+
+
+def test_invalid_pair_spelling_is_not_repaired_by_trusted_policy():
+    malformed = "not a mechanism identifier"
+    result = evaluate(changes=lambda c, t, r, l, p: {
+        "policy": replace(p, approved_pairs=frozenset({(malformed, BOUNDARY)})),
+    }, review_change=lambda r: replace(r, mechanism=malformed))
+    assert_review_blocked(result, "observation-invalid")
+
+
+def test_supported_failure_execution_is_distinct_from_mechanism_outcome():
+    def failed(e):
+        j = {**e.job, "conclusion": "failure",
+             "steps": [{**e.job["steps"][0], "conclusion": "failure"}]}
+        return replace(e, job=j)
+
+    result = evaluate(evidence_change=failed)
+    assert (result.status, result.job_conclusion, result.execution_id) == (
+        "qualified", "failure", EXECUTION_ID,
+    )
+
+
+def test_non_byte_archive_rejected_before_review():
+    assert_blocked(evaluate(evidence_change=lambda e: replace(e, archive=bytearray(e.archive))),
+                   "archive-unavailable-or-oversized")
+
+
+def test_raw_archive_byte_limit_is_inclusive(monkeypatch):
+    # Exercise the same inclusive pre-read budget with a small actual ZIP so
+    # every independent mutation run need not allocate a 64 MB artifact.
+    limit = len(fixture()[-2].archive)
+    setting = "scripts.agent_os_ckr_shadow_evidence.MAX_ARCHIVE_BYTES"
+    monkeypatch.setattr(setting, limit)
+    assert evaluate().status == "qualified"
+    monkeypatch.setattr(setting, limit - 1)
+    assert_blocked(evaluate(), "archive-unavailable-or-oversized")
+
+
+def test_policy_does_not_coerce_alternate_identifier_types():
+    # Exact string names are part of the reviewed vocabulary contract, even
+    # when an in-process value would compare equal to the approved name.
+    alternate = type("DerivedName", (str,), {})
+    for field, value in (("mechanism", MECHANISM), ("boundary", BOUNDARY)):
+        assert_review_blocked(evaluate(review_change=lambda r: replace(
+            r, **{field: alternate(value)},
+        )), "mechanism-boundary-unapproved")
+
+
+@pytest.mark.parametrize("size", [8_000_000, 8_000_001])
+def test_junit_member_size_limit_is_inclusive(size):
+    def padded(e):
+        xml = XML + b" " * (size - len(XML))
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr(e.output.case.member, xml)
+        archive = stream.getvalue()
+        return replace(e, archive=archive, artifact={**e.artifact, "digest": "sha256:" + digest(archive)},
+                       output=replace(e.output, archive_sha256=digest(archive), member_sha256=digest(xml)))
+
+    result = evaluate(evidence_change=padded, read_review=lambda output, lesson_id, revision: (
+        replace(fixture()[-1], output=output),
+    ))
+    if size == 8_000_000:
+        assert result.status == "qualified"
+    else:
+        assert_blocked(result, "junit-member-oversized")
