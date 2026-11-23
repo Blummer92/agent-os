@@ -442,7 +442,9 @@ _NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
     "best_bucket_tied_identities",
-    # #4026: diagnostics only; none of these values authorizes an action.
+)
+# #4026: optional, all-or-nothing observational counters on completed no-matches.
+_NO_MATCH_COUNTERS = (
     "miss_ecosystem_rows", "miss_capability_rows", "miss_exact_library_rows",
     "miss_target_path_rows", "miss_library_hints_not_named",
 )
@@ -527,6 +529,17 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
     basis = source.get(_OPTIONAL_BASIS_KEY) if isinstance(source, Mapping) else None
     if type(basis) is str and basis in _SELECTION_BASIS_VALUES:
         projected[_OPTIONAL_BASIS_KEY] = basis
+    if (
+        basis == "no-relevant-signal"
+        and isinstance(source, Mapping)
+        and all(name in source for name in _NO_MATCH_COUNTERS)
+    ):
+        for name in _NO_MATCH_COUNTERS:
+            value = source[name]
+            projected[name] = (
+                value if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_COUNTER
+                else 0
+            )
     if isinstance(source, Mapping) and "terminal_query_bucket" in source:
         value = source.get("terminal_query_bucket")
         projected["terminal_query_bucket"] = (
@@ -558,6 +571,18 @@ def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, obj
     return projected
 
 
+def _optional_miss_counter_keys_valid(diagnostics: Mapping[str, object]) -> bool:
+    """The new counters are never partial and never emitted on admission."""
+    present = set(diagnostics) & set(_NO_MATCH_COUNTERS)
+    return (
+        not present
+        or (
+            present == set(_NO_MATCH_COUNTERS)
+            and diagnostics.get(_OPTIONAL_BASIS_KEY) == "no-relevant-signal"
+        )
+    )
+
+
 def write_retrieval_diagnostics_summary(
     diagnostics: Mapping[str, object] | None,
     environ: Mapping[str, str] | None = None,
@@ -587,13 +612,15 @@ def write_retrieval_diagnostics_summary(
     # The summary and artifact must enforce the same finite allowlist.
     # Otherwise direct calls can expose hostile reason text or unbounded
     # counters in the Actions summary despite strict artifact validation.
+    if not _optional_miss_counter_keys_valid(diagnostics):
+        return False
     required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
     if _OPTIONAL_BASIS_KEY in diagnostics and (
         type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
         or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
     ):
         return False
-    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in (
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY, *_NO_MATCH_COUNTERS} not in (
         required,
         required | {"terminal_query_bucket"},
         required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
@@ -611,7 +638,7 @@ def write_retrieval_diagnostics_summary(
     lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
     for name in (
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
-        _OPTIONAL_BASIS_KEY, "terminal_query_bucket", "terminal_page_row_count_bucket",
+        *_NO_MATCH_COUNTERS, _OPTIONAL_BASIS_KEY, "terminal_query_bucket", "terminal_page_row_count_bucket",
         "terminal_page_has_more", "terminal_page_cursor_present",
     ):
         if name not in diagnostics:
@@ -637,6 +664,8 @@ def write_retrieval_diagnostics_artifact(
     """
     if not isinstance(diagnostics, Mapping):
         return False
+    if not _optional_miss_counter_keys_valid(diagnostics):
+        return False
     expected_keys = {
         "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
     }
@@ -650,7 +679,7 @@ def write_retrieval_diagnostics_artifact(
         or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
     ):
         return False
-    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in allowed_keys:
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY, *_NO_MATCH_COUNTERS} not in allowed_keys:
         return False
     if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
         if (
@@ -677,13 +706,15 @@ def write_retrieval_diagnostics_artifact(
     if any(
         type(diagnostics[name]) is not int
         or not 0 <= diagnostics[name] <= _MAX_DIAGNOSTIC_COUNTER
-        for name in _RETRIEVAL_COUNTERS
+        for name in (*_RETRIEVAL_COUNTERS, *_NO_MATCH_COUNTERS)
+        if name in diagnostics
     ):
         return False
     safe = {
         "retrieval_reason_code": reason,
         "incomplete_reason_code": incomplete,
-        **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
+        **{name: diagnostics[name] for name in (*_RETRIEVAL_COUNTERS, *_NO_MATCH_COUNTERS)
+           if name in diagnostics},
     }
     if _OPTIONAL_BASIS_KEY in diagnostics:
         safe[_OPTIONAL_BASIS_KEY] = diagnostics[_OPTIONAL_BASIS_KEY]

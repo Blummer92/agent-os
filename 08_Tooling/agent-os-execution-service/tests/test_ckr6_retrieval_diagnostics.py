@@ -109,9 +109,6 @@ def test_case_a_complete_retrieval_selects_normally_and_reports_none(monkeypatch
         "normalized_rows": 3, "skipped_rows": 0, "candidate_count": 3,
         # PR-1: observational selection basis (mechanism only).
         "best_bucket_tied_identities": 3, "selection_basis": "generic-unique",
-        "miss_ecosystem_rows": 0, "miss_capability_rows": 0,
-        "miss_exact_library_rows": 0, "miss_target_path_rows": 0,
-        "miss_library_hints_not_named": 0,
     }]
 
 
@@ -172,9 +169,6 @@ def test_case_d_projection_rejects_hostile_values():
         "incomplete_reason_code": "none",
         "read_count": 0, "observed_rows": 0, "normalized_rows": 0,
         "skipped_rows": 0, "candidate_count": 4, "best_bucket_tied_identities": 0,
-        "miss_ecosystem_rows": 0, "miss_capability_rows": 0,
-        "miss_exact_library_rows": 0, "miss_target_path_rows": 0,
-        "miss_library_hints_not_named": 0,
     }
     assert bridge.retrieval_diagnostics_projection({}) is None
     assert bridge.retrieval_diagnostics_projection("not a mapping") is None  # type: ignore[arg-type]
@@ -188,6 +182,37 @@ def test_summary_failures_are_swallowed(tmp_path):
         projected, {"GITHUB_STEP_SUMMARY": str(tmp_path)}  # a directory: OSError
     ) is False
     assert bridge.write_retrieval_diagnostics_summary(None, {"GITHUB_STEP_SUMMARY": "x"}) is False
+
+
+def test_4101_optional_miss_counters_are_all_or_nothing_and_finite(tmp_path):
+    legacy = {
+        "retrieval_reason_code": "none", "incomplete_reason_code": "none",
+        "read_count": 1, "observed_rows": 3, "normalized_rows": 3,
+        "skipped_rows": 0, "candidate_count": 3,
+        "best_bucket_tied_identities": 0,
+    }
+    target = tmp_path / "diagnostics.json"
+    # Legacy, pre-extension artifacts remain valid.
+    assert bridge.write_retrieval_diagnostics_artifact(legacy, target)
+    before = target.read_text(encoding="utf-8")
+    new = {**legacy, "selection_basis": "no-relevant-signal",
+           "miss_ecosystem_rows": 3, "miss_capability_rows": 0,
+           "miss_exact_library_rows": 0, "miss_target_path_rows": 0,
+           "miss_library_hints_not_named": 2}
+    assert bridge.write_retrieval_diagnostics_artifact(new, target)
+    assert json.loads(target.read_text(encoding="utf-8"))["miss_ecosystem_rows"] == 3
+    for bad in (
+        {key: value for key, value in new.items() if key != "miss_target_path_rows"},
+        {**new, "miss_capability_rows": True},
+        {**new, "miss_capability_rows": SENSITIVE_SAMPLE},
+        {**new, "selection_basis": "generic-unique"},
+    ):
+        assert bridge.write_retrieval_diagnostics_artifact(bad, target) is False
+        assert bridge.write_retrieval_diagnostics_summary(
+            bad, {"GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md")}
+        ) is False
+        assert SENSITIVE_SAMPLE not in target.read_text(encoding="utf-8")
+    assert before != target.read_text(encoding="utf-8")
 
 
 def test_trusted_result_schema_and_default_behavior_unchanged(monkeypatch):
