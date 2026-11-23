@@ -1,15 +1,9 @@
 """Source-anchored, offline writer-to-CKR2 review controls (#3417/#4026)."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
-# Use the real in-repository CKR2/CKR11 matcher rather than a duplicate.
-ROOT = Path(__file__).resolve().parents[2]
-MEMORY_SRC = ROOT / "08_Tooling" / "agent-memory-context-manager" / "src"
-if str(MEMORY_SRC) not in sys.path:
-    sys.path.insert(0, str(MEMORY_SRC))
+import pytest
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from scripts.agent_os_notion_lessons_write import catalog
@@ -68,7 +62,7 @@ def test_review_reports_hard_negative_false_positive_on_generic_capability():
         (request("failure-avoidance", task="unrelated packaging issue"),),
     )
     assert not outcome.qualified
-    assert outcome.reason_codes == ("unrelated-task-false-positive",)
+    assert outcome.reason_codes == ("positive-relevance-basis-unverified", "unrelated-task-false-positive")
     assert outcome.hard_negative_false_positives == 1
 
 
@@ -78,7 +72,8 @@ def test_qualified_pair_preserves_no_publication_or_activation_authority():
         (request("failure-avoidance", task="actual host failure"),),
         (request("testing", task="unrelated packaging issue"),),
     )
-    assert outcome.qualified
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("positive-relevance-basis-unverified",)
     assert outcome.positive_hits == 1
     assert outcome.hard_negative_false_positives == 0
     assert outcome.publication_authorized is False
@@ -132,7 +127,7 @@ def test_actual_reviewed_continuation_entry_rejects_generic_false_positive():
         hard_negative_requests=(request("failure-avoidance", task="unrelated wheel packaging failure"),),
     )
     assert not outcome.qualified
-    assert outcome.reason_codes == ("unrelated-task-false-positive",)
+    assert outcome.reason_codes == ("positive-relevance-basis-unverified", "unrelated-task-false-positive")
     assert outcome.positive_hits == 1
     assert outcome.hard_negative_false_positives == 1
     assert outcome.activation_authorized is False
@@ -150,7 +145,8 @@ def test_review_counts_multiple_positive_and_negative_requests():
             request("testing", task="unrelated frontend snapshot"),
         ),
     )
-    assert outcome.qualified
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("positive-relevance-basis-unverified",)
     assert (outcome.positive_hits, outcome.positive_total) == (2, 2)
     assert (outcome.hard_negative_false_positives, outcome.hard_negative_total) == (0, 2)
 
@@ -164,3 +160,65 @@ def test_review_refuses_oversized_and_untyped_review_scenarios():
     result = check(entry, (request("failure-avoidance"),), ("not a typed request",))
     assert result.reason_codes == ("bounded-review-scenarios-required",)
     assert not result.qualified
+
+
+def test_context_specific_ckr2_signal_qualifies_without_generic_padding():
+    entry = reviewed_entry()
+    entry["properties"]["Lesson Learned"] = "CKR6 mutation boundary requires exact-head gate admission"
+    entry["properties"]["Guardrail"] = "Verify CKR6 mutation guidance before a gated PR lands."
+    outcome = check(
+        entry,
+        (request("ckr6 mutation boundary", task="CKR6 mutation boundary CI gate"),),
+        (request("testing", task="unrelated frontend snapshots"),),
+    )
+    assert outcome.qualified
+    assert outcome.reason_codes == ()
+    assert (outcome.positive_hits, outcome.positive_total) == (1, 1)
+    assert outcome.hard_negative_false_positives == 0
+    assert outcome.publication_authorized is False
+    assert outcome.activation_authorized is False
+
+
+@pytest.mark.parametrize("positives,negatives", [
+    (1, (request("testing"),)),
+    ((request("failure-avoidance"),), 1),
+    ({"case": request("failure-avoidance")}, (request("testing"),)),
+    ((request("failure-avoidance"),), {"case": request("testing")}),
+    ([request("failure-avoidance")], (request("testing"),)),
+    ((request("failure-avoidance"),), [request("testing")]),
+])
+def test_invalid_scenario_containers_fail_with_bounded_reason(positives, negatives):
+    outcome = check(reviewed_entry(), positives, negatives)
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("bounded-review-scenarios-required",)
+    assert (outcome.positive_hits, outcome.positive_total,
+            outcome.hard_negative_false_positives, outcome.hard_negative_total) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("Area", ""),
+    ("Learning Type", "  "),
+    ("Source Link", None),
+    ("Source Link", "https://example.com/unsupported"),
+    ("Applies To", (["not hashable"],)),
+    ("Supporting Source Links", (["not hashable"],)),
+    ("Supporting Source Links", None),
+    ("Applies To", "Notion"),
+    ("Status", "New"),
+    ("Unapproved Property", "value"),
+])
+def test_invalid_reviewed_catalog_fields_fail_closed_without_coercion(field, value):
+    entry = reviewed_entry()
+    entry["properties"][field] = value
+    with pytest.raises(ValueError, match="reviewed-field-value-invalid|protected-activation-field-refused|reviewed-narrative-fields-required"):
+        check(entry, (request("failure-avoidance"),), (request("testing"),))
+
+
+def test_exact_authority_false_even_when_strong_selection_passes():
+    entry = reviewed_entry()
+    entry["properties"]["Lesson Learned"] = "CKR6 mutation boundary safety"
+    entry["properties"]["What To Do Next Time"] = "Verify CKR6 mutation boundary CI evidence."
+    outcome = check(entry, (request("ckr6 mutation boundary"),), (request("testing"),))
+    assert outcome.qualified
+    assert outcome.publication_authorized is False
+    assert outcome.activation_authorized is False
