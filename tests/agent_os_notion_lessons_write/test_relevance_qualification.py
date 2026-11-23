@@ -239,3 +239,43 @@ def test_specific_positive_cannot_hide_same_generic_keyword_hard_negative():
     assert result.hard_negative_false_positives == 1
     assert result.publication_authorized is False
     assert result.activation_authorized is False
+
+
+def test_eight_positive_and_negative_scenarios_are_admitted():
+    """The eight-case cap is inclusive on both sides, with exact counters."""
+    entry = reviewed_entry()
+    entry["properties"]["Lesson Learned"] = "CKR6 mutation boundary admission"
+    entry["properties"]["Guardrail"] = "Check CKR6 mutation boundary evidence."
+    positives = tuple(request("ckr6 mutation boundary", task=f"CI gate {i}") for i in range(8))
+    negatives = tuple(request("testing", task=f"unrelated fixture {i}") for i in range(8))
+    result = check(entry, positives, negatives)
+    assert result.qualified
+    assert result.reason_codes == ()
+    assert (result.positive_hits, result.positive_total) == (8, 8)
+    assert (result.hard_negative_false_positives, result.hard_negative_total) == (0, 8)
+
+
+def test_all_metadata_fields_are_required_with_complete_create_narrative():
+    """Required review metadata cannot be omitted individually (M32 boundary)."""
+    for name in ("Area", "Learning Type", "Source Link"):
+        entry = reviewed_entry()
+        del entry["properties"][name]
+        result = check(entry, (request("testing"),), (request("quality-assurance"),))
+        assert not result.qualified
+        assert result.reason_codes == ("writer-relevance-metadata-incomplete",)
+
+
+def test_qualified_selection_has_exactly_one_real_candidate():
+    """Match sufficiency and exact identity, never a second candidate (M104)."""
+    entry = reviewed_entry()
+    entry["properties"]["Lesson Learned"] = "CKR6 mutation boundary exact identity"
+    entry["properties"]["Guardrail"] = "Verify CKR6 mutation boundary provenance."
+    result = check(
+        entry,
+        (request("ckr6 mutation boundary"),),
+        (request("testing"),),
+    )
+    assert result.qualified
+    assert result.positive_hits == 1
+    assert result.publication_authorized is False
+    assert result.activation_authorized is False
