@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from itertools import combinations
 import json
 import re
 from typing import Any
@@ -281,6 +282,44 @@ def contextual_tie_scores(
     return [sum(total - document_frequency[token] for token in tokens) for tokens in shared]
 
 
+def required_library_coverage_order(
+    request: CodingKnowledgeRequest,
+    ordered: Any,
+) -> list[int]:
+    """Optimize explicit library coverage inside one already-ranked bucket.
+
+    The existing deterministic relevance/context order is authoritative for
+    ties in coverage. Only a better selection of up to MAX_SELECTED distinct
+    library hints can reorder candidates; this never changes their buckets,
+    eligibility, provenance, or the fail-closed currentness checks.
+    """
+    candidates = tuple(ordered)
+    indices = list(range(len(candidates)))
+    selection_size = min(MAX_SELECTED, len(indices))
+    required = {_norm(value) for value in request.library_hints}
+    if len(required) < 2 or len(indices) <= MAX_SELECTED:
+        return indices
+
+    coverage = []
+    for candidate in candidates:
+        aliases = {_norm(candidate.name)}
+        if candidate.library_name:
+            aliases.add(_norm(candidate.library_name))
+        coverage.append(required & aliases)
+    if len(set().union(*coverage)) < 2:
+        return indices
+
+    best = tuple(indices[:selection_size])
+    best_count = len(set().union(*(coverage[index] for index in best)))
+    for subset in combinations(indices, selection_size):
+        count = len(set().union(*(coverage[index] for index in subset)))
+        if count > best_count:
+            best, best_count = subset, count
+
+    retained = set(best)
+    return [*best, *(index for index in indices if index not in retained)]
+
+
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -388,6 +427,10 @@ def _select_coding_knowledge(
         scores = contextual_tie_scores(request, (item[2] for item in best))
         order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
         best = [best[index] for index in order]
+        coverage_order = required_library_coverage_order(
+            request, (item[2] for item in best)
+        )
+        best = [best[index] for index in coverage_order]
     else:
         # Never recompute document frequency on the five finalists.
         priority = {identity: index for index, identity in enumerate(_ranked_order)}
