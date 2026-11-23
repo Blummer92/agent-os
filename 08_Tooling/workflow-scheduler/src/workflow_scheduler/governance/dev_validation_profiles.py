@@ -73,6 +73,36 @@ def profile_local_argv(profile_id:object)->tuple[str,...]:
  if p.runner_kind is RunnerKind.VITEST_TARGETS:
   return("node","node_modules/vitest/vitest.mjs","run",*p.fixed_targets)
  return profile_argv(profile_id)
+def validation_command_identity_matches(command_id:object,command:object)->bool:
+ """Bind one required-environment command id to one packet command identity.
+
+ Legacy identifier identities match by exact string equality (unchanged
+ behavior). Catalog-owned fixed profile ids match when the catalog's exact
+ argv projection equals the packet command - the catalog retains the exact
+ argv anchor and the legacy identity mapping. Unknown or malformed ids never
+ match: binding fails closed.
+ """
+ if type(command_id)is not str or type(command)is not str:return False
+ if command_id==command:return True
+ try:argv=profile_argv(command_id)
+ except ValueError:return False
+ return " ".join(argv)==command
+def validation_command_identities_bind(command_ids:object,commands:object)->bool:
+ """Setwise binding between spec command ids and packet command identities.
+
+ Both sides are unique tuples (the models enforce it); each id must match a
+ distinct command, so counts must agree and no command may be consumed twice.
+ """
+ if type(command_ids)is not tuple or type(commands)is not tuple:return False
+ if len(command_ids)!=len(commands):return False
+ remaining=list(commands)
+ for command_id in command_ids:
+  for index,command in enumerate(remaining):
+   if validation_command_identity_matches(command_id,command):
+    del remaining[index]
+    break
+  else:return False
+ return True
 def project_selector_requirements(requirements:Iterable[str])->tuple[str,...]:
  if type(requirements)not in {tuple,list}:raise ValueError("selector requirements must be a tuple or list")
  result:set[str]=set()

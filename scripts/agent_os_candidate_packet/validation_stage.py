@@ -19,6 +19,9 @@ from scripts.agent_os_execution_capabilities import (
     RepositoryStateEvidence,
     RequiredEnvironmentSpec,
 )
+from workflow_scheduler.governance.dev_validation_profiles import (
+    validation_command_identities_bind,
+)
 from scripts.agent_os_remote_validation import (
     PrePrValidationPlan,
     PrePrValidationSubject,
@@ -156,10 +159,11 @@ class CandidateRuntimeInputs:
             raise TypeError(
                 "required_environment_spec must be exact RequiredEnvironmentSpec or None"
             )
-        if (
-            self.required_environment_spec is not None
-            and self.required_environment_spec.required_validation_command_ids
-            != self.required_tests
+        if self.required_environment_spec is not None and not (
+            validation_command_identities_bind(
+                self.required_environment_spec.required_validation_command_ids,
+                self.required_tests,
+            )
         ):
             raise ValueError(
                 "required_environment_spec validation commands must match required_tests"

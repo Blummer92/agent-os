@@ -22,6 +22,9 @@ from .evidence_bundle import (
     validation_evidence_bundle_id,
 )
 from .models import ValidationPlan
+from .pre_pr_evidence_bundle import (
+    reconstruct_pre_pr_validation_evidence_bundle,
+)
 from .selector import (
     compute_command_set_digest,
     serialize_validation_plan,
@@ -340,6 +343,188 @@ def serialize_advisory_evidence_result(
 def advisory_evidence_result_id(result: AdvisoryEvidenceResult) -> str:
     """Return the verified domain-separated advisory evidence identity."""
     return str(serialize_advisory_evidence_result(result)["result_id"])
+
+
+def evaluate_pr_less_advisory_evidence(
+    bundle_payload: object,
+    *,
+    expected_bundle_id: object,
+    current_base_sha: object,
+    current_source_head_sha: object,
+    invocation_id: object,
+    schema_version: object = ADVISORY_EVIDENCE_SCHEMA_VERSION,
+) -> AdvisoryEvidenceResult:
+    """Evaluate one frozen PR-less pre-validation bundle as advisory evidence.
+
+    Additive sibling of :func:`evaluate_advisory_pre_pr_evidence` for the
+    #1985 PR-less path. The typed bundle, its embedded plan, and its command
+    results derive only from the canonical frozen payload through the
+    existing reconstruction owner; the current SHAs and invocation context
+    come from genuine fresh observation supplied by the caller. The result
+    shares the advisory schema, reason taxonomy, serializer and digest
+    domain, carries ``pull_request=None`` and stays non-authoritative:
+    nothing is executed, persisted, or authorized here.
+    """
+    invalid: set[str] = set()
+    stale: set[str] = set()
+    needs_decision: set[str] = set()
+    incomplete: set[str] = set()
+    failed: set[str] = set()
+    details: set[str] = set()
+
+    if schema_version != ADVISORY_EVIDENCE_SCHEMA_VERSION:
+        invalid.add("advisory.schema-version")
+
+    bundle: ValidationEvidenceBundle | None = None
+    try:
+        bundle = reconstruct_pre_pr_validation_evidence_bundle(bundle_payload)
+    except _EXPECTED_EXCEPTIONS as error:
+        invalid.add("bundle.canonicalization-failed")
+        details.add(_error_detail("bundle", error))
+        bundle = None
+
+    for label, value in (
+        ("current-base-sha", current_base_sha),
+        ("current-source-head-sha", current_source_head_sha),
+    ):
+        if not _is_sha(value):
+            invalid.add(f"advisory.{label}")
+
+    if bundle is not None:
+        if any(
+            value is not False
+            for value in (
+                bundle.authoritative,
+                bundle.execution_authorized,
+                bundle.merge_authorized,
+                bundle.attestation_verified,
+                bundle.side_effects_performed,
+            )
+        ):
+            invalid.add("bundle.authority")
+        for label, value in (
+            ("expected-base-sha", bundle.base_sha),
+            ("expected-source-head-sha", bundle.source_head_sha),
+            ("expected-tested-sha", bundle.tested_sha),
+        ):
+            if not _is_sha(value):
+                invalid.add(f"advisory.{label}")
+        if _is_sha(bundle.base_sha) and _is_sha(current_base_sha):
+            if bundle.base_sha != current_base_sha:
+                stale.add("revision.base-sha-stale")
+        if _is_sha(bundle.source_head_sha) and _is_sha(current_source_head_sha):
+            if bundle.source_head_sha != current_source_head_sha:
+                stale.add("revision.source-head-sha-stale")
+        if not _is_bundle_id(expected_bundle_id):
+            invalid.add("bundle.expected-id-invalid")
+        elif expected_bundle_id != bundle.bundle_id:
+            invalid.add("bundle.expected-id-mismatch")
+        bundle_reasons = set(bundle.reason_codes)
+        if bundle.status == "invalid":
+            invalid.add("bundle.invalid")
+            details.update(_bounded_prefixed("bundle", bundle_reasons))
+        elif bundle.status == "incomplete":
+            incomplete.add("bundle.incomplete")
+            details.update(_bounded_prefixed("bundle", bundle_reasons))
+        elif bundle.status == "needs-decision":
+            needs_decision.add("bundle.needs-decision")
+            details.update(_bounded_prefixed("bundle", bundle_reasons))
+        elif bundle.status in {"failed", "timed-out", "cancelled"}:
+            failed.add(f"bundle.{bundle.status}")
+            details.update(_bounded_prefixed("bundle", bundle_reasons))
+        elif bundle.status != "passed":
+            invalid.add("bundle.status")
+
+    result_ids: tuple[str, ...] = ()
+    result_statuses: tuple[str, ...] = ()
+    if bundle is not None:
+        result_ids = tuple(item.result_id for item in bundle.command_results)
+        result_statuses = tuple(item.status for item in bundle.command_results)
+        _validate_result_references(result_ids, result_statuses, invalid)
+
+    status, reasons = _resolve_status(
+        invalid=invalid,
+        stale=stale,
+        needs_decision=needs_decision,
+        incomplete=incomplete,
+        failed=failed,
+    )
+
+    preliminary = AdvisoryEvidenceResult(
+        schema_name=ADVISORY_EVIDENCE_SCHEMA_NAME,
+        schema_version=ADVISORY_EVIDENCE_SCHEMA_VERSION,
+        status=status,
+        result_id="",
+        repository_identity=(
+            bundle.repository_identity if bundle is not None else None
+        ),
+        pull_request=None,
+        base_branch=_bounded_string_or_none(
+            bundle.base_branch if bundle is not None else None
+        ),
+        base_sha=_string_or_none(bundle.base_sha if bundle is not None else None),
+        source_head_sha=_string_or_none(
+            bundle.source_head_sha if bundle is not None else None
+        ),
+        tested_sha=_string_or_none(
+            bundle.tested_sha if bundle is not None else None
+        ),
+        repository_evidence_type=(
+            bundle.repository_evidence_type
+            if bundle is not None
+            and isinstance(bundle.repository_evidence_type, RepositoryEvidenceType)
+            else None
+        ),
+        projection_id=_bounded_string_or_none(
+            bundle.projection_id if bundle is not None else None
+        ),
+        proposal_id=_bounded_string_or_none(
+            bundle.proposal_id if bundle is not None else None
+        ),
+        approval_id=_bounded_string_or_none(
+            bundle.approval_id if bundle is not None else None
+        ),
+        repository_state_evidence_id=_bounded_string_or_none(
+            bundle.repository_state_evidence_id if bundle is not None else None
+        ),
+        implementation_contract_fingerprint=_bounded_string_or_none(
+            bundle.implementation_contract_fingerprint
+            if bundle is not None
+            else None
+        ),
+        selector_version=_bounded_string_or_none(
+            bundle.selector_version if bundle is not None else None
+        ),
+        profile=_bounded_string_or_none(
+            bundle.profile if bundle is not None else None
+        ),
+        command_set_digest=_bounded_string_or_none(
+            bundle.command_set_digest if bundle is not None else None
+        ),
+        plan_id=_bounded_string_or_none(
+            bundle.plan_id if bundle is not None else None
+        ),
+        bundle_id=bundle.bundle_id if bundle is not None else None,
+        runner_id=_bounded_string_or_none(
+            bundle.runner_id if bundle is not None else None
+        ),
+        invocation_id=_bounded_string_or_none(invocation_id),
+        command_result_ids=result_ids[:MAX_ADVISORY_COMMAND_RESULTS],
+        command_result_statuses=result_statuses[:MAX_ADVISORY_COMMAND_RESULTS],
+        reason_codes=_bounded_sorted(reasons, MAX_ADVISORY_REASON_CODES),
+        details=_bounded_sorted(details, MAX_ADVISORY_DETAILS),
+    )
+    payload = _advisory_payload(preliminary)
+    if len(_canonical_bytes(payload)) > MAX_ADVISORY_SERIALIZED_BYTES:
+        preliminary = replace(
+            preliminary,
+            status="invalid",
+            reason_codes=("advisory.serialized-size",),
+            details=(),
+        )
+        payload = _advisory_payload(preliminary)
+    digest = _semantic_digest("agent-os-advisory-pre-pr-evidence:v1", payload)
+    return replace(preliminary, result_id=f"advisory-evidence:{digest}")
 
 
 def _classify_projection(

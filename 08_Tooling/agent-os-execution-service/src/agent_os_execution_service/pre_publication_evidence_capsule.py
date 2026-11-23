@@ -49,6 +49,9 @@ from scripts.agent_os_remote_validation.evidence_bundle import (
 )
 from scripts.agent_os_remote_validation.selector import validation_plan_id
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
+from workflow_scheduler.governance.dev_validation_profiles import (
+    validation_command_identities_bind,
+)
 
 CAPSULE_SCHEMA_NAME = "agent-os-pre-publication-producer-evidence"
 LEGACY_CAPSULE_SCHEMA_VERSION = "1.0"
@@ -232,8 +235,9 @@ class PrePublicationEvidenceCapsule:
         if len(set(self.invalidation_events)) != len(self.invalidation_events):
             raise ValueError("invalidation_events must be unique")
 
-        if self.required_environment_spec.required_validation_command_ids != tuple(
-            sorted(packet.required_tests)
+        if not validation_command_identities_bind(
+            self.required_environment_spec.required_validation_command_ids,
+            tuple(sorted(packet.required_tests)),
         ):
             raise ValueError("required environment does not bind to candidate packet tests")
 
@@ -448,8 +452,9 @@ def _pilot_evidence(
         or tuple(candidate_packet.required_tests) != tuple(pilot_input.required_tests)
     ):
         raise ValueError("candidate packet does not bind to pilot input")
-    if required_environment_spec.required_validation_command_ids != tuple(
-        sorted(candidate_packet.required_tests)
+    if not validation_command_identities_bind(
+        required_environment_spec.required_validation_command_ids,
+        tuple(sorted(candidate_packet.required_tests)),
     ):
         raise ValueError("required environment does not bind to candidate packet tests")
     plan_id = validation_plan_id(pilot_input.validation_plan)
