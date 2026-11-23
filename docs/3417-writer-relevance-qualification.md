@@ -45,3 +45,10 @@ Focused regression command from repository root:
 ```sh
 python -m pytest tests/agent_os_notion_lessons_write/test_writer.py tests/agent_os_notion_lessons_write/test_live.py -q
 ```
+
+
+## Structural-only QA fixtures versus semantic review
+
+For shape checks, use the finite schema only: `{target_lesson_id: str | None, properties: mapping}`. Creates require every key in `NARRATIVE_TYPES`; updates allow a nonempty writable subset. Optional descriptive fields and their constraints come from `DESCRIPTIVE_TYPES`, `MAX_APPLIES_TO`, `MAX_SUPPORTING_REFS`, and the canonical repository-only source-link validators. `PROTECTED_FIELDS` must never appear in a reviewed write. The catalog definitions, not a duplicated text summary, remain the authoritative contract.
+
+In the test suite, `structural_entry()` uses one-character, nonblank narrative placeholders for **catalog validation only**; it is never passed off as proof that a lesson is relevant to a task. CKR2/CKR11 positive and hard-negative evaluations keep mechanism-bearing reviewed text and real typed requests. Thus compact external schema summaries do not leak or overfit narrative prose, but also cannot substitute for semantic applicability or Notion persistence evidence.
