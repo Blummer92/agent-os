@@ -466,6 +466,7 @@ def test_admission_out_writes_non_authorizing_verdict(tmp_path, capsys):
             "role_id": "inline-analysis-diagram", "slot_id": "0",
             "artifact_type": "slides", "artifact_id": "sf",
             "artifact_revision_id": "sr", "state": "verified",
+            "container_id": "slide-1", "inserted_element_id": "img-1",
             "content_identity": {"asset_id": "asset-1", "revision": "v1"},
             "source_plan_id": "plan-1", "required": True,
             "eligibility_evidence": None, "transport": "test",

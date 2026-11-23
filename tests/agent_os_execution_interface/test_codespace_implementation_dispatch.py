@@ -392,3 +392,29 @@ def test_missing_validation_plan_id_fails_closed_for_test_execution() -> None:
                 validation_command_plan_id_or_none=None, run=_RunSpy()
             ),
         )
+
+
+def test_b01_dispatched_outcome_carries_derived_request_id() -> None:
+    """B01: the outcome's carried id equals the result's id, both derived
+    from the dispatched request content -- not asserted by the driver."""
+    outcome = dispatch_admitted_operation_to_codespace(
+        **_base_kwargs(run=_RunSpy()),
+    )
+    result = outcome.transport_result_or_none
+    assert result is not None
+    assert outcome.request_or_none is not None
+    assert outcome.request_or_none == result.request_id
+    # Deterministic across identical dispatches.
+    second = dispatch_admitted_operation_to_codespace(
+        **_base_kwargs(run=_RunSpy()),
+    )
+    assert second.request_or_none == outcome.request_or_none
+
+
+def test_b01_not_dispatched_outcome_carries_no_request_id() -> None:
+    """B01: a dispatcher that never sent a request binds no id at all."""
+    outcome = dispatch_admitted_operation_to_codespace(
+        **_base_kwargs(evidence_stale=True, run=_RunSpy()),
+    )
+    assert outcome.status is DispatchStatus.NOT_DISPATCHED
+    assert outcome.request_or_none is None

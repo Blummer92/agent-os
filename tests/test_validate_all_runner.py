@@ -10,6 +10,7 @@ import pytest
 
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -23,6 +24,8 @@ def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, root / "scripts" / "validate-all.sh")
+    for helper in RUNNER_HELPERS:
+        shutil.copy2(SOURCE_SCRIPT.parent / helper, root / "scripts" / helper)
     os.chmod(root / "scripts" / "validate-all.sh", 0o755)
     structural = root / "07_Agent_Tests" / "validate-repo-structure.sh"
     structural.parent.mkdir(parents=True)
@@ -41,6 +44,15 @@ def repo(tmp_path: Path) -> Path:
         "    sys.argv = args\n"
         "    exec(compile(sys.stdin.read(), '<stdin>', 'exec'))\n"
         "    raise SystemExit(0)\n"
+        "if args and args[0].endswith('.py') and pathlib.Path(args[0]).is_file():\n"
+        "    import runpy\n"
+        "    sys.path.insert(0, str(pathlib.Path(args[0]).resolve().parent))  # like `python script.py`\n"
+        "    sys.argv = args\n"
+        "    runpy.run_path(args[0], run_name='__main__')\n"
+        "    raise SystemExit(0)\n"
+        "if len(args) >= 3 and args[:2] == ['-m', 'pytest'] and '--collect-only' in args:\n"
+        "    print('m.py::t')  # the one test the shim's JUnit reports\n"
+        "    raise SystemExit(0)\n"
         "if args == ['-m', 'pytest', '--version']:\n"
         "    print('pytest 9.0')\n"
         "    raise SystemExit(0)\n"
@@ -52,6 +64,7 @@ def repo(tmp_path: Path) -> Path:
         "    print('PYTEST_MARKER ' + target)\n"
         "    print('CWD_MARKER ' + os.getcwd())\n"
         "    print('PYTHONPATH_MARKER ' + os.environ.get('PYTHONPATH', ''))\n"
+        "    print('COVERAGE_FILE_MARKER ' + os.environ.get('COVERAGE_FILE', ''))\n"
         "    barrier = os.environ.get('PYTEST_BARRIER_DIR')\n"
         "    cwd_name = pathlib.Path.cwd().name\n"
         "    if barrier and cwd_name.startswith('pkg-'):\n"
@@ -64,6 +77,11 @@ def repo(tmp_path: Path) -> Path:
         "        if len(list(barrier_path.iterdir())) < 2:\n"
         "            print('BARRIER_TIMEOUT ' + cwd_name)\n"
         "            raise SystemExit(6)\n"
+        "    for arg in args:\n"
+        "        if arg.startswith('--junitxml='):\n"
+        "            junit = pathlib.Path(arg.split('=', 1)[1])\n"
+        "            junit.parent.mkdir(parents=True, exist_ok=True)\n"
+        "            junit.write_text('<testsuites><testsuite name=\"pytest\" tests=\"1\"><testcase classname=\"m\" name=\"t\"/></testsuite></testsuites>')\n"
         "    should_fail = 'fail' in target\n"
         "    if pathlib.Path(target).is_dir():\n"
         "        should_fail = should_fail or any(pathlib.Path(target).rglob('test_*fail.py'))\n"
@@ -82,6 +100,11 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     merged = os.environ.copy()
     merged["PYTHON_BIN"] = str(repo / "fake-python")
+    # Never let a CI_JUNIT_DIR inherited from the outer run leak fixture
+    # receipts into the production artifact directory: these tests assert
+    # on stdout, not on receipts, so drop it unless a caller sets it
+    # explicitly for this invocation.
+    merged.pop("CI_JUNIT_DIR", None)
     if env:
         merged.update(env)
     return subprocess.run(
@@ -93,6 +116,21 @@ def run(
         check=False,
         timeout=30,
     )
+
+
+def test_runner_does_not_leak_into_inherited_ci_junit_dir(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hosted CI on PR #3817 showed fixture receipts (1-test collections
+    from this file's fake repos) overwriting the production receipts in
+    the aggregate artifact: run() inherited CI_JUNIT_DIR from the outer
+    run. The runner must drop it unless a caller sets it explicitly."""
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    monkeypatch.setenv("CI_JUNIT_DIR", str(junit_dir))
+    result = run(repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert list(junit_dir.iterdir()) == []
 
 
 def test_no_argument_behavior_runs_structure_and_root_once(repo: Path) -> None:
@@ -414,3 +452,234 @@ def test_instructional_materials_suite_is_explicitly_kept_out_of_parallel_batch(
     content = SOURCE_SCRIPT.read_text(encoding="utf-8")
     assert 'if [ "$suite_name" = "08_Tooling/instructional-materials-coach" ]; then' in content
     assert "flush_parallel_batch" in content
+
+
+def test_3432_bounded_coverage_in_existing_pytest_invocations(repo: Path) -> None:
+    """Coverage augments exactly three suites; no collection is rerun."""
+    for name, module in (
+        ("workflow-scheduler", "workflow_scheduler"),
+        ("reusable-capability-registry", "reusable_capability_registry"),
+        ("visual-asset-intake", "visual_asset_intake"),
+        ("untargeted-package", "other"),
+    ):
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+
+    result = run(repo, env={"VALIDATE_ALL_MAX_PARALLEL": "3"})
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.count("PYTEST_MARKER tests") == 5
+    checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    for name in (
+        "workflow-scheduler",
+        "reusable-capability-registry",
+        "visual-asset-intake",
+        "untargeted-package",
+    ):
+        assert checks.count("PASS | 08_Tooling/" + name + " |") == 1
+    assert "--cov=src/workflow_scheduler --cov-report=term" in checks
+    assert "--cov=src/reusable_capability_registry --cov-report=term-missing" in checks
+    assert "--cov=src/visual_asset_intake --cov-report=term-missing" in checks
+    untargeted = next(line for line in checks.splitlines() if "PASS | 08_Tooling/untargeted-package |" in line)
+    assert "--cov=" not in untargeted
+
+
+def test_3432_parallel_coverage_uses_per_suite_temporary_files(repo: Path) -> None:
+    """No parallel suites write the same coverage file or leave files behind."""
+    for name, module in (
+        ("workflow-scheduler", "workflow_scheduler"),
+        ("reusable-capability-registry", "reusable_capability_registry"),
+        ("visual-asset-intake", "visual_asset_intake"),
+    ):
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+
+    result = run(repo, env={"VALIDATE_ALL_MAX_PARALLEL": "3"})
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    paths = [
+        Path(line.removeprefix("COVERAGE_FILE_MARKER "))
+        for line in result.stdout.splitlines()
+        if line.startswith("COVERAGE_FILE_MARKER ") and line != "COVERAGE_FILE_MARKER "
+    ]
+    assert len(paths) == 3
+    assert len(set(paths)) == 3
+    assert all(p.is_absolute() and p.name == ".coverage" for p in paths)
+    assert all("agent-os-validate." in str(p) for p in paths)
+    assert all(not p.exists() for p in paths)
+    assert {p.parent.name for p in paths} == {
+        "workflow-scheduler",
+        "reusable-capability-registry",
+        "visual-asset-intake",
+    }
+
+
+def _install_schedule_trace(repo: Path) -> None:
+    """Instrument the fixture Python shim, not production source or real pytest."""
+    shim = repo / "fake-python"
+    text = shim.read_text(encoding="utf-8")
+    anchor = "    cwd_name = pathlib.Path.cwd().name\n"
+    injected = (
+        "    trace = os.environ.get('PYTEST_SCHEDULE_TRACE_DIR')\n"
+        "    if trace and (cwd_name.startswith('pkg-') or cwd_name == 'repo' "
+        "or cwd_name == 'instructional-materials-coach'):\n"
+        "        import time\n"
+        "        trace_path = pathlib.Path(trace)\n"
+        "        trace_path.mkdir(parents=True, exist_ok=True)\n"
+        "        (trace_path / (cwd_name + '.start')).write_text(str(time.monotonic_ns()))\n"
+        "        for item in os.environ.get('PYTEST_SCHEDULE_DELAYS', '').split(','):\n"
+        "            if '=' in item:\n"
+        "                suite, delay = item.split('=', 1)\n"
+        "                if suite == cwd_name:\n"
+        "                    time.sleep(float(delay))\n"
+        "        (trace_path / (cwd_name + '.end')).write_text(str(time.monotonic_ns()))\n"
+    )
+    assert text.count(anchor) == 1
+    shim.write_text(text.replace(anchor, anchor + injected), encoding="utf-8")
+
+
+def _trace_ns(directory: Path, name: str, event: str) -> int:
+    return int((directory / f"{name}.{event}").read_text(encoding="utf-8"))
+
+
+def test_scheduler_refills_worker_slots_without_waiting_for_long_suite(
+    repo: Path, tmp_path: Path
+) -> None:
+    """A third suite starts while the long first suite still runs."""
+    for name in ("pkg-a", "pkg-b", "pkg-c", "pkg-d"):
+        _write_test(repo / name / "tests" / "test_ok.py")
+    _install_schedule_trace(repo)
+    trace = tmp_path / "trace"
+    result = run(repo, env={
+        "VALIDATE_ALL_MAX_PARALLEL": "2",
+        "PYTEST_SCHEDULE_TRACE_DIR": str(trace),
+        "PYTEST_SCHEDULE_DELAYS": "pkg-a=0.9,pkg-b=0.1,pkg-c=0.1,pkg-d=0.1",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _trace_ns(trace, "pkg-c", "start") < _trace_ns(trace, "pkg-a", "end")
+    records = [
+        (name, _trace_ns(trace, name, "start"), _trace_ns(trace, name, "end"))
+        for name in ("pkg-a", "pkg-b", "pkg-c", "pkg-d")
+    ]
+    # Concurrent-worker bound; ties are ordered with completions first.
+    events = sorted(
+        [(start, 1) for _, start, _ in records]
+        + [(end, -1) for _, _, end in records],
+        key=lambda event: (event[0], event[1]),
+    )
+    active = peak = 0
+    for _, delta in events:
+        active += delta
+        peak = max(peak, active)
+        assert 0 <= active <= 2
+    assert peak == 2
+    checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    assert [
+        name for name in ("pkg-a", "pkg-b", "pkg-c", "pkg-d", "root")
+        if f"PASS | {name} |" in checks
+    ] == ["pkg-a", "pkg-b", "pkg-c", "pkg-d", "root"]
+    assert checks.index("PASS | pkg-a |") < checks.index("PASS | pkg-b |")
+    assert checks.index("PASS | pkg-b |") < checks.index("PASS | pkg-c |")
+    assert checks.index("PASS | pkg-c |") < checks.index("PASS | pkg-d |")
+
+
+def test_scheduler_starts_root_early_and_preserves_coach_exclusivity(
+    repo: Path, tmp_path: Path
+) -> None:
+    coach = repo / "08_Tooling" / "instructional-materials-coach"
+    _write_test(coach / "tests" / "test_ok.py")
+    for name in ("pkg-a", "pkg-b"):
+        _write_test(repo / name / "tests" / "test_ok.py")
+    _install_schedule_trace(repo)
+    trace = tmp_path / "trace"
+    result = run(repo, env={
+        "VALIDATE_ALL_MAX_PARALLEL": "2",
+        "PYTEST_SCHEDULE_TRACE_DIR": str(trace),
+        "PYTEST_SCHEDULE_DELAYS": "repo=0.25,pkg-a=0.15,pkg-b=0.15,"
+                                  "instructional-materials-coach=0.15",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Foreground coach is completed before any other pytest starts.
+    coach_end = _trace_ns(trace, "instructional-materials-coach", "end")
+    for name in ("repo", "pkg-a", "pkg-b"):
+        assert coach_end <= _trace_ns(trace, name, "start")
+    # The scheduler dispatches root first, but OS process startup can race:
+    # a later-launched package can enter Python before root does. Assert the
+    # intended overlap instead of assuming subprocess startup order.
+    assert _trace_ns(trace, "repo", "start") < _trace_ns(trace, "pkg-a", "end")
+    script = (repo / "scripts" / "validate-all.sh").read_text(encoding="utf-8")
+    root_dispatch = '[ "${suite_names[$i]}" = "root" ] && schedule_indices+=("$i")'
+    assert script.index(root_dispatch) < script.index('case "${suite_names[$i]}" in')
+    checks = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    assert checks.index("PASS | 08_Tooling/instructional-materials-coach |") < checks.index(
+        "PASS | pkg-a |"
+    )
+    assert checks.index("PASS | pkg-b |") < checks.index("PASS | root |")
+
+
+def test_scheduler_preserves_junit_manifest_and_failure_propagation(
+    repo: Path, tmp_path: Path
+) -> None:
+    _write_test(repo / "pkg-pass" / "tests" / "test_ok.py")
+    _write_test(repo / "pkg-fail" / "tests" / "test_fail.py", failing=True)
+    junit = tmp_path / "junit"
+    result = run(repo, env={
+        "VALIDATE_ALL_MAX_PARALLEL": "2", "CI_JUNIT_DIR": str(junit),
+    })
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "OVERALL STATUS\nFAIL" in result.stdout
+    assert "PASS | pkg-pass |" in result.stdout
+    assert "FAIL | pkg-fail | exit 1" in result.stdout
+    assert "PASS | root |" in result.stdout
+    manifest = (junit / "manifest.tsv").read_text(encoding="utf-8")
+    rows = {
+        fields[0]: fields for fields in (
+            line.split("\t") for line in manifest.splitlines()[1:]
+        )
+    }
+    assert rows["pkg-pass"][3:6] == ["PASS", "0", "EXECUTED_PASS"]
+    assert rows["pkg-fail"][3:6] == ["FAIL", "1", "EXECUTED_FAIL"]
+    assert rows["root"][3:6] == ["PASS", "0", "EXECUTED_PASS"]
+    assert (junit / "pkg-pass.xml").is_file()
+    assert (junit / "pkg-fail.xml").is_file()
+    assert (junit / "root.xml").is_file()
+    for name in ("pkg-pass", "root"):
+        receipt = junit / ("test-completeness-" + name + ".json")
+        assert receipt.is_file()
+    assert manifest.index("pkg-fail\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
+
+def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receipt(
+    repo: Path, tmp_path: Path
+) -> None:
+    """Lose the coach worker before its receipt, not just a normal pytest failure."""
+    coach_name = "08_Tooling/instructional-materials-coach"
+    _write_test(repo / coach_name / "tests" / "test_ok.py")
+    _write_test(repo / "pkg-pass" / "tests" / "test_ok.py")
+    runner = repo / "scripts" / "validate-all.sh"
+    text = runner.read_text(encoding="utf-8")
+    anchor = '  started_us="$(timer_now_us || true)"\n  run_pytest_suite '
+    assert text.count(anchor) == 1
+    # Inject only into the disposable worker body; it exits before logs/JUnit or
+    # status are written. All other workflow and evidence paths are unchanged.
+    runner.write_text(
+        text.replace(anchor, f'  [ "$suite_name" != "{coach_name}" ] || exit 2\n' + anchor),
+        encoding="utf-8",
+    )
+    junit_dir = tmp_path / "junit"
+    result = run(repo, env={"CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "OVERALL STATUS\nFAIL" in result.stdout
+    assert f"suite subprocess ended without a valid status receipt: {coach_name}" in result.stderr
+    assert f"FAIL | {coach_name} | exit 2" in result.stdout
+    assert "PASS | pkg-pass | exit 0" in result.stdout
+    assert "PASS | root | exit 0" in result.stdout
+    manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+    suites = [line.split("\t") for line in manifest.splitlines()[1:]]
+    rows = {row[0]: row for row in suites}
+    assert rows[coach_name][2:] == ["no", "FAIL", "2", "NOT_EXECUTED_SETUP_FAILURE"]
+    for name in ("pkg-pass", "root"):
+        assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
+    assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")

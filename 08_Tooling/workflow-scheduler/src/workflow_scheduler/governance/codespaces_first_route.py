@@ -1,26 +1,14 @@
-"""Codespaces-first transport route resolution for #2931.
+"""Resolve the existing governed invocation transport without provider fallback.
 
-This module decides which provider transport an accepted governed invocation
-should consume, from the operation's capability requirements — instead of the
-ingress unconditionally entering ``gce_gcloud_adapter``.
+Discovery, developer validation, and diagnostics are Codespaces-only. A missing,
+stale, unauthorized, or incapable Codespace produces bounded failure evidence;
+it never grants an alternate GCE attempt. Unsupported validation profiles remain
+blocked until separately qualified. This implements the Codespaces-first owner
+decision on #3333 (2026-10-14); #3102 still owns permanent GCE decommission.
 
-Route selection follows the #2299 / #2300 split:
-
-- Codespaces is preferred for ordinary developer-loop operations (discovery,
-  developer validation, bounded diagnostics) when a current/capable Codespace
-  is selected from live evidence.
-- GCE remains the required transport for concrete VM-only capabilities:
-  #759 containment, Scheduler/unattended execution, fixed service identity,
-  runtime inspection against the fixed host, first-run validation,
-  ruleset administration, first-publication activation, and PPUX projection.
-
-The resolver is a pure function of the accepted ingress envelope. It performs
-no network access, starts no transport, and manufactures no authority: a
-``codespaces`` preference still requires the Codespaces adapter to select a
-current surface from live evidence, otherwise the workflow falls back through
-the existing GCE path. When no capable authorized route exists, the resolver
-returns ``preferred="none"`` so the caller fails closed with one explicit
-bounded blocker.
+Explicit fixed-host envelopes retain their existing GCE boundary. Selection is
+non-authorizing: each adapter still owns identity, currentness, and capability
+checks. The retained false fallback field preserves the route evidence schema.
 """
 from __future__ import annotations
 
@@ -31,9 +19,7 @@ from typing import Any
 
 SCHEMA_VERSION = "1.0"
 
-# Envelopes whose operations are ordinary developer-loop work: Codespaces is
-# preferred when a current/capable surface is selected, GCE remains the
-# fallback when Codespaces evidence is stale, unavailable, or insufficient.
+# Ordinary developer-loop requests never inherit VM transport authority.
 CODESPACES_PREFERRED_REASONS = frozenset(
     {
         "accepted-discovery-envelope",
@@ -50,7 +36,9 @@ CODESPACES_PREFERRED_REASONS = frozenset(
 # perform it anymore. "accepted-first-run-validation-envelope" is deliberately
 # absent here, so it resolves to preferred="none" (route-unknown-envelope) and
 # the governed invocation workflow fails closed instead of routing the envelope
-# to a transport that can no longer carry it.
+# to a transport that can no longer carry it. GCE Wave 1 additionally retired
+# the ingress admission itself, so the reason is now only ever seen on stale
+# stored evidence; this branch stays as fail-closed defense in depth.
 GCE_REQUIRED_REASONS = {
     "accepted-runtime-inspection-envelope": "gce-required-fixed-host",
     "accepted-ruleset-admin-envelope": "gce-required-ruleset-admin",
@@ -87,7 +75,7 @@ def resolve_ingress_route(transport: dict[str, Any]) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
             "preferred": "codespaces",
-            "gce_fallback_allowed": True,
+            "gce_fallback_allowed": False,
             "reason_codes": ["codespaces-first-ordinary-operation"],
             "operation": transport.get("operation"),
         }

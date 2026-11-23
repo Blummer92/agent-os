@@ -181,6 +181,29 @@ def test_host_runner_pins_the_same_node_and_vitest_identity_the_package_declares
 
 
 
+
+def test_published_host_runtime_contract_tracks_required_vitest_version() -> None:
+    """Do not claim a version different from the fixed host probe/package."""
+    doc = (
+        ROOT
+        / "08_Tooling"
+        / "agent-os-execution-service"
+        / "docs"
+        / "HOST_RUNTIME_INSTALLATION.md"
+    ).read_text(encoding="utf-8")
+    runtime_contract = doc.split("### DEVVAL3 host runtime", 1)[1].split(
+        "### DEVVAL3 rollback", 1
+    )[0]
+    required = dev_validation_gce.DEV_VALIDATION_VITEST_VERSION
+    manifest = json.loads((PACKAGE / "package.json").read_text(encoding="utf-8"))
+    assert manifest["devDependencies"]["vitest"] == required
+    assert f"overlay resolves Vitest `{required}`" in runtime_contract
+    assert f"actually resolves Vitest `{required}`" in runtime_contract
+    assert "not proof that an overlay has been published" in runtime_contract
+    assert "separately authorized administrator" in runtime_contract
+    assert "test-runtime-invalid" in runtime_contract
+
+
 def test_capture_and_picture_perfect_node_engines_match_the_lockfiles() -> None:
     for directory in (
         ROOT / "08_Tooling" / "instructional-materials-coach" / "capture",

@@ -304,3 +304,100 @@ def test_ssh_remote_command_executes_through_posix_shell(monkeypatch: pytest.Mon
     assert "SSH_BOUNDARY_OK" in completed.stdout
     assert "command not found" not in completed.stderr
     assert "SyntaxError" not in completed.stderr
+
+
+# --- #3333: approved Codespaces store binding over the real remote program ----
+
+def _run_remote_program(env: dict, cwd: Path) -> dict:
+    import os
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _REMOTE_DISCOVERY_SOURCE, REPOSITORY, "3333", APPROVED_CODESPACE_NAME],
+        capture_output=True, text=True, cwd=cwd, env={"PATH": os.environ["PATH"], **env},
+    )
+    out = proc.stdout
+    return json.loads(out.split(FRAME_START, 1)[1].split(FRAME_END, 1)[0])
+
+
+def test_unset_env_binds_approved_codespaces_store_root() -> None:
+    # sshd noninteractive sessions do not receive containerEnv/remoteEnv.
+    assert live_discovery.APPROVED_CODESPACES_STORE_ROOT == "/workspaces/agent-os-state/checkpoints"
+    assert f'"{live_discovery.APPROVED_CODESPACES_STORE_ROOT}"' in _REMOTE_DISCOVERY_SOURCE
+    assert "/var/lib/agent-os" not in _REMOTE_DISCOVERY_SOURCE
+
+
+def test_remote_program_missing_store_fails_closed_without_fallback(tmp_path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    payload = _run_remote_program({"AGENT_OS_CHECKPOINT_STORE_ROOT": str(tmp_path / "absent")}, repo)
+    assert payload["reason_codes"] == ["codespaces-discovery-store-unavailable"]
+
+
+def test_remote_program_reads_configured_store_and_malformed_descriptor_fails_closed(tmp_path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    env = {"AGENT_OS_CHECKPOINT_STORE_ROOT": str(tmp_path)}
+    (tmp_path / "invocations").mkdir()
+    assert _run_remote_program(env, repo)["reason_codes"] == ["no-matching-descriptor"]
+    (tmp_path / "invocations" / ("0" * 64 + ".json")).write_text("{not json", encoding="utf-8")
+    payload = _run_remote_program(env, repo)
+    assert payload["status"] == "needs-decision"
+    assert payload["handoff_id"] is None
+
+@pytest.mark.parametrize(
+    ("codespace_name", "reason", "expected_surface"),
+    [
+        (
+            APPROVED_CODESPACE_NAME,
+            "codespaces-not-available",
+            f"codespace:{APPROVED_CODESPACE_NAME}",
+        ),
+        (None, "codespaces-no-qualified-surface", None),
+    ],
+)
+def test_unavailable_discovery_receipt_preserves_observed_surface(
+    monkeypatch, tmp_path, codespace_name, reason, expected_surface
+) -> None:
+    """A known but unavailable Codespace retains its identity without SSH or fallback."""
+    import sys
+
+    ingress_path = tmp_path / "transport.json"
+    route_path = tmp_path / "route.json"
+    result_path = tmp_path / "result.json"
+    ingress_path.write_text(json.dumps(_ingress().to_dict()), encoding="utf-8")
+
+    route = live_discovery._route(False, reason, codespace_name=codespace_name)
+    request = DiscoveryRequest(repository=REPOSITORY, issue_number=2931)
+
+    def fake_select(ingress):
+        assert ingress.reason == "accepted-discovery-envelope"
+        return route, request
+
+    monkeypatch.setattr(live_discovery, "select_codespaces_discovery", fake_select)
+    monkeypatch.setattr(
+        live_discovery, "run_discovery_over_codespaces",
+        lambda *args, **kwargs: pytest.fail("unavailable Codespace must not reach SSH"),
+    )
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "discovery_codespaces",
+            "--transport", str(ingress_path),
+            "--route-output", str(route_path),
+            "--result-output", str(result_path),
+        ],
+    )
+    live_discovery.main()
+
+    route_receipt = json.loads(route_path.read_text(encoding="utf-8"))
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    discovery = result["discovery"]
+    assert route_receipt["selected"] is False
+    assert route_receipt["execution_surface_id"] == expected_surface
+    assert result["codespaces_capable"] is False
+    assert discovery["status"] == "needs-decision"
+    assert discovery["reason_codes"] == [reason]
+    assert discovery["execution_surface_id"] == expected_surface
+    assert discovery["execution_authorized"] is False
+    assert discovery["scheduler_invoked"] is False
+    assert discovery["side_effects_performed"] is False
+

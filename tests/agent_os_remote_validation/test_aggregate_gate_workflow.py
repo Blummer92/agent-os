@@ -66,19 +66,24 @@ def test_gate_waits_on_both_validation_jobs():
 def test_gate_enforces_disposition_through_the_tested_decision_module():
     job = _gate_job()
     steps = job.get("steps") or []
+    # Disposition-deciding steps are the ones that pass the aggregate job's
+    # own result into the module. The "Resolve terminal publication
+    # authority" step also invokes the module (NC19) but only resolves
+    # publication inputs — it carries no VALIDATE_RESULT and decides no
+    # disposition, so it is not an enforcing step.
     enforcing = [
         step
         for step in steps
         if GATE_SCRIPT in str(step.get("run", ""))
+        and "VALIDATE_RESULT" in (step.get("env") or {})
     ]
     assert enforcing, "no step invokes the aggregate-gate decision module"
-    step = enforcing[0]
-    env = step.get("env") or {}
-    validate_result = str(env.get("VALIDATE_RESULT", ""))
-    assert "needs.validate.result" in validate_result, (
-        "the gate must decide on the aggregate job's own result, "
-        "not the enclosing workflow conclusion"
-    )
+    for step in enforcing:
+        validate_result = str(step["env"]["VALIDATE_RESULT"])
+        assert "needs.validate.result" in validate_result, (
+            "the gate must decide on the aggregate job's own result, "
+            "not the enclosing workflow conclusion"
+        )
 
 
 def test_gate_is_a_plain_job_not_a_reusable_workflow_call():

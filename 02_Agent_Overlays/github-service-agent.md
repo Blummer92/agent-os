@@ -63,6 +63,13 @@ criteria, and authorization; then use a non-protected branch. Change only files
 inside the approved scope, run validation, commit intentionally, open or reuse
 one draft PR, and report through the inherited final-report standard.
 
+Apply the issue-primary guard to actual primary implementation claims. For an
+exact-file request without such a claim, apply the GitHub Change Request Draft
+checks instead. Do not invent an issue identity, skip duplicate/concurrency
+checks, or treat a generic GitHub write tool as governed host admission. Carry
+the same current owner grant through in-scope readback and validation without
+asking for it again; stop if the required host evidence is unavailable.
+
 For an eligible lane, directly corresponding tests, documentation, minimum
 required exports, architecture registration, and policy-required generated
 manifests or changelog entries do not require a new stop when behaviorally
@@ -88,7 +95,7 @@ Before any merge admission decision that depends on GitHub Actions validation st
 ## Governed Mutation Seams (#3281)
 The ChatGPT execution surface exposes the governed GitHub mutation guard/readback contracts as MCP admission tools. This overlay names those contracts as the executable owners of AGENTS.md step 9 (subordinate-mutation readback/continuation) and the Draft-PR post-create obligations above:
 - Seam 1 (issue-comment write boundary): `admit_agent_os_issue_comment_mutation_tool` runs `defect_evidence_mutation_guard.evaluate_defect_evidence_mutation` (#2741) as the pre-write verify-open guard — defect/process evidence aimed at a closed issue is refused fail-closed and routed to the open root-cause owner (`reacquire-target-state` / `route-to-open-owner` / `create-new-bug`) — and `comment_mutation_readback.evaluate_comment_persistence` (#2785) as the post-write canonical readback. A subordinate comment write is admitted as persisted only after canonical readback proves the exact intended body; a provider success claim alone never proves persistence, and an uncertain response never authorizes an automatic retry and never creates a duplicate comment.
-- Seam 2 (Safe Implementation Lane post-PR step): `project_agent_os_lane_post_pr_issue_reconciliation_tool` runs `lane_post_pr_issue_reconciliation.project_lane_post_pr_issue_reconciliation` (#2791) after Draft PR readback to project the implementation issue's expected post-PR disposition, and `evaluate_lane_post_pr_issue_readback` to prove it from the canonical post-mutation readback. Draft PR creation is never reported fully reconciled while the linked issue keeps a stale Ready label or an open disposition; the plan reuses the existing lifecycle-mutation vocabulary and can never grant merge or Ready authority.
+- Seam 2 (Safe Implementation Lane post-PR step): `project_agent_os_lane_post_pr_issue_reconciliation_tool` runs `lane_post_pr_issue_reconciliation.project_lane_post_pr_issue_reconciliation` (#2791) after Draft PR readback to project the implementation issue's expected post-PR disposition, and `evaluate_lane_post_pr_issue_readback` to prove it from the canonical post-mutation readback. For Safe Lane work only, Draft PR creation is never reported fully reconciled while the implementation issue keeps a stale Ready label or an open disposition; the plan reuses the existing lifecycle-mutation vocabulary and can never grant merge or Ready authority.
 The tools are pure admission/readback composition: they perform no GitHub writes, authorize none, and introduce no second issue registry, queue, scheduler, or lifecycle authority. Live host consumption is separately authorized; registration and tests alone are not closure evidence.
 ## Agent OS Issue Post-Create Classification And Continuation
 After every successful authorized creation of any Agent OS issue, treat the creation response as provisional until canonical issue readback proves the issue identity, body, state, and managed classification labels. This contract applies to implementation handoffs, bug capture, testing/planning issues, focused successors, self-defect issues, and every other tiered Agent OS issue created through a supported surface. Prefer the existing structured issue-create path, which supplies the validated `proposed_labels` set at creation and verifies exact label readback. Do not report Agent OS issue creation as complete while a canonical managed owner/readiness/type projection that was part of the validated creation plan is missing.
@@ -129,6 +136,21 @@ title/body without canonical close-issue authorization refuse the transition.
 The pre-step projects admissibility only; it grants no merge, closure,
 workflow, protected-setting, production, or external-write authority.
 
+Satisfying routes (#3446): the pre-step is satisfied either by the registered
+MCP admission tool where it is attached, or, where that tool is unattached,
+by an existing Actions-ingress admission receipt for the same PR, head, and
+body, verified immediately before mutation through
+`verify_ready_admission_receipt` against a fresh canonical PR readback. The
+ingress route creates no second evaluator: the Actions consumer calls the
+same single canonical evaluator `evaluate_ready_for_review_admission`, and
+the exact head SHA and PR body revision binding, the closing-reference
+refusal, and fail-closed behavior apply unchanged — an absent, refused,
+stale, duplicate, or forged receipt stops the transition. A host must not
+stop solely because the MCP tool is absent when the ingress route is
+available. The MCP admission tool is retained, not deleted, and no route
+grants merge, closure, workflow, protected-setting, production, or
+external-write authority.
+
 ## Required Handoff Targets
 Return implementation evidence and unresolved decisions to the requesting owner.
 Route independent validation uncertainty to QA / Test Agent support. Route
@@ -150,9 +172,16 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.17.0
+0.18.0
 
 ## Changelog
+- 0.18.0 recognizes the existing Actions-ingress admission receipt, verified
+  through `verify_ready_admission_receipt`, as satisfying the Draft ->
+  Ready-for-Review pre-step where the MCP admission tool is unattached
+  (#3446). The single canonical evaluator, exact head/body binding, receipt
+  verification, closing-reference safeguards, and fail-closed behavior are
+  preserved; the MCP admission tool is retained and no second evaluator is
+  created.
 - 0.17.0 adds the validation-gate currentness classifier (#3269): merge admission must converge connector wrapper workflow-run snapshots against canonical check-run evidence for the reacquired head SHA; a `pending` + zero-job wrapper result is never presented as current (cross-check-required without canonical evidence, stale-retry against it), conflicting snapshots produce an explicit retry state rather than a terminal conclusion, and no branch protection, required check, or mandatory approval is bypassed.
 - 0.16.0 names the governed GitHub mutation guard/readback contracts (#2741/#2785/#2791) as the executable owners of AGENTS.md step 9 and the Draft-PR post-create obligations, exposed to the ChatGPT execution surface as MCP admission tools: the issue-comment write boundary (pre-write verify-open guard + post-write canonical readback) and the Safe Implementation Lane post-PR issue reconciliation (#3281).
 - 0.15.0 requires the Draft -> Ready-for-Review transition to run the registered MCP admission pre-step `admit_agent_os_ready_for_review_tool` (#3279): the exact head SHA and PR body revision must bind, GitHub-effective closing references without canonical close-issue authorization fail closed, and the pre-step grants no merge, closure, workflow, protected-setting, production, or external-write authority.

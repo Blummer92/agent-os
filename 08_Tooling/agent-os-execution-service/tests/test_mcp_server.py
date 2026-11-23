@@ -10,12 +10,14 @@ EXPECTED_TOOLS = frozenset(
     {
         "bind_agent_os_request_interpretation_tool",
         "plan_connected_issue_creation_tool",
+        "reconcile_agent_os_proposed_work_tool",
         "plan_agent_os_continuation_tool",
         "admit_agent_os_primary_pr_creation_tool",
         "admit_agent_os_batch_pr_packaging_tool",
         "activate_agent_os_issue_start_lessons_tool",
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
+        "consume_agent_os_ckr6_result_tool",
         "admit_agent_os_ready_for_review_tool",
         "classify_agent_os_mission_completion_tool",
         "classify_agent_os_issue_batch_completion_tool",
@@ -24,6 +26,8 @@ EXPECTED_TOOLS = frozenset(
         "classify_agent_os_bulk_repair_continuation_tool",
         "admit_agent_os_issue_comment_mutation_tool",
         "project_agent_os_lane_post_pr_issue_reconciliation_tool",
+        "admit_agent_os_issue_closure_tool",
+        "verify_agent_os_issue_closure_admission_tool",
     }
 )
 

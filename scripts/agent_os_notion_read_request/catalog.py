@@ -33,15 +33,15 @@ _ALLOWED_VERIFICATION_STATES = frozenset({"unverified", VERIFIED_STATE})
 _SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
-def load_catalog(path: Path | None = None) -> NotionReadCatalog:
+def load_catalog(path: Path | None = None, *, sources_only: bool = False) -> NotionReadCatalog:
     """Return the validated repository-owned catalog."""
     target = path or CATALOG_PATH
     if target.stat().st_size > _MAX_CATALOG_BYTES:
         raise NotionReadRequestError("catalog exceeds bounded size")
-    return parse_catalog(json.loads(target.read_text(encoding="utf-8")))
+    return parse_catalog(json.loads(target.read_text(encoding="utf-8")), sources_only=sources_only)
 
 
-def parse_catalog(payload: object) -> NotionReadCatalog:
+def parse_catalog(payload: object, *, sources_only: bool = False) -> NotionReadCatalog:
     """Validate one catalog payload without any repository or network I/O."""
     if type(payload) is not dict:
         raise NotionReadRequestError("catalog must be an object")
@@ -56,11 +56,15 @@ def parse_catalog(payload: object) -> NotionReadCatalog:
         payload.get("credential_env_var"), "catalog credential_env_var"
     )
 
-    canonical_units = tuple(
+    # Teacher OS discovers unit identities live. Legacy GitHub requests still
+    # use the complete finite catalog and retain their strict validation.
+    canonical_units = () if sources_only else tuple(
         _canonical_unit(item) for item in _list(payload.get("canonical_units"), "canonical_units")
     )
     sources = tuple(_source(item) for item in _list(payload.get("sources"), "sources"))
-    requests = tuple(_request(item) for item in _list(payload.get("requests"), "requests"))
+    requests = () if sources_only else tuple(
+        _request(item) for item in _list(payload.get("requests"), "requests")
+    )
 
     _reject_duplicates(
         [unit.canonical_unit_key for unit in canonical_units], "canonical unit key"

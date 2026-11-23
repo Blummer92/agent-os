@@ -35,21 +35,32 @@ closed if they are not.
 
 ## Bounded #1238 maintenance route
 
-`scripts/install-host-runtime` remains the unprivileged repository-owned wrapper
-for the separately authorized #1238 maintenance action. It validates the local
-checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed privileged helper, and
-the exact bounded sudo capability. All root work is delegated to
-`/usr/local/libexec/agent-os-host-install`; returned JSON evidence must report the
-same source SHA and explicitly keeps `scheduler_invoked` and
+> **GCE Wave 1 note.** The governed workflow no longer invokes this maintenance
+> route: the host-install activation branch (classifier, GCP auth bypass,
+> VM-start/install step) was retired under the #3333 no-reactivation decision,
+> and the former `/agent-os install-host-runtime` comment is ignored. The
+> scripts and this privilege documentation are preserved as historical
+> installer evidence; the workflow retains the `HOST_RUNTIME_SOURCE_SHA`
+> literal exactly once, solely as the expected-SHA anchor for the surviving
+> read-only sudo-admission inspection.
+
+`scripts/install-host-runtime` was the unprivileged repository-owned wrapper
+for the separately authorized #1238 maintenance action. No workflow route
+invokes it anymore; the wrapper is preserved as historical installer evidence.
+It validates the local checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed
+privileged helper, and the exact bounded sudo capability. All root work is
+delegated to `/usr/local/libexec/agent-os-host-install`; returned JSON evidence
+must report the same source SHA and explicitly keeps `scheduler_invoked` and
 `execution_authorized` false.
 
-The existing `.github/workflows/agent-os-governed-invocation.yml` route remains
-bound to the exact repository-owner comment, identity, repository, issue,
+The former `.github/workflows/agent-os-governed-invocation.yml` route was bound
+to the exact repository-owner comment, identity, repository, issue,
 `refs/heads/main`, WIF transport, resource tuple, and current permissions. #1341
-does not add Scheduler, lease, retry, fallback, VM-stop, repository-write, or
-execution authority. The separately authorized workflow diff is limited to the
-tracked installer digest and finite refusal mappings; the post-merge source-SHA
-bump remains a separate mechanical follow-up already recorded on #1341.
+added no Scheduler, lease, retry, fallback, VM-stop, repository-write, or
+execution authority. GCE Wave 1 retired that route; the tracked installer digest
+pin and the finite refusal mappings were deleted with it, and the source SHA
+survives only as the expected-SHA anchor for the read-only sudo-admission
+inspection.
 
 ## Bounded privileged installation (#1341)
 
@@ -106,7 +117,8 @@ non-symlink, and not group- or other-writable.
 
 The sudoers rule must authorize one literal source SHA only. Replace
 `<AUTHORIZED_SOURCE_SHA>` with the exact 40-lowercase-hex canonical source SHA
-that the workflow will pass as `HOST_RUNTIME_SOURCE_SHA`. Do not use a branch,
+that the workflow retains as `HOST_RUNTIME_SOURCE_SHA` (the sudo-admission
+inspection anchor). Do not use a branch,
 prefix, glob, regex, an older `main` commit, or a second allowed SHA.
 
 <!-- sudoers-begin -->
@@ -298,13 +310,23 @@ a second fixed root-owned runtime published at:
 ```
 
 After exact branch/SHA checkout the host runner requires that fixed wrapper and
-that fixed overlay, proves the overlay resolves Vitest `5.0.0` on a Node `22.x`
+that fixed overlay, proves the overlay resolves Vitest `5.0.4` on a Node `22.x`
 interpreter, links the root-owned overlay into the ephemeral checkout so Node can
 resolve the package's declared dependencies, and runs only the fixed argv above
 from the fixed package directory. Cleanup removes the ephemeral link, never the
 overlay. The runner has no package-install, index-selection, `sudo`, or shell
 surface, and the transport carries only the validated
 repository/issue/branch/SHA/identity binding.
+
+The Vitest `5.0.4` version above is the **repository-required host runtime
+identity**, not proof that an overlay has been published on the GCE host. This
+repository change does not install, replace, or authorize publication of the
+root-owned Node runtime. A missing overlay fails closed as
+`test-runtime-unavailable`; an installed overlay with a different Vitest/Node
+version fails closed as `test-runtime-invalid`. Before this fixed identity is
+used on GCE, a separately authorized administrator must verify the published
+root-owned overlay actually resolves Vitest `5.0.4` under Node `22.x` at the
+fixed paths. The local/hosted frontend test lane is not that host proof.
 
 Fail-closed reason codes are:
 

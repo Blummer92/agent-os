@@ -65,6 +65,36 @@ Area=Governance, Learning Type=Mistake, Applies To=Notion, Source Link=#3305).
 Executing the latter still requires the owner's per-action command and does not
 set Status or Surface Before Work?.
 
+## #3690 continuation consumer lesson candidate (2026-10-30)
+
+The reviewed catalog request `continuation-live-consumer-2026-10-30` records
+previously merged continuation repairs (#2175, #2213, #2263, #2494, #3670)
+and owner-reported October 30 Cloud Shell test outcomes on main bb43fc08:
+109 focused, 12 reconstructed and 30 MCP integration tests passed. The nested
+52-test regression execution overlaps the other checks; independent QA did not
+reproduce these different-head test runs. These are not exact-PR-head test results.
+Native ChatGPT structured-payload consumption, next-dispatch and asynchronous
+re-entry remain unverified; current `chatgpt-governance` publication excludes
+the continuation tools. Existing #3559 owns any separately authorized host
+attachment/allowlist expansion; this lesson does not authorize one.
+
+This is one **create proposal**, not a new Notion lesson until a current owner
+command completes with exact Notion readback. The existing writer checks the
+exact title for duplicates; semantically similar or retitled lessons require
+human reconciliation rather than automatic creation. Do not run the command
+until this catalog revision is merged and the owner explicitly invokes it:
+
+```text
+/agent-os notion-write continuation-live-consumer-2026-10-30
+```
+
+The entry supplies only four narrative fields, Area, Learning Type and the
+canonical #3690 Source Link. It deliberately omits `Status`,
+`Surface Before Work?` and unverified live multi-select options. Catalog
+registration, the command and persistence do not activate CKR6 eligibility.
+The current lesson identity/revision must be obtained from live readback
+before any follow-up, with independent QA and no duplicate writes.
+
 ## Execution and failure behavior
 
 The workflow accepts only created owner comments on ordinary issues, serializes the
@@ -96,6 +126,26 @@ GitHub Source Link for sufficient evidence. Task signals must match the lesson.
 Reviewed entries may now supply Area, Learning Type, Applies To and Source Link
 (D1); Status and `Surface Before Work?` remain separately governed, per-action
 owner decisions outside this writer.
+
+For `persisted` and `unchanged` results the writer also returns
+`activation_prerequisites`, derived from the same canonical readback:
+`required_fields_present`, `missing_owner_activation` (Status,
+`Surface Before Work?`) and `missing_reviewed_metadata` (Area, Learning Type, Source
+Link). It reports presence only, writes nothing and grants no authority. It is a
+necessary condition, not eligibility, and it checks non-blank presence of those five
+fields only. A present but unrecognized Area, Learning Type or Status, Status "Archived
+note", a Source Link the reader will not accept (anything but `https://github.com/` or a
+repo-relative governance path, or over 512 characters), or a missing narrative field
+the reader also needs still reads as present while CKR6 rejects the page, because the
+reader alone judges values. `test_lessons_write_to_ckr6_readiness.py` pins that, with
+recognized values and a canonical Source Link, the field matches CKR6 `sufficient`
+exactly, and that blank values read as missing on both sides. The workflow's step
+summary prints `required_fields_present` and the two `missing_*` lists, limited to
+those five field names (at most five per list); nothing else from the result is added
+by that step. It is `null`
+for any result without a verified readback. A `persisted` result with
+`required_fields_present: false` is not usable by CKR6 yet; `true` still needs the
+reader's confirmation.
 
 Offline tests exercise missing metadata rejection and selection with synthetic
 owner-supplied metadata; they do not prove live activation. Any live metadata repair

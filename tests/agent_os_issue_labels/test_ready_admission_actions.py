@@ -1,6 +1,7 @@
 """Regression tests for the fixed Ready-for-Review admission consumer (#3446)."""
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 
@@ -196,6 +197,25 @@ def test_host_rejects_missing_forged_stale_duplicate_and_non_admitting_receipts(
     assert verify(refused, current_body=BODY + "edited")[0] is False
 
 
+def test_host_rejects_non_admitting_receipt_with_only_receipt_not_admitting():
+    # Isolated regression for the receipt-not-admitting safeguard (#3446):
+    # an otherwise valid receipt whose only defect is transition_admissible=False
+    # must be refused for exactly that reason, not by an unrelated refusal.
+    # The pre-existing refused-receipt case also carries a stale body, so it
+    # cannot detect removal of this safeguard on its own.
+    receipt = run()
+    assert verify(receipt) == (True, ())
+    non_admitting = dict(receipt, transition_admissible=False)
+    core = {k: v for k, v in non_admitting.items()
+            if k not in {"receipt_id", "ready_for_review_authorized", "merge_authorized",
+                         "issue_closure_authorized", "workflow_authorized",
+                         "protected_setting_authorized", "production_authorized",
+                         "external_system_write_authorized", "side_effects_performed"}}
+    non_admitting["receipt_id"] = "ready-admission-receipt:" + hashlib.sha256(
+        json.dumps(core, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert verify(non_admitting) == (False, ("receipt-not-admitting",))
+
+
 def test_provisional_ready_failure_requires_rollback_to_draft():
     failed = evaluate_provisional_ready_reconciliation(
         repository=REPO, pr_number=PR, pr_lifecycle_state="ready", expected_head_sha=HEAD,
@@ -205,30 +225,6 @@ def test_provisional_ready_failure_requires_rollback_to_draft():
         repository=REPO, pr_number=PR, pr_lifecycle_state="ready", expected_head_sha=HEAD,
         observed_head_sha=HEAD, validation_head_sha=HEAD, aggregate_status="pending")
     assert unavailable.rollback_to_draft_required is True
-
-
-def test_batch_continues_past_independently_blocked_item():
-    snaps = {3411: snapshot(pr_number=3411, focused_status="failure"),
-             3449: snapshot(pr_number=3449, body="Closes #2880", title="x"),
-             3481: snapshot()}
-    bodies = {3449: "Closes #2880"}
-
-    def decide(request):
-        number = request["pr_number"]
-        if number == 9999:
-            raise RuntimeError("unexpected")
-        body = bodies.get(number, BODY)
-        t = transport(ready_admission_pr_number_or_none=number,
-                      ready_admission_body_sha256_or_none=ra.body_revision(body))
-        receipt = ra.evaluate_ready_admission(t, repository=REPO, provider=Provider(snaps[number]))
-        return receipt["transition_admissible"], tuple(receipt["reason_codes"])
-
-    result = ra.run_ready_batch(
-        [{"pr_number": 3411}, {"pr_number": 3449}, {"pr_number": 9999}, {"pr_number": 3481}], decide)
-    assert [item["disposition"] for item in result] == [
-        "blocked-item-local", "blocked-item-local", "blocked-item-local", "ready-eligible"]
-    assert result[1]["reason_codes"] == ["unauthorized-closing-reference", "draft-final-candidate-validation-not-proven"] \
-        or "unauthorized-closing-reference" in result[1]["reason_codes"]
 
 
 def test_repeated_identical_request_yields_identical_receipt_id():

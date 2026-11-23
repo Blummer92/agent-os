@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from .coding_knowledge_selection import (
+    MAX_GUIDANCE_TEXT_CHARS,
     CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     CodingKnowledgeSelectionResult,
@@ -19,6 +20,7 @@ from .coding_knowledge_selection import (
     RetrievalEscalation,
     SufficiencyStatus,
     select_coding_knowledge,
+    _select_coding_knowledge,
 )
 
 MAX_LESSON_RECORDS = 5
@@ -98,6 +100,11 @@ class LessonRecordEvidence:
     canonical_github_refs: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     keywords: tuple[str, ...] = ()
+    # #3973: supporting refs that were parsed from `Supporting Source Links`
+    # but NOT admitted into canonical_github_refs (malformed, foreign,
+    # duplicate, oversized, over the five-ref cap, or unusable without a
+    # primary Source Link). Bounded, reported, never voids the lesson.
+    dropped_supporting_refs: tuple[str, ...] = ()
     library_name: str | None = None
     archived: bool = False
     authority_conflict: bool = False
@@ -105,12 +112,14 @@ class LessonRecordEvidence:
     def __post_init__(self) -> None:
         for name in (
             "lesson_id", "source_revision", "title", "ecosystem", "capability_kind",
-            "status", "what_to_do_next_time", "guardrail",
+            "status",
         ):
             _text(getattr(self, name), name)
+        for name in ("what_to_do_next_time", "guardrail"):
+            _text(getattr(self, name), name, max_chars=MAX_GUIDANCE_TEXT_CHARS)
         if self.library_name is not None:
             _text(self.library_name, "library_name")
-        for name in ("canonical_github_refs", "evidence_refs", "keywords"):
+        for name in ("canonical_github_refs", "evidence_refs", "keywords", "dropped_supporting_refs"):
             _items(getattr(self, name), name)
         if type(self.surface_before_work) is not bool:
             raise TypeError("surface_before_work must be bool")
@@ -144,6 +153,8 @@ class LessonPreflightResult:
     handoff_projection: dict[str, list[str]]
     rejected_candidate_provenance: tuple[dict[str, str], ...] = ()
     selection: CodingKnowledgeSelectionResult | None = None
+    # Read-only, bounded per-request counters. Never retain provider rows or secrets.
+    retrieval_diagnostics: dict[str, int] = field(default_factory=dict)
     notion_write_performed: bool = field(default=False, init=False)
     github_write_performed: bool = field(default=False, init=False)
     authority_created: bool = field(default=False, init=False)
@@ -228,6 +239,7 @@ def consume_lesson_preflight(
     *,
     retrieval_available: bool = True,
     repair_context: RepairContext = RepairContext.NONE,
+    _ranked_order: tuple[str, ...] | None = None,
 ) -> LessonPreflightResult:
     """Normalize eligible lesson evidence and delegate selection to CKR2."""
     if type(request) is not CodingKnowledgeRequest:
@@ -236,6 +248,21 @@ def consume_lesson_preflight(
         raise TypeError("lessons must be a tuple of LessonRecordEvidence values")
     if type(retrieval_available) is not bool:
         raise TypeError("retrieval_available must be bool")
+
+    # A ranking plan may only describe the <=5 bounded lessons already read.
+    # This check prevents missing, repeated or extra identity priority entries.
+    if _ranked_order is not None and (
+        type(_ranked_order) is not tuple
+        or any(type(identity) is not str for identity in _ranked_order)
+        or len(_ranked_order) != len({lesson.lesson_id for lesson in lessons})
+        or set(_ranked_order) != {lesson.lesson_id for lesson in lessons}
+    ):
+        return _fallback(
+            LessonRetrievalStatus.MANUAL_REVIEW,
+            "upstream-ranking-order-mismatch",
+            RetrievalEscalation.MANUAL_REVIEW,
+            candidate_count=len(lessons),
+        )
 
     plan = plan_lesson_preflight(request, repair_context=repair_context)
     effective_request = _forced_material_request(request, repair_context)
@@ -256,7 +283,11 @@ def consume_lesson_preflight(
             RetrievalEscalation.NONE,
         )
 
-    if len(lessons) > MAX_LESSON_RECORDS:
+    # R1 (#2425): the budget counts DISTINCT lesson identities, matching the
+    # bound and the selector. Identical or conflicting records of one identity
+    # must reach the selector — which collapses identicals and fails closed
+    # on conflicts — instead of being swallowed here as a budget failure.
+    if len({lesson.lesson_id for lesson in lessons}) > MAX_LESSON_RECORDS:
         return _fallback(
             LessonRetrievalStatus.MANUAL_REVIEW,
             "lesson-candidate-budget-exceeded",
@@ -265,16 +296,39 @@ def consume_lesson_preflight(
         )
 
     eligible: list[LessonRecordEvidence] = []
+    ineligible_ids: set[str] = set()
     stale_or_conflicting = 0
     for lesson in lessons:
         if lesson.archived or lesson.status not in _ALLOWED_STATUSES or not lesson.surface_before_work:
+            ineligible_ids.add(lesson.lesson_id)
             continue
         if lesson.currentness is not KnowledgeCurrentness.CURRENT or lesson.authority_conflict:
             stale_or_conflicting += 1
         eligible.append(lesson)
 
     candidates = tuple(_candidate(item) for item in eligible)
-    selection = select_coding_knowledge(effective_request, candidates)
+    if _ranked_order is None:
+        selection = select_coding_knowledge(effective_request, candidates)
+    else:
+        # Eligibility may exclude some bounded lessons. Do not recompute
+        # context scores when filtering their IDs from the original plan.
+        eligible_ids = {item.lesson_id for item in eligible}
+        if eligible_ids & ineligible_ids:
+            # The order was chosen from the full pool. An eligible record
+            # cannot inherit the rank of a conflicting ineligible record of
+            # the same identity. Preserve the conflict before filtering.
+            return _fallback(
+                LessonRetrievalStatus.MANUAL_REVIEW,
+                "duplicate-identity-conflict",
+                RetrievalEscalation.MANUAL_REVIEW,
+                candidate_count=len(lessons),
+            )
+        eligible_order = tuple(
+            identity for identity in _ranked_order if identity in eligible_ids
+        )
+        selection = _select_coding_knowledge(
+            effective_request, candidates, _ranked_order=eligible_order
+        )
     return _from_selection(selection, tuple(eligible), stale_or_conflicting)
 
 
@@ -415,12 +469,12 @@ def _fallback(
     )
 
 
-def _text(value: object, name: str) -> None:
+def _text(value: object, name: str, *, max_chars: int = 512) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be a string")
     if not value.strip():
         raise ValueError(f"{name} must be non-empty")
-    if len(value) > 512:
+    if len(value) > max_chars:
         raise ValueError(f"{name} is oversized")
 
 

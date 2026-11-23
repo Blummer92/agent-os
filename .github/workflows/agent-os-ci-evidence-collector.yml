@@ -1,0 +1,58 @@
+# Read-only CI evidence collector for Agent OS.
+#
+# Triggered only by a completed "Agent OS Validation Gate" run, and only from
+# the trusted default-branch version of this workflow (GitHub does not trigger
+# workflow_run from a Draft PR branch). Until this file is merged to main, this
+# workflow is NOT_LIVE and no live trigger may be claimed.
+#
+# This workflow has no merge, Ready, status, issue, or PR authority, and no
+# Sheets access. It only reads provider metadata/artifacts and publishes a
+# receipt artifact on its own run. Downloaded artifacts are treated as hostile
+# data: the collector script validates ZIP members and only parses advisory
+# JSON and JUnit XML; it never checks out PR code and never imports or
+# executes artifact content.
+name: Agent OS CI Evidence Collector
+
+on:
+  workflow_run:
+    workflows: ["Agent OS Validation Gate"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  collect:
+    name: Collect evidence receipt
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out trusted collector code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Collect source-run evidence receipt
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COLLECTOR_LIVE_TRIGGER: "true"
+        run: |
+          set -euo pipefail
+          SOURCE_ATTEMPT="${{ github.event.workflow_run.run_attempt }}"
+          SOURCE_ATTEMPT="${SOURCE_ATTEMPT:-1}"
+          python -m scripts.agent_os_ci_evidence_collector \
+            --source-run-id "${{ github.event.workflow_run.id }}" \
+            --source-head "${{ github.event.workflow_run.head_sha }}" \
+            --source-attempt "$SOURCE_ATTEMPT" \
+            --output tmp/collector-receipt.json
+          python -m json.tool tmp/collector-receipt.json > /dev/null
+      - name: Upload evidence receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-evidence-receipt-${{ github.event.workflow_run.id }}
+          path: tmp/collector-receipt.json
+          if-no-files-found: error
+          retention-days: 7

@@ -17,12 +17,20 @@ Expected mutations reuse the existing lifecycle-mutation vocabulary owned by
 ``lifecycle_mutation_guard`` (admission stays with that contract); no second
 issue state machine, lifecycle, queue, or scheduler is introduced. The plan
 never grants merge or Ready-for-Review authority.
+
+A closed issue is reconciled only when the canonical closure-readback rule
+(``closure_admission_actions.classify_closure_readback``, #3690 ADV-5) proves
+it: closed with ``state_reason`` ``"completed"`` and no stale Ready label. A
+missing or non-completed reason, a surviving Ready label, or a repository
+identity that does not match the plan never reports full reconciliation.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
+
+from .closure_admission_actions import CLOSURE_STATE_REASONS, classify_closure_readback
 
 READY_LABEL = "status:ready"
 PR_STATES = frozenset({"draft", "ready"})
@@ -50,8 +58,15 @@ class LanePostPrIssueEvidence:
     pr_readback_current: bool
     closure_authorized: bool
     evidence_current: bool
+    # #3690 ADV-5: optional canonical identity and closure reason. When the
+    # host supplies ``repository`` the plan carries it and the readback must
+    # name the same repository. ``state_reason`` is the canonical closure
+    # reason of an already-closed issue (``None`` while open).
+    repository: str | None = None
+    state_reason: str | None = None
 
     def __post_init__(self) -> None:
+        _validate_identity_and_reason(self.repository, self.state_reason)
         for name in ("issue_number", "linked_pull_request_number"):
             value = getattr(self, name)
             if type(value) is not int or value < 1:
@@ -86,11 +101,13 @@ class LanePostPrIssueReconciliation:
     reason_codes: tuple[str, ...]
     readback_required: bool
     fully_reconciled: bool
+    repository: str | None = None
     merge_authorized: Literal[False] = field(default=False, init=False)
     ready_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        _validate_identity_and_reason(self.repository, None)
         if type(self.disposition) is not LanePostPrIssueDisposition:
             raise TypeError("disposition must be LanePostPrIssueDisposition")
         if type(self.expected_mutations) is not tuple or any(
@@ -136,6 +153,17 @@ class LanePostPrIssueTerminalProof:
             raise TypeError("reason_codes must be an exact tuple of non-empty strings")
 
 
+def _validate_identity_and_reason(repository: object, state_reason: object) -> None:
+    if repository is not None and (
+        type(repository) is not str or repository.count("/") != 1 or not all(
+            part for part in repository.split("/")
+        )
+    ):
+        raise ValueError("repository must be None or owner/name")
+    if state_reason is not None and state_reason not in CLOSURE_STATE_REASONS:
+        raise ValueError("state_reason is unsupported")
+
+
 def _plan(
     evidence: LanePostPrIssueEvidence,
     disposition: LanePostPrIssueDisposition,
@@ -154,6 +182,7 @@ def _plan(
         reason_codes=reason_codes,
         readback_required=readback_required,
         fully_reconciled=fully_reconciled,
+        repository=evidence.repository,
     )
 
 
@@ -194,6 +223,25 @@ def project_lane_post_pr_issue_reconciliation(
             False,
         )
     if not evidence.issue_open:
+        # ADV-5: "already closed" is reconciled only when the canonical
+        # closure-readback rule verifies it (completed reason, no stale
+        # Ready label). Anything else is surfaced, never reported as done.
+        status, readback_reasons, verified = classify_closure_readback(
+            issue_closed=True,
+            state_reason=evidence.state_reason,
+            lifecycle_labels=evidence.lifecycle_labels,
+            wrote=False,
+        )
+        if not (verified and status == "closed-verified"):
+            return _plan(
+                evidence,
+                LanePostPrIssueDisposition.NEEDS_DECISION,
+                (),
+                None,
+                ("lane-post-pr.issue-already-closed", *readback_reasons),
+                False,
+                False,
+            )
         return _plan(
             evidence,
             LanePostPrIssueDisposition.ALREADY_RECONCILED,
@@ -202,6 +250,17 @@ def project_lane_post_pr_issue_reconciliation(
             ("lane-post-pr.issue-already-closed",),
             False,
             True,
+        )
+    if evidence.state_reason is not None:
+        # An open issue carrying a terminal reason is inconsistent evidence.
+        return _plan(
+            evidence,
+            LanePostPrIssueDisposition.NEEDS_DECISION,
+            (),
+            None,
+            ("closure.readback-inconsistent",),
+            False,
+            False,
         )
     stale_ready = READY_LABEL in evidence.lifecycle_labels
     mutations: list[str] = []
@@ -240,11 +299,20 @@ def evaluate_lane_post_pr_issue_readback(
     issue_open: bool,
     lifecycle_labels: tuple[str, ...],
     evidence_current: bool,
+    state_reason: str | None = None,
+    repository: str | None = None,
 ) -> LanePostPrIssueTerminalProof:
     """Prove the terminal disposition from the canonical post-mutation readback.
 
     The lane may report the Draft PR as fully reconciled (and advance the
     finite batch cursor) only when this proof returns ``fully_reconciled``.
+
+    #3690 ADV-5: a closed readback is classified by the canonical
+    closure-readback rule (``classify_closure_readback``), so it proves
+    reconciliation only when closed with ``state_reason`` ``"completed"``
+    and without a stale Ready label. ``repository`` binds the readback to
+    the plan's repository: when either side names a repository, both must
+    name the same one.
     """
     if type(plan) is not LanePostPrIssueReconciliation:
         raise TypeError("plan must be an exact LanePostPrIssueReconciliation")
@@ -256,6 +324,7 @@ def evaluate_lane_post_pr_issue_readback(
         type(label) is not str or not label for label in lifecycle_labels
     ):
         raise TypeError("lifecycle_labels must be an exact tuple of non-empty strings")
+    _validate_identity_and_reason(repository, state_reason)
 
     def proof(fully_reconciled: bool, reason_codes: tuple[str, ...]) -> LanePostPrIssueTerminalProof:
         return LanePostPrIssueTerminalProof(
@@ -265,21 +334,38 @@ def evaluate_lane_post_pr_issue_readback(
             reason_codes=reason_codes,
         )
 
+    def closed_proof() -> LanePostPrIssueTerminalProof:
+        status, reasons, verified = classify_closure_readback(
+            issue_closed=True,
+            state_reason=state_reason,
+            lifecycle_labels=lifecycle_labels,
+            wrote=False,
+        )
+        if verified and status == "closed-verified":
+            return proof(True, ("lane-post-pr.issue-closed",))
+        return proof(False, reasons)
+
     if not evidence_current:
         return proof(False, ("lane-post-pr.readback-not-current",))
+    if (plan.repository is not None or repository is not None) and (
+        plan.repository != repository
+    ):
+        return proof(False, ("lane-post-pr.readback-repository-mismatch",))
+    if issue_open and state_reason is not None:
+        return proof(False, ("closure.readback-inconsistent",))
     if plan.disposition is LanePostPrIssueDisposition.ALREADY_RECONCILED:
         if issue_open:
             return proof(False, ("lane-post-pr.issue-reopened",))
-        return proof(True, ("lane-post-pr.issue-closed",))
+        return closed_proof()
     if plan.disposition is LanePostPrIssueDisposition.NEEDS_DECISION:
         return proof(False, ("lane-post-pr.plan-was-needs-decision",))
     if plan.disposition is LanePostPrIssueDisposition.RECONCILE_READY_AND_CLOSE:
         if issue_open:
             return proof(False, ("lane-post-pr.issue-still-open",))
-        return proof(True, ("lane-post-pr.issue-closed",))
+        return closed_proof()
     ready_gone = READY_LABEL not in lifecycle_labels
     if not issue_open:
-        return proof(True, ("lane-post-pr.issue-closed",))
+        return closed_proof()
     if not ready_gone:
         return proof(False, ("lane-post-pr.ready-still-present",))
     return proof(False, ("lane-post-pr.closure-authority-still-missing",))

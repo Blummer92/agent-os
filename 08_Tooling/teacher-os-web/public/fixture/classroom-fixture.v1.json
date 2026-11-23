@@ -1,0 +1,52 @@
+{
+  "schema": "teacher-os-classroom-fixture/v1",
+  "fixture": {
+    "id": "tos-fixture-photography-l4",
+    "version": 1,
+    "synthetic": true,
+    "privacy": "synthetic-no-student-data",
+    "description": "Immutable, privacy-safe illustrative classroom. Not a Notion or Drive projection."
+  },
+  "course": { "title": "Digital Media 1", "grade": 9 },
+  "unit": { "title": "Photography Foundations" },
+  "lesson": {
+    "lesson_ref": "fx-lesson-4",
+    "revision": 3,
+    "day_label": "Day 4 · tomorrow",
+    "learning_target": "I can place a focal point on a thirds line and explain how it changes balance.",
+    "daily_focus": "Compare a centered and an off-center composition of the same scene.",
+    "key_vocabulary": ["focal point", "rule of thirds", "visual balance"],
+    "readiness": "teacher-reviewed"
+  },
+  "planning": {
+    "source": { "display_name": "Fixture planning projection", "verification_state": "fixture-verified", "access": "read-only" },
+    "age_minutes": 4
+  },
+  "visual_selection": {
+    "source": { "display_name": "Fixture visual-selection evidence", "verification_state": "fixture-verified", "access": "read-only" },
+    "age_minutes": 6,
+    "items": [
+      { "id": "vis-1", "title": "Harbor, subject centered", "alt_text": "Illustration: a lighthouse in the middle of the frame.", "diagram": "centered", "selection_state": "approved", "reviewed_by_role": "teacher", "rationale": "Clear baseline for comparison." },
+      { "id": "vis-2", "title": "Harbor, subject on a thirds line", "alt_text": "Illustration: the same lighthouse on the right thirds line with open sky to the left.", "diagram": "thirds", "selection_state": "approved", "reviewed_by_role": "teacher", "rationale": "Same scene, so only placement differs." },
+      { "id": "vis-3", "title": "Harbor, tilted horizon", "alt_text": "Illustration: the same scene with a tilted horizon.", "diagram": "tilted", "selection_state": "pending-review", "reviewed_by_role": "none", "rationale": "Possible extension; not yet reviewed." }
+    ]
+  },
+  "guided_practice": {
+    "source": { "display_name": "Fixture guided-practice context", "verification_state": "fixture-verified", "access": "read-only" },
+    "age_minutes": 4,
+    "steps": [
+      { "id": "gp-1", "minutes": 5, "prompt": "Look at both harbor illustrations. Name the focal point in each.", "check_for_understanding": "Every student points to the lighthouse in both." },
+      { "id": "gp-2", "minutes": 8, "prompt": "With a partner, say which picture feels more balanced and why. Use: In picture __, I notice __.", "check_for_understanding": "Listen for the words focal point and balance." },
+      { "id": "gp-3", "minutes": 7, "prompt": "Sketch a thumbnail that moves the focal point to a thirds line.", "check_for_understanding": "Thumbnail shows the subject on a grid line, not the center." }
+    ]
+  },
+  "artifacts": {
+    "status": "ok",
+    "source": { "display_name": "Fixture classroom-artifact projection", "verification_state": "fixture-verified", "access": "read-only" },
+    "age_minutes": 9,
+    "items": [
+      { "id": "art-1", "kind": "worksheet", "title": "Composition Comparison Worksheet", "notion_state": "listed-ready", "drive_state": "present", "access_state": "teacher-can-open", "location_label": "Drive > Digital Media 1 > Photography Foundations" },
+      { "id": "art-2", "kind": "slides", "title": "Rule of Thirds Slides", "notion_state": "listed-ready", "drive_state": "present", "access_state": "teacher-can-open", "location_label": "Drive > Digital Media 1 > Photography Foundations" }
+    ]
+  }
+}

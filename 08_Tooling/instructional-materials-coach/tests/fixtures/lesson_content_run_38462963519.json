@@ -1,0 +1,131 @@
+{
+  "admission": {
+    "allowed_read_actions": [
+      "get_data_source",
+      "get_page",
+      "query_data_source"
+    ],
+    "canonical_unit_key": "candy-branding",
+    "expected_title": null,
+    "fixed_page_id": null,
+    "gce_required": false,
+    "issue_number": 3580,
+    "notion_write_reachable": false,
+    "production_authorized": false,
+    "reason_codes": [
+      "admitted"
+    ],
+    "repository": "Blummer92/agent-os",
+    "request_class": "lesson-content",
+    "request_id": "candy-branding-lesson-content",
+    "required_logical_sources": [
+      "daily-generation-packet"
+    ],
+    "schema_version": "1.0",
+    "secret_dispatch_authorized": true,
+    "status": "admitted",
+    "write_allowed": false
+  },
+  "classroom_artifact_writes_performed": false,
+  "dispatch_reason": "bounded-lesson-content-projected",
+  "dispatch_status": "completed",
+  "drive_writes_performed": false,
+  "gce_invoked": false,
+  "generated_at": "38462963519:1",
+  "notion_writes_performed": false,
+  "result": {
+    "authority": {
+      "classroom_artifact_write_authorized": false,
+      "drive_write_authorized": false,
+      "execution_authorized": false,
+      "external_write_authorized": false,
+      "notion_write_authorized": false,
+      "production_authorized": false,
+      "publication_authorized": false,
+      "write_allowed": false
+    },
+    "generated_at": "38462963519:1",
+    "issue_number": 3580,
+    "lessons": [
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Choose font pairing and hierarchy so candy name, flavor, and tagline have clear importance.",
+        "daily_learning_target": "I can use font pairing and hierarchy so my candy text is clear and intentional.",
+        "day_lesson_number": "Day 3",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-3-Font-Pairing-Hierarchy-3717ac783131812fb745c606b38e460c",
+        "source_evidence": "Candy Brand Design source says Day 3 prevents random font use by teaching pairing and hierarchy; success criteria name candy name/flavor/tagline hierarchy."
+      },
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Plan intentional candy color choices before software use.",
+        "daily_learning_target": "I can choose colors on purpose and explain how they match the candy mood and audience.",
+        "day_lesson_number": "Day 1",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-1-Color-Planning-3717ac7831318135ae7cf2ead0cf28ac",
+        "source_evidence": "Candy Brand Design source says Day 1 establishes intentional color planning before software use and portfolio checklist includes candy concept plus labeled palettes."
+      },
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Present the final candy wrapper and explain design choices professionally.",
+        "daily_learning_target": "I can present my candy brand choices and explain how color, typography, hierarchy, and revision support mood and audience.",
+        "day_lesson_number": "Day 6",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-6-Presentation-Portfolio-Reflection-3717ac783131816dae8bcba140aa5d08",
+        "source_evidence": "Candy Brand Design source says Day 6 provides presentation and portfolio reflection; portfolio checklist includes final presentation explanation and reflection paragraph."
+      },
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Integrate color palette and font pair into a complete candy wrapper draft.",
+        "daily_learning_target": "I can combine color and typography choices to match my candy mood and audience.",
+        "day_lesson_number": "Day 4",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-4-Wrapper-Draft-Integration-3717ac7831318187a31ac1d71863dc0b",
+        "source_evidence": "Candy Brand Design source says Day 4 integrates visual systems into a complete draft and success criteria require palette/font pair integration."
+      },
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Analyze typography before students choose fonts for their own candy brand.",
+        "daily_learning_target": "I can analyze how font choices communicate mood and audience fit.",
+        "day_lesson_number": "Day 2",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-2-Typography-Analysis-3717ac78313181bfa296c3a6fb32a22d",
+        "source_evidence": "Candy Brand Design source says Day 2 builds typography analysis before students choose fonts and portfolio checklist includes Font Fit Game response."
+      },
+      {
+        "canonical_unit": {
+          "page_id": "3907ac78-3131-8132-8f84-f9fd633acba5"
+        },
+        "daily_focus": "Use critique to revise color, font choice, hierarchy, readability, or contrast.",
+        "daily_learning_target": "I can revise my candy wrapper using feedback and explain how the revision improves clarity or audience fit.",
+        "day_lesson_number": "Day 5",
+        "key_vocabulary": null,
+        "record_url": "https://app.notion.com/p/Candy-Branding-Design-Day-5-Critique-Revision-3717ac78313181ecb0dcd8034bbe4876",
+        "source_evidence": "Candy Brand Design source says Day 5 provides critique/revision evidence and includes student critique and designer revision checklists."
+      }
+    ],
+    "repository": "Blummer92/agent-os",
+    "request_class": "lesson-content",
+    "request_id": "candy-branding-lesson-content",
+    "result_kind": "agent-os-notion-lesson-content-result",
+    "schema_version": "1.0",
+    "source": {
+      "access": "read-only",
+      "display_name": "Daily Generation Packet Dashboard",
+      "logical_source": "daily-generation-packet",
+      "verification_state": "verified-current"
+    }
+  },
+  "schema_version": "1.0"
+}
+

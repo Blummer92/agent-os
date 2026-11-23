@@ -34,6 +34,13 @@ python -m pip install -e "./08_Tooling/agent-os-execution-service"
 end_epoch=$(date +%s)
 echo "Dependency install duration: $((end_epoch - start_epoch))s"
 
+# Approved Codespaces checkpoint-store root (#3333). Idempotent; the existing
+# #1218 stores create their other subdirectories on demand. Matches
+# devcontainer.json containerEnv and the discovery program's explicit binding.
+CHECKPOINT_STORE_ROOT="/workspaces/agent-os-state/checkpoints"
+mkdir -p -m 0700 "$CHECKPOINT_STORE_ROOT/invocations"
+chmod 0700 "$CHECKPOINT_STORE_ROOT" "$CHECKPOINT_STORE_ROOT/invocations"
+
 echo "Running bounded environment health check..."
 health_status=0
 python3 scripts/agent-os-environment-health.py || health_status=$?

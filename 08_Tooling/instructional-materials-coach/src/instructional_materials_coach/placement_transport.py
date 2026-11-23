@@ -27,6 +27,7 @@ deployment id and credentials.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from .visual_placement import PlacementRequest
@@ -43,6 +44,13 @@ class PlacementTransportError(RuntimeError):
     reason names the placement failure so the caller can fail the build
     closed with that exact state.
     """
+
+
+class PlacementNoMutation(PlacementTransportError):
+    """Attested pre-mutation failure: no external write was started."""
+
+    # Timeout, HTTP errors, and ambiguous script failures must NEVER
+    # be classified as PlacementNoMutation.
 
 
 @runtime_checkable
@@ -65,6 +73,17 @@ class PlacementTransport(Protocol):
 
 
 def _request_payload(request: PlacementRequest) -> dict[str, Any]:
+    # #3257: a placement request without artifact revision identity must
+    # never reach the runtime. The reference transport enforces the
+    # revision it was asked to place against; without it, the runtime
+    # cannot prove what it acted on.
+    revision = request.target.artifact_revision_id
+    if not isinstance(revision, str) or not revision.strip():
+        raise PlacementTransportError(
+            "placement-transport-failed: placement request carries no artifact "
+            "revision identity; refusing to send a revision-less placement "
+            "request to the runtime"
+        )
     target = request.target
     return {
         "asset_id": request.asset_id,
@@ -94,6 +113,12 @@ class AppsScriptPlacementTransport:
     (``DriveApp.getFileById(drive_file_id).getBlob()``) and the insertion;
     this client only ferries the governed request and returns the remote
     result for repository-side verification.
+
+    The hardened reference contract (#3257) requires the remote result to
+    carry the ACTUAL persisted inline object id (never the pre-repair
+    synthetic ``docs-child-<index>``) and the read-back post-placement
+    revision; results that do not are rejected here as
+    ``PlacementTransportError``.
 
     Requires the separately governed activation: the reference script must
     be deployed as an API executable and execution granted to the build
@@ -164,6 +189,31 @@ class AppsScriptPlacementTransport:
         if state != "placed" or not isinstance(inserted, str) or not inserted.strip():
             raise PlacementTransportError(
                 f"placement-transport-failed: remote result is not a completed placement: {dict(result)}"
+            )
+        inserted_id = inserted.strip()
+        # #3257: the pre-repair reference transport returned synthetic
+        # ``docs-child-<index>`` element ids instead of the persisted Docs
+        # inline object id. That pattern is never a real persisted id; a
+        # runtime still emitting it is the unhardened reference, and its
+        # claim is rejected here rather than trusted.
+        if re.fullmatch(r"docs-child-\d+", inserted_id):
+            raise PlacementTransportError(
+                "placement-transport-failed: the placement runtime returned the synthetic "
+                f"element id {inserted_id!r} from the pre-repair reference transport; it is "
+                "not a persisted Docs inline object id. The VisualPlacementTransport "
+                "reference must return the actual read-back inline object id "
+                "(reference change only; no deployment is performed here)."
+            )
+        # #3257: the hardened reference returns the read-back post-placement
+        # revision as verifiable revision evidence. Its absence means the
+        # runtime cannot prove what artifact state it produced.
+        post_revision = result.get("post_placement_revision_id")
+        if not isinstance(post_revision, str) or not post_revision.strip():
+            raise PlacementTransportError(
+                "placement-transport-failed: the placement runtime returned no "
+                "post-placement revision evidence; the reference transport must "
+                "return the read-back revision (reference change only; no "
+                "deployment is performed here)."
             )
         return result
 

@@ -15,6 +15,12 @@ from .issue_operational_state import (
 from .lifecycle_mutation_guard import (
     AdmissionStatus, LifecycleMutationAdmissionResult, LifecycleStateSnapshot,
 )
+from .satisfaction_snapshot import (
+    SatisfactionCriterionSnapshot,
+    SatisfactionSnapshot,
+    satisfaction_block,
+    validate_satisfaction_snapshot,
+)
 
 SCHEMA_NAME = "agent-os-lifecycle-reconciliation"
 SCHEMA_VERSION = "1.0"
@@ -66,6 +72,34 @@ REASON_CODES = frozenset({
     "lifecycle.merged-pr-open-issue", "lifecycle.terminal-open-issue", "lifecycle.closed-without-terminal-evidence",
     "authorization.lifecycle-admission-required", "authorization.closure-required",
 })
+
+# ---------------------------------------------------------------------------
+# Satisfaction evidence snapshots (#3680, Option B + follow-up N1/N2).
+#
+# The satisfaction record is produced by the reporting domain
+# (``criterion_satisfaction``), which this approval-domain module must not
+# import (architecture dependency-direction contract). The producer hands
+# over a plain mapping; the single strict validator for it is the shared
+# approval-domain core ``satisfaction_snapshot`` (#3690 CR-1), which this
+# module applies at the input boundary and stores as an immutable defensive
+# copy, so later mutation of the caller's mapping cannot change
+# reconciliation behavior. A malformed, mistyped, or internally
+# inconsistent snapshot is rejected with TypeError / ValueError — never
+# silently accepted and never interpreted as complete. The snapshot is
+# evidence for QA judgment only; it never carries or confers any
+# authorization. The private names below are thin aliases kept for
+# existing callers.
+#
+# N1: ``LifecycleReconciliationInput`` — which holds the authoritative
+# identity — rejects a snapshot naming any other issue. The reporting
+# shared serializer ``satisfaction_block`` adds the reporting-only
+# ``closure_ready`` key here; the closure receipt must omit it.
+# ---------------------------------------------------------------------------
+
+_SatisfactionCriterionSnapshot = SatisfactionCriterionSnapshot
+_SatisfactionSnapshot = SatisfactionSnapshot
+_satisfaction_snapshot = validate_satisfaction_snapshot
+
 
 
 def _canonical(value: object) -> str:
@@ -181,6 +215,7 @@ class LifecycleReconciliationInput:
     projections: tuple[ProjectionEvidence, ...] = ()
     exact_head_evidence: tuple[ExactHeadEvidence, ...] = ()
     admissions: tuple[LifecycleMutationAdmissionResult, ...] = ()
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None
     input_id: str = ""
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -192,6 +227,23 @@ class LifecycleReconciliationInput:
             raise TypeError("invalid lifecycle snapshot")
         if self.current_pull_request is not None and type(self.current_pull_request) is not PullRequestEvidence:
             raise TypeError("invalid current pull request")
+        if self.satisfaction is not None:
+            # Strictly validate the caller-supplied snapshot mapping and
+            # store the frozen defensive copy (#3680 Option B).
+            object.__setattr__(
+                self, "satisfaction", _satisfaction_snapshot(self.satisfaction)
+            )
+            # N1: the snapshot's envelope identity must name this
+            # input's issue — satisfaction evidence produced for another
+            # issue is rejected at this authoritative boundary.
+            if (
+                self.satisfaction.repository != self.repository
+                or self.satisfaction.issue_number != self.issue_number
+            ):
+                raise ValueError(
+                    "satisfaction snapshot identity does not match the "
+                    "reconciliation input issue"
+                )
         for name, kind in (("dependencies", DependencyEvidence), ("projections", ProjectionEvidence), ("exact_head_evidence", ExactHeadEvidence), ("admissions", LifecycleMutationAdmissionResult)):
             if any(type(v) is not kind for v in _tuple(getattr(self, name), name)):
                 raise TypeError(f"invalid {name}")
@@ -204,7 +256,7 @@ class LifecycleReconciliationInput:
 
     def payload(self) -> dict[str, object]:
         pr = self.current_pull_request
-        return {
+        payload: dict[str, object] = {
             "repository": self.repository, "issue_number": self.issue_number,
             "operational_state_id": self.operational_state.state_id,
             "lifecycle_snapshot_id": self.lifecycle_snapshot.snapshot_id if self.lifecycle_snapshot else None,
@@ -214,6 +266,9 @@ class LifecycleReconciliationInput:
             "exact_heads": sorted((v.evidence_id, v.tested_head_sha) for v in self.exact_head_evidence),
             "admission_ids": sorted(v.result_id for v in self.admissions), "side_effects_performed": False,
         }
+        if self.satisfaction is not None:
+            payload["satisfaction"] = satisfaction_block(self.satisfaction, include_closure_ready=True)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self.payload(), "input_id": self.input_id}
@@ -272,6 +327,7 @@ class LifecycleReconciliationResult:
     merge_authorization: AuthorizationState
     closure_authorization: AuthorizationState
     external_write_authorization: AuthorizationState
+    satisfaction: _SatisfactionSnapshot | dict[str, object] | None = None
     result_id: str = ""
     schema_name: Literal["agent-os-lifecycle-reconciliation"] = SCHEMA_NAME
     schema_version: Literal["1.0"] = SCHEMA_VERSION
@@ -294,6 +350,19 @@ class LifecycleReconciliationResult:
         ):
             if type(getattr(self, name)) is not AuthorizationState:
                 raise TypeError(f"invalid {name}")
+        if self.satisfaction is not None:
+            object.__setattr__(
+                self, "satisfaction", _satisfaction_snapshot(self.satisfaction)
+            )
+            # N1: same envelope-identity binding as the input boundary.
+            if (
+                self.satisfaction.repository != self.repository
+                or self.satisfaction.issue_number != self.issue_number
+            ):
+                raise ValueError(
+                    "satisfaction snapshot identity does not match the "
+                    "reconciliation result issue"
+                )
         reasons = tuple(sorted(set(_tuple(self.reason_codes, "reason_codes"))))
         if any(type(v) is not str or v not in REASON_CODES for v in reasons):
             raise ValueError("unsupported reason code")
@@ -309,7 +378,10 @@ class LifecycleReconciliationResult:
         object.__setattr__(self, "result_id", expected)
 
     def payload(self) -> dict[str, object]:
-        return {"schema_name": self.schema_name, "schema_version": self.schema_version, "repository": self.repository, "issue_number": self.issue_number, "input_id": self.input_id, "operational_state_id": self.operational_state_id, "lifecycle_snapshot_id": self.lifecycle_snapshot_id, "outcome": self.outcome.value, "reason_codes": self.reason_codes, "actions": [v.to_dict() for v in self.actions], "implementation_authorization": self.implementation_authorization.value, "ready_for_review_authorization": self.ready_for_review_authorization.value, "execution_authorization": self.execution_authorization.value, "merge_authorization": self.merge_authorization.value, "closure_authorization": self.closure_authorization.value, "external_write_authorization": self.external_write_authorization.value, "side_effects_performed": False}
+        payload: dict[str, object] = {"schema_name": self.schema_name, "schema_version": self.schema_version, "repository": self.repository, "issue_number": self.issue_number, "input_id": self.input_id, "operational_state_id": self.operational_state_id, "lifecycle_snapshot_id": self.lifecycle_snapshot_id, "outcome": self.outcome.value, "reason_codes": self.reason_codes, "actions": [v.to_dict() for v in self.actions], "implementation_authorization": self.implementation_authorization.value, "ready_for_review_authorization": self.ready_for_review_authorization.value, "execution_authorization": self.execution_authorization.value, "merge_authorization": self.merge_authorization.value, "closure_authorization": self.closure_authorization.value, "external_write_authorization": self.external_write_authorization.value, "side_effects_performed": False}
+        if self.satisfaction is not None:
+            payload["satisfaction"] = satisfaction_block(self.satisfaction, include_closure_ready=True)
+        return payload
 
     def to_dict(self) -> dict[str, object]:
         return {**self.payload(), "result_id": self.result_id}
@@ -470,6 +542,22 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         if auth is not None and adm is not None and adm.authorization_id != auth:
             reasons.add("source.conflicting-admission-evidence")
             decision = True
+        elif e.satisfaction is not None and not e.satisfaction.complete:
+            # #3680: an incomplete satisfaction record blocks the closure
+            # projection itself. Report not-closure-ready as a manual
+            # decision naming every blocking criterion; no close-issue
+            # mutation is projected, and satisfaction never substitutes
+            # for the closure authorization/admission checked above.
+            blocking = ",".join(
+                f"{item.identity}:{item.disposition}"
+                for item in e.satisfaction.unsatisfied_criteria
+            )
+            actions.append(ReconciliationAction(
+                ActionCategory.MANUAL_DECISION, close_reason, "issue-state",
+                f"satisfaction={e.satisfaction.status};blocking={blocking}",
+                "closed only with a complete satisfaction record (every criterion satisfied)",
+                None, None, None, _guards(e),
+            ))
         else:
             category = ActionCategory.GOVERNED_MUTATION if auth is not None and adm is not None else ActionCategory.MANUAL_DECISION
             actions.append(ReconciliationAction(category, close_reason, "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
@@ -483,7 +571,7 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         outcome = ReconciliationOutcome.NEEDS_DECISION
     else:
         outcome = ReconciliationOutcome.REQUIRED if actions else ReconciliationOutcome.CONSISTENT
-    return LifecycleReconciliationResult(e.repository, e.issue_number, e.input_id, s.state_id, snap.snapshot_id if snap else None, outcome, tuple(reasons), tuple(actions), s.implementation_authorization.state, s.ready_for_review_authorization.state, s.execution_authorization.state, s.merge_authorization.state, s.closure_authorization.state, s.external_write_authorization.state)
+    return LifecycleReconciliationResult(e.repository, e.issue_number, e.input_id, s.state_id, snap.snapshot_id if snap else None, outcome, tuple(reasons), tuple(actions), s.implementation_authorization.state, s.ready_for_review_authorization.state, s.execution_authorization.state, s.merge_authorization.state, s.closure_authorization.state, s.external_write_authorization.state, satisfaction=e.satisfaction)
 
 
 def serialize_lifecycle_reconciliation_input(value: LifecycleReconciliationInput) -> str:

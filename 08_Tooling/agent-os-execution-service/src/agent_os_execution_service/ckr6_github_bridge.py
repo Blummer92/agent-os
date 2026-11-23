@@ -10,13 +10,19 @@ import argparse
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, TypedDict, cast
 
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_preflight import RepairContext, plan_lesson_preflight
+from agent_memory_context_manager.lesson_activation_bridge import _AREA_ECOSYSTEM, _LEARNING_TYPE_CAPABILITY
 
+from .ckr6_github_reader import (
+    ALLOWED_REPOSITORY as GITHUB_REPOSITORY,
+    GitHubIssueCommentReader,
+)
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_learning_loop import capture_lesson_candidate, propose_lesson_refinement
 from .lesson_reader_composition import resolve_lesson_read_route
@@ -57,6 +63,10 @@ RESULT_FIELDS = frozenset({
     "substantial_hypothesis_admissible",
     "mutation_admissible",
     "blocking_attempt_id",
+    # R07: a failed-repair result names the exact attempt it was produced
+    # for, so a consumer can reject a result recorded for an earlier
+    # attempt. Issue-start and learning results carry no attempt_id.
+    "attempt_id",
     "execution_authorized",
     "github_writes_authorized",
     "merge_authorized",
@@ -96,6 +106,11 @@ class Ckr6Envelope:
     result_summary: str | None = None
     repair_context: str = "failed-pr-repair"
     detail: Mapping[str, object] | None = None
+    # Where the request comment lives: "issue" for an ordinary issue, "pr"
+    # for a top-level PR Conversation comment. Set by envelope_from_event
+    # from the event's issue record, never by the envelope JSON itself; the
+    # result payload carries no target kind (RESULT_FIELDS is fixed).
+    target_kind: str = "issue"
 
 
 class _PreflightArgs(TypedDict):
@@ -326,8 +341,17 @@ def envelope_from_event(
     comment = event.get("comment")
     if not isinstance(repository, Mapping) or repository.get("full_name") != expected_repository:
         raise ValueError("event repository identity mismatch")
-    if not isinstance(issue, Mapping) or "pull_request" in issue:
+    if not isinstance(issue, Mapping):
         raise ValueError("CKR6 ingress accepts issue comments only")
+    # A top-level PR Conversation comment arrives as an issue_comment event
+    # whose issue record carries a "pull_request" mapping; the event issue
+    # number is the PR number. Only a mapping counts: any other
+    # "pull_request" value is a malformed event and keeps the old rejection
+    # (and its "pull-request-comment" rejection code).
+    pull_request = issue.get("pull_request")
+    if pull_request is not None and not isinstance(pull_request, Mapping):
+        raise ValueError("CKR6 ingress accepts issue comments only")
+    target_kind = "pr" if isinstance(pull_request, Mapping) else "issue"
     if not isinstance(comment, Mapping):
         raise ValueError("comment evidence missing")
     user = comment.get("user")
@@ -346,7 +370,7 @@ def envelope_from_event(
         raise ValueError("envelope repository does not match event repository")
     if envelope.issue_number != issue.get("number"):
         raise ValueError("envelope issue_number does not match event issue")
-    return envelope
+    return replace(envelope, target_kind=target_kind)
 
 
 def _request(envelope: Ckr6Envelope) -> CodingKnowledgeRequest:
@@ -404,11 +428,298 @@ def classify_envelope(envelope: Ckr6Envelope) -> dict[str, object]:
     }
 
 
-def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dict[str, object]:
+# Observational-only retrieval diagnostics. They never enter the trusted result
+# comment (RESULT_FIELDS is unchanged) and never influence admission. Only a
+# finite reason vocabulary and bounded integer counters are ever emitted; raw
+# rows, cursors, provider text and unknown exception text cannot pass the filter.
+_RETRIEVAL_FINITE_REASONS = frozenset({
+    "lesson-read-incomplete",
+    "lesson-read-timeout",
+    "lesson-read-connection-error",
+    "lesson-read-runtime-error",
+})
+_NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
+_RETRIEVAL_COUNTERS = (
+    "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
+    "best_bucket_tied_identities",
+)
+# PR-1 (observational): HOW the CKR2 matcher chose lessons. Mechanism only,
+# never relevance or verification. Closed vocabulary; any other value is
+# dropped by the projection and refused by both writers.
+_SELECTION_BASIS_VALUES = frozenset({
+    "no-relevant-signal",
+    "identity-scoped",
+    "title-echo",
+    "exact-library",
+    "rule-ckr6-mutation-boundary",
+    "generic-unique",
+    "generic-tie-lexical-cut",
+    "not-evaluated",
+})
+_OPTIONAL_BASIS_KEY = "selection_basis"
+_MAX_DIAGNOSTIC_COUNTER = 10_000
+
+# Only source-controlled Area and Learning Type names may enter this optional
+# diagnostic. No caller strings, query filters, page payloads or cursors.
+_TERMINAL_QUERY_BUCKETS = frozenset({
+    "unobserved", "broad-or", "workspace", "title-fallback", "known-reference",
+    *(f"area:{area}" for area in _AREA_ECOSYSTEM),
+    *(f"type:{kind}" for kind in _LEARNING_TYPE_CAPABILITY),
+    *(f"area:{area}/type:{kind}" for area in _AREA_ECOSYSTEM
+      for kind in _LEARNING_TYPE_CAPABILITY),
+})
+_TERMINAL_PAGE_ROW_BUCKETS = frozenset({"0-24", "25", "over-25", "0-99", "100", "over-100", "unobserved"})
+_TERMINAL_PAGE_HAS_MORE = frozenset({"true", "false", "invalid"})
+_TERMINAL_PAGE_KEYS = frozenset({
+    "terminal_page_row_count_bucket",
+    "terminal_page_has_more",
+    "terminal_page_cursor_present",
+})
+_INCOMPLETE_REASON_CODES = frozenset({
+    "row-bound-exceeded",
+    "page-bound-exceeded",
+    "missing-cursor",
+    "repeated-cursor",
+    "read-budget-exceeded",
+    "malformed-page",
+    "malformed-pagination",
+    "unknown-incomplete",
+})
+
+
+def retrieval_diagnostics_projection(raw: Mapping[str, object]) -> dict[str, object] | None:
+    """Project existing sanitized retrieval diagnostics into a bounded form.
+
+    Returns ``None`` when the owner produced no diagnostics. Never raises on
+    malformed input: anything outside the allowlist is dropped or mapped to the
+    static ``none`` / ``0`` values.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    source = raw.get("retrieval_diagnostics")
+    reasons = raw.get("selection_reason_codes")
+    if not isinstance(source, Mapping) and not isinstance(reasons, (list, tuple)):
+        return None
+    reason = "none"
+    for item in reasons if isinstance(reasons, (list, tuple)) else ():
+        if isinstance(item, str) and (
+            item in _RETRIEVAL_FINITE_REASONS or _NOTION_REASON_RE.fullmatch(item)
+        ):
+            reason = item
+            break
+    projected: dict[str, object] = {"retrieval_reason_code": reason}
+    # Never trust arbitrary source values. This remains a finite code, not
+    # the exception message, page data, cursor, or a provider response.
+    incomplete = source.get("incomplete_reason_code") if isinstance(source, Mapping) else None
+    projected["incomplete_reason_code"] = (
+        incomplete if type(incomplete) is str and incomplete in _INCOMPLETE_REASON_CODES
+        else "none"
+    )
+    for name in _RETRIEVAL_COUNTERS:
+        value = source.get(name) if isinstance(source, Mapping) else None
+        if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_COUNTER:
+            projected[name] = value
+        else:
+            projected[name] = 0
+    basis = source.get(_OPTIONAL_BASIS_KEY) if isinstance(source, Mapping) else None
+    if type(basis) is str and basis in _SELECTION_BASIS_VALUES:
+        projected[_OPTIONAL_BASIS_KEY] = basis
+    if isinstance(source, Mapping) and "terminal_query_bucket" in source:
+        value = source.get("terminal_query_bucket")
+        projected["terminal_query_bucket"] = (
+            value if type(value) is str and value in _TERMINAL_QUERY_BUCKETS
+            else "unobserved"
+        )
+    # The writers only accept the triple alongside terminal_query_bucket;
+    # the projection must apply the same rule, or it emits a diagnostic
+    # neither export boundary will write.
+    if (
+        isinstance(source, Mapping)
+        and _TERMINAL_PAGE_KEYS <= source.keys()
+        and "terminal_query_bucket" in source
+    ):
+        row_bucket = source["terminal_page_row_count_bucket"]
+        more = source["terminal_page_has_more"]
+        cursor_present = source["terminal_page_cursor_present"]
+        if (
+            type(row_bucket) is str and row_bucket in _TERMINAL_PAGE_ROW_BUCKETS
+            and type(more) is str and more in _TERMINAL_PAGE_HAS_MORE
+            and type(cursor_present) is bool
+            and projected["incomplete_reason_code"] != "none"
+        ):
+            projected.update({
+                "terminal_page_row_count_bucket": row_bucket,
+                "terminal_page_has_more": more,
+                "terminal_page_cursor_present": cursor_present,
+            })
+    return projected
+
+
+def write_retrieval_diagnostics_summary(
+    diagnostics: Mapping[str, object] | None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """Append the bounded projection to the Actions step summary, if available.
+
+    Observational only: any failure is swallowed so it can never alter the
+    already-written result, the exit status, or admission.
+    """
+    if not isinstance(diagnostics, Mapping):
+        return False
+    # The summary is independently fail-closed on the new optional fields,
+    # even when a caller bypasses the usual finite projection.
+    page_keys_present = _TERMINAL_PAGE_KEYS & diagnostics.keys()
+    if page_keys_present:
+        if page_keys_present != _TERMINAL_PAGE_KEYS:
+            return False
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") not in _INCOMPLETE_REASON_CODES
+        ):
+            return False
+    # The summary and artifact must enforce the same finite allowlist.
+    # Otherwise direct calls can expose hostile reason text or unbounded
+    # counters in the Actions summary despite strict artifact validation.
+    required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
+        return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in (
+        required,
+        required | {"terminal_query_bucket"},
+        required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    ):
+        return False
+    finite = retrieval_diagnostics_projection({
+        "retrieval_diagnostics": diagnostics,
+        "selection_reason_codes": [diagnostics.get("retrieval_reason_code")],
+    })
+    if finite != dict(diagnostics):
+        return False
+    target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
+    if not target:
+        return False
+    lines = ["", "### CKR6 retrieval diagnostics (internal, observational)", ""]
+    for name in (
+        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
+        _OPTIONAL_BASIS_KEY, "terminal_query_bucket", "terminal_page_row_count_bucket",
+        "terminal_page_has_more", "terminal_page_cursor_present",
+    ):
+        if name not in diagnostics:
+            continue
+        lines.append(f"- {name}: `{diagnostics.get(name)}`")
+    try:
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        return False
+    return True
+
+
+def write_retrieval_diagnostics_artifact(
+    diagnostics: Mapping[str, object] | None,
+    path: Path,
+) -> bool:
+    """Write only finite, sanitized diagnostic codes and bounded counters.
+
+    This is separate from result.json and the trusted result comment. It never
+    influences CKR6 admission, mutation, or execution status. Invalid values
+    cannot be serialized or echoed, and artifact failures are non-blocking.
+    """
+    if not isinstance(diagnostics, Mapping):
+        return False
+    expected_keys = {
+        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
+    }
+    allowed_keys = (
+        expected_keys,
+        expected_keys | {"terminal_query_bucket"},
+        expected_keys | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    )
+    if _OPTIONAL_BASIS_KEY in diagnostics and (
+        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
+        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
+    ):
+        return False
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY} not in allowed_keys:
+        return False
+    if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
+        if (
+            type(diagnostics["terminal_page_row_count_bucket"]) is not str
+            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
+            or type(diagnostics["terminal_page_has_more"]) is not str
+            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
+            or type(diagnostics["terminal_page_cursor_present"]) is not bool
+            or diagnostics.get("incomplete_reason_code") == "none"
+        ):
+            return False
+    bucket = diagnostics.get("terminal_query_bucket")
+    if "terminal_query_bucket" in diagnostics and (type(bucket) is not str or bucket not in _TERMINAL_QUERY_BUCKETS):
+        return False
+    reason = diagnostics.get("retrieval_reason_code")
+    if type(reason) is not str or not (
+        reason == "none" or reason in _RETRIEVAL_FINITE_REASONS
+        or _NOTION_REASON_RE.fullmatch(reason)
+    ):
+        return False
+    incomplete = diagnostics.get("incomplete_reason_code")
+    if type(incomplete) is not str or incomplete not in (_INCOMPLETE_REASON_CODES | {"none"}):
+        return False
+    if any(
+        type(diagnostics[name]) is not int
+        or not 0 <= diagnostics[name] <= _MAX_DIAGNOSTIC_COUNTER
+        for name in _RETRIEVAL_COUNTERS
+    ):
+        return False
+    safe = {
+        "retrieval_reason_code": reason,
+        "incomplete_reason_code": incomplete,
+        **{name: diagnostics[name] for name in _RETRIEVAL_COUNTERS},
+    }
+    if _OPTIONAL_BASIS_KEY in diagnostics:
+        safe[_OPTIONAL_BASIS_KEY] = diagnostics[_OPTIONAL_BASIS_KEY]
+    if "terminal_query_bucket" in diagnostics:
+        safe["terminal_query_bucket"] = bucket
+    for name in _TERMINAL_PAGE_KEYS:
+        if name in diagnostics:
+            safe[name] = diagnostics[name]
+    try:
+        path.write_text(
+            json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return False
+    return True
+
+
+def _record_diagnostics(
+    sink: list[dict[str, object]] | None,
+    raw: Mapping[str, object],
+) -> None:
+    if sink is None:
+        return
+    projected = retrieval_diagnostics_projection(raw)
+    if projected is not None:
+        sink.append(projected)
+
+
+def execute_envelope(
+    envelope: Ckr6Envelope,
+    *,
+    retrieval_required: bool,
+    diagnostics_sink: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     route = resolve_lesson_read_route() if retrieval_required else None
     if retrieval_required and (route is None or route.execute_read is None):
         route_reason = route.reason_code if route is not None else "lesson-read-route-unavailable"
-        return {
+        unbound = {
             "operation": envelope.operation,
             "repository": envelope.repository,
             "issue_number": envelope.issue_number,
@@ -432,6 +743,11 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
             "closure_authorized": False,
             "side_effects_performed": False,
         }
+        if envelope.operation == "failed-repair":
+            # P1: the STOP result must still name the exact failed attempt so a
+            # consumer can bind it (R07); reason codes are preserved unchanged.
+            unbound["attempt_id"] = envelope.attempt_id
+        return unbound
     reader = route.execute_read if route is not None else None
     if envelope.operation in LEARNING_OPERATIONS:
         return _execute_learning(envelope, reader)
@@ -450,6 +766,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
     }
     if envelope.operation == "issue-start":
         raw = activate_issue_start_lesson_preflight(**common, execute_read=reader)
+        _record_diagnostics(diagnostics_sink, raw)
         # The handoff_projection is the host-consumable unit: the overlay
         # instructs the host to put exactly this projection into its governed
         # context packet. It was previously computed and dropped, which left
@@ -493,6 +810,7 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
         repair_context=envelope.repair_context,
         execute_read=reader,
     )
+    _record_diagnostics(diagnostics_sink, raw)
     return {
         "operation": envelope.operation,
         "repository": envelope.repository,
@@ -506,12 +824,49 @@ def execute_envelope(envelope: Ckr6Envelope, *, retrieval_required: bool) -> dic
         "canonical_github_refs": raw["canonical_github_refs"],
         "mutation_admissible": raw["mutation_admissible"],
         "blocking_attempt_id": raw["blocking_attempt_id"],
+        # R07: carry the exact failed attempt through the bounded result
+        # projection. Without it no consumer of the result comment could
+        # prove the result was produced for the current attempt.
+        "attempt_id": envelope.attempt_id,
         "execution_authorized": False,
         "github_writes_authorized": False,
         "merge_authorized": False,
         "closure_authorized": False,
         "side_effects_performed": False,
     }
+
+
+class _GitHubActionsTokenProvider:
+    """The workflow's own repo-scoped ``github.token``, read at call time.
+
+    The Actions runtime injects it through the step environment (never a tool
+    argument, comment body, or caller field). It already exists for the
+    postback step; binding it to the refinement step adds no credential,
+    permission, or scope. It is never logged, stored, or returned.
+    """
+
+    def get_installation_token(self) -> str | None:
+        token = os.environ.get("GITHUB_TOKEN", "")
+        return token if token.strip() else None
+
+
+def _receipt_comment_fetch():
+    """Trusted exact-comment read for the CKR7 receipt barrier, or None.
+
+    None means this execution surface carries no bound GitHub token; the
+    refinement then stops at manual-review / receipt-read-unavailable and
+    performs no Notion read. Tests substitute this seam; production binds the
+    workflow's existing github.token through the bounded reader.
+    """
+    provider = _GitHubActionsTokenProvider()
+    if provider.get_installation_token() is None:
+        return None
+    reader = GitHubIssueCommentReader(token_provider=provider)
+
+    def fetch(comment_id: int) -> Mapping[str, object]:
+        return reader.read_issue_comment(GITHUB_REPOSITORY, comment_id)
+
+    return fetch
 
 
 def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
@@ -524,7 +879,7 @@ def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
         if envelope.operation == "lesson-candidate":
             outcome = capture_lesson_candidate(detail)
         else:
-            outcome = propose_lesson_refinement(detail, reader)
+            outcome = propose_lesson_refinement(detail, reader, fetch_comment=_receipt_comment_fetch())
     except (TypeError, ValueError) as exc:
         # Detail validation precedes any read. A malformed candidate or
         # refinement returns a bounded finite-code rejection, never a crash
@@ -532,7 +887,9 @@ def _execute_learning(envelope: Ckr6Envelope, reader) -> dict[str, object]:
         outcome = {"status": "rejected", "reason_codes": [rejection_reason(exc)], key: None}
         read = False
     else:
-        read = envelope.operation == "lesson-refinement"
+        # Truthful reporting: the receipt barrier can stop a refinement
+        # before the known-ID lesson read happens.
+        read = bool(outcome.get("notion_read_performed", False))
     extra = {key: outcome[key]}
     return {
         "operation": envelope.operation,
@@ -560,6 +917,10 @@ def _canonical_result_json(payload: Mapping[str, object]) -> str:
     )
 
 
+class _ResultCommentTooLarge(ValueError):
+    """The exact encoded result exceeds the postback byte budget."""
+
+
 def serialize_ckr6_result_comment(
     result: Mapping[str, object], *, request_comment_id: int
 ) -> str:
@@ -581,7 +942,7 @@ def serialize_ckr6_result_comment(
     payload = {**result, "request_comment_id": request_comment_id}
     body = CKR6_RESULT_MARKER + "\n" + _canonical_result_json(payload)
     if len(body.encode("utf-8")) > MAX_RESULT_COMMENT_BYTES:
-        raise ValueError("serialized CKR6 result exceeds the bounded comment size")
+        raise _ResultCommentTooLarge("serialized CKR6 result exceeds the bounded comment size")
     return body
 
 
@@ -604,6 +965,397 @@ def parse_ckr6_result_comment(body: object) -> dict[str, object]:
     if type(payload) is not dict or _canonical_result_json(payload) != serialized:
         raise ValueError("CKR6 result payload must be canonical compact JSON")
     return payload
+
+
+# R07/P1: trusted, exact request/result consumption (#2425 / #2851).
+#
+# ``parse_ckr6_result_comment`` deliberately stays a pure syntax check: it
+# proves neither who wrote a comment nor which request it answers. A host must
+# consume through ``consume_ckr6_result_comment`` (one GitHub comment resource)
+# or ``select_ckr6_result_comment`` (a bounded list of comment resources). Both
+# take the GitHub issue-comment *record* (``id``, ``user``, ``created_at``,
+# location) rather than a bare body, fail closed with ``ValueError``, and never
+# authorize anything: a consumed result is evidence for the host's governed
+# decision, never a repository write/merge/closure grant.
+#
+# Producer provenance boundary (documented limitation): the strongest check the
+# GitHub comment record supports is the server-assigned author identity
+# (login, numeric account id, Bot type, and the ``github-actions`` app when the
+# REST record carries it) plus exact issue/repository location and creation
+# order against the request. This proves the comment was posted by the GitHub
+# Actions bot account; it does NOT prove WHICH workflow/job posted it. Any
+# other workflow in this repository holding ``issues: write`` posts under the
+# same identity, and the result carries no run identifier. Never describe this
+# as per-workflow or cryptographic authentication.
+CKR6_PRODUCER_LOGIN = "github-actions[bot]"
+CKR6_PRODUCER_ACCOUNT_ID = 41898282
+CKR6_PRODUCER_ACCOUNT_TYPE = "Bot"
+CKR6_PRODUCER_APP_SLUG = "github-actions"
+
+_AUTHORITY_FLAGS = (
+    "execution_authorized",
+    "github_writes_authorized",
+    "merge_authorized",
+    "closure_authorized",
+    "side_effects_performed",
+)
+# Mirrors ISSUE_START_LESSON_PREFLIGHT.md "Admission signal".
+_ISSUE_START_ADMITTING = frozenset({"not-needed", "sufficient", "unavailable-safe-fallback"})
+# Mirrors RetryReentryOutcome admitting values (failed-repair-lesson-reentry.md).
+_RETRY_ADMITTING = frozenset({"consumed", "not-material"})
+# Canonical activate_repair_retry_lessons._retry_outcome mapping; preserve
+# blocked results as STOP evidence, including early unbound manual-review.
+_RETRY_OUTCOME_BY_STATUS = {
+    "sufficient": "consumed",
+    "not-needed": "not-material",
+    "insufficient": "unavailable-or-failed",
+    "manual-review": "unavailable-or-failed",
+    "unavailable-safe-fallback": "unavailable-or-failed",
+}
+# Operation of the bridge's bounded infrastructure fallback (_fallback_result).
+_FALLBACK_OPERATION = "unknown"
+_FALLBACK_REASON = "ckr6-result-unavailable"
+
+
+def _expected_id(value: object, name: str) -> int:
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _utc(value: object, name: str) -> datetime:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"{name} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{name} must be an ISO-8601 timestamp") from None
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} must carry a UTC offset")
+    return parsed
+
+
+def _trusted_result_body(
+    comment: object,
+    *,
+    expected_request_comment_id: int,
+    expected_request_created_at: object,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_target_kind: str = "issue",
+) -> str:
+    """Return the body of a comment only if its GitHub record is trusted.
+
+    ``expected_target_kind`` is ``"issue"`` for an ordinary issue and
+    ``"pr"`` for a top-level PR Conversation comment. The REST
+    ``issue_url`` stays ``/issues/N`` for both kinds, while the HTML
+    location is kind-exact: ``/issues/N`` for issues, ``/pull/N`` for PRs.
+    A cross-target location is refused, never coerced.
+    """
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
+    if not isinstance(comment, Mapping):
+        raise ValueError("CKR6 result comment record must be a mapping")
+    comment_id = comment.get("id")
+    if type(comment_id) is not int or isinstance(comment_id, bool) or comment_id < 1:
+        raise ValueError("CKR6 result comment record is missing a valid id")
+    body = comment.get("body")
+    if type(body) is not str:
+        raise ValueError("CKR6 result comment record is missing its body")
+    user = comment.get("user")
+    if not isinstance(user, Mapping):
+        raise ValueError("CKR6 result comment record is missing its author")
+    account_id = user.get("id")
+    if (
+        user.get("login") != CKR6_PRODUCER_LOGIN
+        or type(account_id) is not int
+        or isinstance(account_id, bool)
+        or account_id != CKR6_PRODUCER_ACCOUNT_ID
+    ):
+        raise ValueError("CKR6 result comment was not produced by the trusted producer")
+    if user.get("type") is not None and user.get("type") != CKR6_PRODUCER_ACCOUNT_TYPE:
+        raise ValueError("CKR6 result comment author is not a Bot account")
+    app = comment.get("performed_via_github_app")
+    if app is not None and (
+        not isinstance(app, Mapping) or app.get("slug") != CKR6_PRODUCER_APP_SLUG
+    ):
+        raise ValueError("CKR6 result comment was not posted via the GitHub Actions app")
+    issue_url = comment.get("issue_url")
+    html_url = comment.get("html_url")
+    if issue_url is None and html_url is None:
+        raise ValueError("CKR6 result comment record carries no issue location")
+    if issue_url is not None and issue_url != (
+        f"https://api.github.com/repos/{expected_repository}/issues/{expected_issue_number}"
+    ):
+        raise ValueError("CKR6 result comment location does not match the pending request")
+    if html_url is not None:
+        # GitHub's HTML location for a PR Conversation comment is
+        # /pull/N#issuecomment-ID, while its REST issue_url stays /issues/N.
+        # The expected form is exact per target kind; an /issues/N HTML
+        # location never satisfies a PR target, nor /pull/N an issue target.
+        if expected_target_kind == "pr":
+            expected_html_url = (
+                f"https://github.com/{expected_repository}/pull/{expected_issue_number}"
+                f"#issuecomment-{comment_id}"
+            )
+        else:
+            expected_html_url = (
+                f"https://github.com/{expected_repository}/issues/{expected_issue_number}"
+                f"#issuecomment-{comment_id}"
+            )
+        if html_url != expected_html_url:
+            raise ValueError("CKR6 result comment location does not match the pending request")
+    created = _utc(comment.get("created_at"), "created_at")
+    if created < _utc(expected_request_created_at, "expected_request_created_at"):
+        raise ValueError("CKR6 result comment predates the pending request")
+    if comment_id <= expected_request_comment_id:
+        raise ValueError("CKR6 result comment predates the pending request")
+    updated = comment.get("updated_at")
+    if updated is not None and _utc(updated, "updated_at") != created:
+        raise ValueError("CKR6 result comment was edited after creation")
+    return body
+
+
+def _check_admission_semantics(payload: Mapping[str, object], operation: str) -> None:
+    status = payload.get("status")
+    admissible = payload.get("substantial_hypothesis_admissible")
+    mutation = payload.get("mutation_admissible")
+    if operation == "issue-start":
+        if type(admissible) is not bool:
+            raise ValueError("CKR6 result admission flag must be a boolean")
+        if mutation not in (None, False):
+            raise ValueError("issue-start result must not claim mutation admission")
+        if type(status) is not str:
+            raise ValueError("CKR6 result status must be a string")
+        if admissible != (status in _ISSUE_START_ADMITTING):
+            raise ValueError("CKR6 result status contradicts its admission flag")
+    elif operation == "failed-repair":
+        if admissible not in (None, False):
+            raise ValueError("failed-repair result must not claim first-hypothesis admission")
+        if type(mutation) is not bool:
+            raise ValueError("CKR6 result admission flag must be a boolean")
+        if type(status) is not str or status not in _RETRY_OUTCOME_BY_STATUS:
+            raise ValueError("CKR6 result status contradicts its admission flag")
+        outcome = payload.get("retry_reentry_outcome")
+        # An unbound read route emits manual-review without a retry outcome;
+        # that explicit blocked result is still valid STOP evidence.
+        unbound_stop = (
+            status == "manual-review" and outcome is None and mutation is False
+        )
+        if outcome != _RETRY_OUTCOME_BY_STATUS[status] and not unbound_stop:
+            raise ValueError("CKR6 result status contradicts its admission flag")
+        if mutation and outcome not in _RETRY_ADMITTING:
+            raise ValueError("CKR6 result status contradicts its admission flag")
+    else:
+        if admissible not in (None, False) or mutation not in (None, False):
+            raise ValueError("learning result must not claim admission")
+
+
+def consume_ckr6_result_comment(
+    comment: object,
+    *,
+    expected_request_comment_id: int,
+    expected_request_created_at: str,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_operation: str,
+    expected_attempt_id: str | None = None,
+    expected_target_kind: str = "issue",
+) -> dict[str, object]:
+    """Consume one trusted CKR6 result comment as the answer to a pending request.
+
+    ``comment`` is the GitHub issue-comment record. The producer must be the
+    GitHub Actions bot account (see the provenance boundary above), located in
+    the pending request's issue and created after the request. The payload must
+    use only ``RESULT_FIELDS`` plus ``request_comment_id``, match the expected
+    operation, carry five explicit false authority flags, keep status and
+    admission flags consistent, and (failed-repair) name the exact current
+    attempt. A valid blocked result is returned as STOP evidence, not rejected;
+    ``ckr6_result_admits_boundary`` turns it into a decision. Raises
+    ``ValueError`` otherwise. ``expected_target_kind`` is ``"issue"`` for an
+    ordinary issue and ``"pr"`` for a top-level PR Conversation comment; the
+    HTML location must match that kind exactly.
+    """
+    expected_request_comment_id = _expected_id(
+        expected_request_comment_id, "expected_request_comment_id"
+    )
+    expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
+    if type(expected_repository) is not str or not expected_repository.strip():
+        raise ValueError("expected_repository must be non-empty exact text")
+    if type(expected_operation) is not str or expected_operation not in OPERATIONS:
+        raise ValueError("expected_operation must be a supported CKR6 operation")
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
+    if expected_attempt_id is not None and (
+        type(expected_attempt_id) is not str or not expected_attempt_id.strip()
+    ):
+        raise ValueError("expected_attempt_id must be non-empty exact text")
+
+    body = _trusted_result_body(
+        comment,
+        expected_request_comment_id=expected_request_comment_id,
+        expected_request_created_at=expected_request_created_at,
+        expected_issue_number=expected_issue_number,
+        expected_repository=expected_repository,
+        expected_target_kind=expected_target_kind,
+    )
+    payload = parse_ckr6_result_comment(body)
+    unknown = set(payload) - RESULT_FIELDS - {"request_comment_id"}
+    if unknown:
+        raise ValueError("CKR6 result carries unexpected fields")
+
+    request_comment_id = payload.get("request_comment_id")
+    if type(request_comment_id) is not int or isinstance(request_comment_id, bool):
+        raise ValueError("CKR6 result is missing request_comment_id")
+    if request_comment_id != expected_request_comment_id:
+        raise ValueError(
+            "CKR6 result request_comment_id does not match the pending request"
+        )
+    if payload.get("issue_number") != expected_issue_number:
+        raise ValueError("CKR6 result issue_number does not match the pending request")
+    if payload.get("repository") != expected_repository:
+        raise ValueError("CKR6 result repository does not match the pending request")
+    for flag in _AUTHORITY_FLAGS:
+        if payload.get(flag) is not False:
+            raise ValueError("CKR6 result carries forbidden authority")
+
+    operation = payload.get("operation")
+    if operation == _FALLBACK_OPERATION:
+        # The generic fallback has no attempt_id. It cannot satisfy a
+        # failed-repair retry boundary, even as STOP evidence for that attempt.
+        if expected_operation == "failed-repair":
+            raise ValueError("CKR6 fallback cannot satisfy a failed-repair attempt")
+        # For issue-start (and non-retry learning operations), a valid
+        # infrastructure fallback remains explicit STOP evidence.
+        if (
+            payload.get("status") != "manual-review"
+            or payload.get("reason_codes") != [_FALLBACK_REASON]
+            or payload.get("substantial_hypothesis_admissible") is not False
+            or payload.get("mutation_admissible") is not False
+            or payload.get("selected_lesson_ids") != []
+        ):
+            raise ValueError("CKR6 fallback result is not a valid blocked result")
+        return payload
+    if type(operation) is not str or operation not in OPERATIONS:
+        raise ValueError("CKR6 result operation is unsupported")
+    if operation != expected_operation:
+        raise ValueError("CKR6 result operation does not match the pending request")
+    if operation == "failed-repair":
+        if expected_attempt_id is None:
+            raise ValueError("failed-repair result requires expected_attempt_id")
+        attempt_id = payload.get("attempt_id")
+        if type(attempt_id) is not str or not attempt_id.strip():
+            raise ValueError("CKR6 result is missing attempt_id for the failed-repair request")
+        if attempt_id != expected_attempt_id:
+            raise ValueError(
+                "CKR6 result attempt_id does not match the current failed attempt"
+            )
+    _check_admission_semantics(payload, operation)
+    return payload
+
+
+def select_ckr6_result_comment(
+    comments: object,
+    *,
+    expected_request_comment_id: int,
+    expected_request_created_at: str,
+    expected_issue_number: int,
+    expected_repository: str,
+    expected_operation: str,
+    expected_attempt_id: str | None = None,
+    expected_target_kind: str = "issue",
+) -> dict[str, object]:
+    """Select the exactly-one trusted CKR6 result answering a pending request.
+
+    Scans a bounded iterable of GitHub issue-comment records. Non-result
+    comments are ignored. Candidates whose record is untrusted (wrong producer,
+    location, timing, or malformed metadata) or unparsable are discarded
+    BEFORE deduplication, so a forged comment can neither satisfy the request
+    nor force an ambiguity. Fails closed when no trusted result answers the
+    request (``result-not-returned``) or when two distinct trusted payloads
+    claim it. Identical duplicates collapse to one. The selection is then bound
+    through ``consume_ckr6_result_comment``. ``expected_target_kind`` is
+    ``"issue"`` for an ordinary issue and ``"pr"`` for a top-level PR
+    Conversation comment; the HTML location must match that kind exactly.
+    """
+    if comments is None or isinstance(comments, (str, bytes, Mapping)):
+        raise TypeError("comments must be an iterable of comment records")
+    expected_request_comment_id = _expected_id(
+        expected_request_comment_id, "expected_request_comment_id"
+    )
+    expected_issue_number = _expected_id(expected_issue_number, "expected_issue_number")
+    if expected_target_kind not in ("issue", "pr"):
+        raise ValueError("expected_target_kind must be issue or pr")
+    distinct: dict[str, Mapping[str, object]] = {}
+    for comment in comments:
+        if not isinstance(comment, Mapping):
+            continue
+        body = comment.get("body")
+        if type(body) is not str or not body.startswith(CKR6_RESULT_MARKER + "\n"):
+            continue
+        try:
+            _trusted_result_body(
+                comment,
+                expected_request_comment_id=expected_request_comment_id,
+                expected_request_created_at=expected_request_created_at,
+                expected_issue_number=expected_issue_number,
+                expected_repository=expected_repository,
+                expected_target_kind=expected_target_kind,
+            )
+            parsed = parse_ckr6_result_comment(body)
+        except (TypeError, ValueError):
+            continue
+        if parsed.get("request_comment_id") != expected_request_comment_id:
+            continue
+        distinct[_canonical_result_json(parsed)] = comment
+    if not distinct:
+        raise ValueError("CKR6 result not returned for the pending request")
+    if len(distinct) > 1:
+        raise ValueError("ambiguous CKR6 result for the pending request")
+    return consume_ckr6_result_comment(
+        next(iter(distinct.values())),
+        expected_request_comment_id=expected_request_comment_id,
+        expected_request_created_at=expected_request_created_at,
+        expected_issue_number=expected_issue_number,
+        expected_repository=expected_repository,
+        expected_operation=expected_operation,
+        expected_attempt_id=expected_attempt_id,
+        expected_target_kind=expected_target_kind,
+    )
+
+
+def ckr6_result_admits_boundary(payload: Mapping[str, object]) -> bool:
+    """Return True only if a CONSUMED result admits its own boundary.
+
+    issue-start: first-hypothesis admission. failed-repair: retry mutation
+    admission. Everything else (blocked, fallback, learning results) is STOP.
+    This is an execution-order decision only; it grants no repository write,
+    merge, or closure authority. Call it only on ``consume``/``select`` output.
+
+    A ``sufficient`` issue-start result additionally requires a non-empty
+    ``selected_lesson_ids`` list of non-blank, unique strings (T11/Q1). The
+    real producer can never emit sufficient-with-empty or with duplicates --
+    select_coding_knowledge returns SUFFICIENT only from a non-empty best
+    bucket (an empty ranked set is INSUFFICIENT) and deduplicates identities
+    before selection -- so this changes no real-traffic behavior; it closes
+    the consumer gap where a forged sufficient-with-empty record admitted.
+    ``not-needed`` and ``unavailable-safe-fallback`` legitimately carry empty
+    selections and are unchanged.
+    """
+    if payload.get("operation") == "issue-start":
+        if payload.get("status") == "sufficient":
+            selected = payload.get("selected_lesson_ids")
+            if (
+                not isinstance(selected, list)
+                or not selected
+                or any(type(item) is not str or not item.strip() for item in selected)
+                or len(set(selected)) != len(selected)
+            ):
+                return False
+        return payload.get("substantial_hypothesis_admissible") is True
+    if payload.get("operation") == "failed-repair":
+        return payload.get("mutation_admissible") is True
+    return False
 
 
 def _fallback_result(repository: str, issue_number: int) -> dict[str, object]:
@@ -641,6 +1393,76 @@ def _load_result(path: str) -> dict[str, object] | None:
     return payload
 
 
+# --- #3951 post-merge live failure: sanitized transport diagnostics ------
+# Run 43340181423 (2026-11-13, first PR-conversation CKR6 request) failed
+# both postback paths with a bare ``HTTP Error 403: Forbidden``: the
+# transports swallowed the HTTPError body and headers, so the refusal could
+# not be attributed (missing scope vs target state vs platform policy).
+# Surface a bounded, sanitized diagnostic instead: status, the GitHub
+# ``message`` field, and the ``X-Accepted-GitHub-Permissions`` /
+# ``X-GitHub-Request-Id`` headers. Never the token, the request headers, or
+# an unbounded response body.
+MAX_DIAGNOSTIC_MESSAGE_CHARS = 200
+_MAX_DIAGNOSTIC_BODY_BYTES = 8192
+# GitHub authors the surfaced fields, but a reflected response could still
+# echo caller-supplied text, so redact token-shaped substrings and strip
+# control characters before anything reaches the log.
+_DIAGNOSTIC_SECRET_PATTERNS = (
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+)
+
+
+def _sanitize_diagnostic_text(value: str, *, token: str, ascii_only: bool = False) -> str:
+    if ascii_only:
+        text = "".join(ch if 32 <= ord(ch) <= 126 else " " for ch in value)
+    else:
+        text = "".join(ch if ch.isprintable() else " " for ch in value)
+    # Redact the exact credential first: a reflecting server could echo it
+    # verbatim inside an otherwise ordinary message field.
+    if token:
+        text = text.replace(token, "[redacted]")
+    for pattern in _DIAGNOSTIC_SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    return text
+
+
+def _http_failure_diagnostics(exc: BaseException, *, token: str = "") -> str:
+    """Bounded, sanitized description of a GitHub transport failure."""
+    import urllib.error
+
+    if type(exc) is not urllib.error.HTTPError:
+        return type(exc).__name__
+    parts = [f"HTTP {exc.code}"]
+    try:
+        # Bounded read: at most limit+1 bytes are consumed, and an oversized
+        # body is never parsed at all.
+        body = exc.read(_MAX_DIAGNOSTIC_BODY_BYTES + 1)
+    except Exception:
+        body = b""
+    message = ""
+    if isinstance(body, (bytes, bytearray)) and 0 < len(body) <= _MAX_DIAGNOSTIC_BODY_BYTES:
+        try:
+            payload = json.loads(bytes(body).decode("utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping) and type(payload.get("message")) is str:
+            message = payload["message"]
+    if message:
+        parts.append(
+            f"message={_sanitize_diagnostic_text(message, token=token)[:MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+        )
+    headers = getattr(exc, "headers", None)
+    if headers is not None:
+        for name in ("X-Accepted-GitHub-Permissions", "X-GitHub-Request-Id"):
+            value = headers.get(name)
+            if type(value) is str and value:
+                parts.append(
+                    f"{name.lower()}={_sanitize_diagnostic_text(value, token=token, ascii_only=True)[:MAX_DIAGNOSTIC_MESSAGE_CHARS]!r}"
+                )
+    return "; ".join(parts)
+
+
 def _existing_result_comment(
     target: str, since: object, request_comment_id: int, token: str
 ) -> int | None:
@@ -668,7 +1490,18 @@ def _existing_result_comment(
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             comments = json.loads(response.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        # Lookup failure is still not evidence of absence of work: the
+        # caller posts, preferring a duplicate receipt over silence. But
+        # record the bounded diagnostic so a live refusal shows whether
+        # the dedupe GET and the POST fail independently.
+        import sys
+
+        print(
+            "CKR6 result dedupe lookup failed: "
+            + _http_failure_diagnostics(exc, token=token),
+            file=sys.stderr,
+        )
         return None
     if type(comments) is not list:
         return None
@@ -717,7 +1550,33 @@ def postback_result_comment(
     issue_number: int = issue["number"]
     request_comment_id: int = comment["id"]
     payload = result if result is not None else _fallback_result(repository, issue_number)
-    body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    try:
+        body = serialize_ckr6_result_comment(payload, request_comment_id=request_comment_id)
+    except _ResultCommentTooLarge:
+        proposal = payload.get("lesson_proposal")
+        reasons = payload.get("reason_codes")
+        hints = proposal.get("proposed_applicability_hints") if isinstance(proposal, dict) else None
+        if (
+            payload.get("operation") != "lesson-candidate"
+            or not isinstance(proposal, dict)
+            or not isinstance(hints, list)
+            or not hints
+            or not isinstance(reasons, list)
+        ):
+            raise
+        # The Actions evidence artifact already contains the unaltered
+        # result.json. Omit only the new optional field from the comment,
+        # explicitly; keep the legacy draft and request correlation intact.
+        bounded_proposal = {
+            key: value for key, value in proposal.items()
+            if key != "proposed_applicability_hints"
+        }
+        comment_payload = {
+            **payload,
+            "lesson_proposal": bounded_proposal,
+            "reason_codes": [*reasons, "proposed-applicability-hints-omitted-from-comment"],
+        }
+        body = serialize_ckr6_result_comment(comment_payload, request_comment_id=request_comment_id)
 
     import urllib.request
 
@@ -749,7 +1608,9 @@ def postback_result_comment(
         with urllib.request.urlopen(request, timeout=30) as response:
             posted = json.loads(response.read().decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"CKR6 result postback failed: {type(exc).__name__}") from exc
+        raise RuntimeError(
+            "CKR6 result postback failed: " + _http_failure_diagnostics(exc, token=token)
+        ) from exc
     if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
         raise RuntimeError("CKR6 result postback returned an unexpected response")
     return {
@@ -778,6 +1639,8 @@ def main() -> int:
     parser.add_argument("--result", required=False)
     parser.add_argument("--api-url", required=False, default="https://api.github.com")
     args = parser.parse_args()
+
+    diagnostics: list[dict[str, object]] = []
 
     event = _load_event(args.event)
     if args.phase == "postback":
@@ -818,13 +1681,23 @@ def main() -> int:
             result = execute_envelope(
                 envelope,
                 retrieval_required=args.retrieval_required == "true",
+                diagnostics_sink=diagnostics,
             )
     Path(args.output).write_text(
         json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+    # Written after the result so diagnostics can never block or alter it.
+    for item in diagnostics:
+        write_retrieval_diagnostics_summary(item)
+        # The trusted result was already written. This separate, sanitized
+        # artifact cannot change admission or make the bridge fail.
+        write_retrieval_diagnostics_artifact(
+            item, Path(args.output).with_name("retrieval-diagnostics.json")
+        )
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

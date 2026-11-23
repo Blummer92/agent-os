@@ -71,8 +71,9 @@ def test_runbook_stays_bounded() -> None:
 
 EXECUTION_SERVICE_DIR = "08_Tooling/agent-os-execution-service"
 EXECUTION_SERVICE_INSTALL = f'python -m pip install -e "./{EXECUTION_SERVICE_DIR}"'
+APPROVED_STORE_ROOT = "/workspaces/agent-os-state/checkpoints"
+CHECKPOINT_STORE_ENV_VAR = "AGENT_OS_CHECKPOINT_STORE_ROOT"
 HOST_PATH_ENV_VARS = (
-    "AGENT_OS_CHECKPOINT_STORE_ROOT",
     "AGENT_OS_REPOSITORY_ROOT",
     "AGENT_OS_WORKSPACE_PARENT",
     "AGENT_OS_LEASE_DIRECTORY",
@@ -121,6 +122,30 @@ def test_profile_binds_no_host_path_value_or_placeholder() -> None:
         assert name not in declared
         assert name not in post_create
         assert name not in dockerfile
+
+
+def test_checkpoint_store_root_is_the_approved_codespaces_location() -> None:
+    # #3333 owner-approved store root: container-wide env + idempotent init.
+    payload = json.loads((DEVCONTAINER_DIR / "devcontainer.json").read_text(encoding="utf-8"))
+    assert payload["containerEnv"] == {CHECKPOINT_STORE_ENV_VAR: APPROVED_STORE_ROOT}
+    commands = _post_create_commands()
+    assert f'CHECKPOINT_STORE_ROOT="{APPROVED_STORE_ROOT}"' in commands
+    assert 'mkdir -p -m 0700 "$CHECKPOINT_STORE_ROOT/invocations"' in commands
+
+
+def test_post_create_store_init_creates_invocations_idempotently(tmp_path) -> None:
+    import subprocess
+
+    root = tmp_path / "state" / "checkpoints"
+    script = (
+        f'CHECKPOINT_STORE_ROOT="{root}"\n'
+        'mkdir -p -m 0700 "$CHECKPOINT_STORE_ROOT/invocations"\n'
+        'chmod 0700 "$CHECKPOINT_STORE_ROOT" "$CHECKPOINT_STORE_ROOT/invocations"\n'
+    )
+    for _ in range(2):
+        subprocess.run(["bash", "-c", script], check=True)
+    assert (root / "invocations").is_dir()
+    assert oct((root / "invocations").stat().st_mode & 0o777) == "0o700"
 
 
 def test_contract_doc_names_the_four_host_paths_and_the_unqualified_boundary() -> None:

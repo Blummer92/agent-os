@@ -63,6 +63,24 @@ def test_reusable_lesson_projects_distinct_diagnosis_to_non_authoritative_record
     assert projected.record.evidence_refs
 
 
+
+
+def test_backfill_contract_uses_fixed_50_record_page_size():
+    assert MAX_BACKFILL_BATCH_SIZE == 50
+
+    results = tuple(reusable_result(index) for index in range(51))
+    first = plan_historical_backfill(results)
+
+    assert first.batch_size == 50
+    assert len(first.results) == 50
+    assert first.next_offset == 50
+    assert first.complete is False
+
+    second = plan_historical_backfill(results, offset=50)
+    assert second.batch_size == 1
+    assert len(second.results) == 1
+    assert second.complete is True
+
 def test_missing_diagnosis_is_explicit_and_never_copied_from_symptom():
     projected = project_lesson_to_notion(reusable_result())
     assert projected.record is not None
@@ -106,3 +124,37 @@ def test_backfill_pages_more_than_fifty_without_global_cap():
     assert len(second.results) == 7
     assert second.next_offset is None
     assert second.complete is True
+
+
+def test_projection_rejects_missing_canonical_evidence():
+    from dataclasses import replace
+
+    original = reusable_result()
+    assert original.proposal is not None
+
+    incomplete = replace(
+        original,
+        proposal=replace(original.proposal, canonical_github_refs=()),
+    )
+    result = project_lesson_to_notion(incomplete)
+
+    assert result.disposition is ProjectionDisposition.MANUAL_REVIEW
+    assert result.reason_codes == ("canonical-evidence-missing",)
+    assert result.record is None
+
+
+def test_projection_rejects_missing_supporting_evidence():
+    from dataclasses import replace
+
+    original = reusable_result()
+    assert original.proposal is not None
+
+    incomplete = replace(
+        original,
+        proposal=replace(original.proposal, evidence_refs=()),
+    )
+    result = project_lesson_to_notion(incomplete)
+
+    assert result.disposition is ProjectionDisposition.MANUAL_REVIEW
+    assert result.reason_codes == ("canonical-evidence-missing",)
+    assert result.record is None

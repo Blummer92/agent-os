@@ -213,6 +213,119 @@ def _bounded_tail(value: object) -> str:
     return value
 
 
+
+_CANONICAL_BLOCKERS = frozenset(['invalid-input','unsupported-input-version','route-missing','route-not-tutorial-process','route-source-missing','step-disposition-missing','step-disposition-duplicate','step-not-retained','new-visual-authoring-missing','application-identity-conflict','reuse-asset-missing','resurface-asset-missing','reason-evidence-missing','artifact-identity-missing','artifact-identity-mismatch','cross-context-exemplar-evidence-missing','unsupported-instructional-specificity'])
+
+
+def _canonical_projection_shape_valid(result: dict) -> bool:
+    """Check required TypeScript projection fields without rewriting evidence."""
+    identity = ("routeId", "sourceHandoffRef", "sourceFingerprint", "recordingId", "recordingSha256")
+    if any(field not in result or (
+        result[field] is not None and not isinstance(result[field], str)
+    ) for field in identity):
+        return False
+    if not isinstance(result.get("applications"), list) or not all(
+        isinstance(item, str) for item in result["applications"]
+    ):
+        return False
+    if not isinstance(result.get("blockers"), list) or not all(
+        isinstance(item, str) and item in _CANONICAL_BLOCKERS for item in result["blockers"]
+    ):
+        return False
+    if "tutorialPackage" not in result:
+        return False
+    package = result["tutorialPackage"]
+    if result.get("status") == "blocked":
+        return package is None and bool(result["blockers"])
+    if result.get("status") != "valid" or not isinstance(package, dict) or result["blockers"]:
+        return False
+    if any(not isinstance(result[field], str) for field in identity):
+        return False
+    if package.get("packageVersion") != "picture-perfect-tutorial-package-v1":
+        return False
+    string_fields = (
+        *identity, "objectiveRef", "successCriteriaRef", "evidenceTargetRef",
+    )
+    if any(not isinstance(package.get(field), str) for field in string_fields):
+        return False
+    if any(package[field] != result[field] for field in identity):
+        return False
+    for field in ("canonicalArtifactIdentity", "pathwayPlanRef"):
+        if field not in package or (
+            package[field] is not None and not isinstance(package[field], str)
+        ):
+            return False
+    for field in ("reusedAssetRefs", "resurfacedAssetRefs"):
+        if not isinstance(package.get(field), list) or not all(
+            isinstance(item, str) for item in package[field]
+        ):
+            return False
+    steps = package.get("steps")
+    if not isinstance(steps, list):
+        return False
+    dispositions = {
+        "new-visual", "reuse-existing-visual", "resurface-prior-visual",
+        "no-additional-visual-needed", "pathway-compacted",
+    }
+    if any(
+        not isinstance(step, dict)
+        or not isinstance(step.get("reviewStepId"), str)
+        or not isinstance(step.get("visualRoleRef"), str)
+        or not isinstance(step.get("disposition"), str)
+        or step["disposition"] not in dispositions
+        for step in steps
+    ):
+        return False
+    cards = package.get("cards")
+    if not isinstance(cards, list):
+        return False
+    card_strings = (
+        "imagePurpose", "application", "applicationContext", "targetState",
+        "annotationSpace", "portablePrompt",
+    )
+    card_arrays = ("mustShow", "mustNotShow", "provenance", "requestedUiDetails", "blockerReasons")
+    for card in cards:
+        if not isinstance(card, dict) or type(card.get("stepNumber")) is not int:
+            return False
+        if any(not isinstance(card.get(field), str) for field in card_strings):
+            return False
+        if any(
+            not isinstance(card.get(field), list) or not all(
+                isinstance(item, str) for item in card[field]
+            )
+            for field in card_arrays
+        ):
+            return False
+        if (
+            not isinstance(card.get("imageState"), str)
+            or card["imageState"] not in {"action", "result", "action+result"}
+            or not isinstance(card.get("status"), str)
+            or card["status"] not in {"ready", "blocked"}
+            or type(card.get("requiresScreenFidelity")) is not bool
+            or not isinstance(card.get("evidence"), dict)
+        ):
+            return False
+        evidence = card["evidence"]
+        if any(not isinstance(evidence.get(field), list) for field in (
+            "sourceIndexes", "actionIdentity", "stateLocalClaims", "recordingClaimTexts",
+        )):
+            return False
+        if any(type(index) is not int for index in evidence["sourceIndexes"]) or any(
+            not isinstance(text, str) for text in evidence["recordingClaimTexts"]
+        ):
+            return False
+        for action in evidence["actionIdentity"]:
+            if (not isinstance(action, dict) or type(action.get("sourceIndex")) is not int
+                    or not isinstance(action.get("sourceFingerprint"), str)):
+                return False
+        for claim in evidence["stateLocalClaims"]:
+            if (not isinstance(claim, dict) or type(claim.get("sourceIndex")) is not int
+                    or any(not isinstance(claim.get(field), str) for field in (
+                        "text", "kind", "sourceFingerprint", "recordingSha256",
+                    )) or claim["kind"] not in {"accessible-name", "entered-value"}):
+                return False
+    return True
+
 def record_ppux_projection_result(
     payload: Mapping[str, object], request: PpuxProjectionRequest
 ) -> dict[str, object]:
@@ -242,7 +355,7 @@ def record_ppux_projection_result(
             raise PpuxProjectionRecorderError("projection-evidence-identity-mismatch")
 
     status = payload.get("status")
-    if status not in {"success", "blocked", "needs-decision"}:
+    if not isinstance(status, str) or status not in {"success", "blocked", "needs-decision"}:
         raise PpuxProjectionRecorderError("projection-status-invalid")
 
     reason_codes = payload.get("reason_codes")
@@ -250,28 +363,50 @@ def record_ppux_projection_result(
         raise PpuxProjectionRecorderError("projection-reason-invalid")
 
     result = payload.get("projection_result")
+    if status != "success":
+        # Host outcomes without a canonical result may not smuggle one into evidence.
+        if result is not None or payload.get("projection_result_sha256") is not None:
+            raise PpuxProjectionRecorderError("projection-result-invalid")
     if status == "success":
         if not isinstance(result, dict):
             raise PpuxProjectionRecorderError("projection-result-invalid")
         if result.get("formatVersion") != PROJECTION_RESULT_VERSION:
             raise PpuxProjectionRecorderError("projection-result-invalid")
-        if result.get("status") not in {"valid", "blocked"}:
+        if not isinstance(result.get("status"), str) or result["status"] not in {"valid", "blocked"}:
             raise PpuxProjectionRecorderError("projection-result-invalid")
         canonical_bytes = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
         if len(canonical_bytes) > MAX_PROJECTION_RESULT_BYTES:
             raise PpuxProjectionRecorderError("projection-output-oversize")
-        package = result.get("package")
-        if package is not None:
-            if not isinstance(package, dict):
-                raise PpuxProjectionRecorderError("projection-result-invalid")
+        digest = payload.get("projection_result_sha256")
+        if (not isinstance(digest, str) or not _INPUT_REF_RE.fullmatch(digest)
+                or hashlib.sha256(canonical_bytes).hexdigest() != digest):
+            raise PpuxProjectionRecorderError("projection-result-invalid")
+        # Validate the canonical TypeScript field rather than a package alias.
+        package = result.get("tutorialPackage")
+        if (result["status"] == "valid" and not isinstance(package, dict)) or (
+            result["status"] == "blocked" and package is not None
+        ):
+            raise PpuxProjectionRecorderError("projection-result-invalid")
+        for field in _AUTHORITY_FIELDS:
+            if result.get(field) is not False:
+                raise PpuxProjectionRecorderError("projection-authority-violation")
+        if isinstance(package, dict):
             cards = package.get("cards")
-            if isinstance(cards, list) and len(cards) > MAX_PROJECTION_CARDS:
+            if not isinstance(cards, list):
+                raise PpuxProjectionRecorderError("projection-result-invalid")
+            if len(cards) > MAX_PROJECTION_CARDS:
                 raise PpuxProjectionRecorderError("projection-output-oversize")
             for field in _AUTHORITY_FIELDS:
                 if package.get(field) is not False:
                     raise PpuxProjectionRecorderError("projection-authority-violation")
-        if not isinstance(result.get("blockers"), list):
+        if not _canonical_projection_shape_valid(result):
             raise PpuxProjectionRecorderError("projection-result-invalid")
+        expected_reason = (
+            "projection-result-ready" if result["status"] == "valid"
+            else "projection-result-blocked"
+        )
+        if reason_codes != [expected_reason]:
+            raise PpuxProjectionRecorderError("projection-reason-invalid")
 
     diagnostics = payload.get("diagnostics")
     if diagnostics is not None:

@@ -84,7 +84,10 @@ from .host_current_invocation_sources import (
     ResumePlanReader,
     RuntimeConfigurationBuilder,
 )
-from .invocation_reconstruction import reconstruct_governed_invocation
+from .invocation_reconstruction import (
+    InvocationDescriptorLoader,
+    reconstruct_governed_invocation,
+)
 
 CHECKPOINT_STORE_ROOT_ENV_VAR = "AGENT_OS_CHECKPOINT_STORE_ROOT"
 
@@ -137,7 +140,7 @@ class ProductionAdmissionProviders:
     and host clock instead of constructing a second set.
     """
 
-    descriptor_loader: Callable[[str], GovernedInvocationDescriptor]
+    descriptor_loader: InvocationDescriptorLoader
     current_resolver: CanonicalCurrentInvocationResolver
     lease_reader: HostLocalLeaseAdapter
     evaluated_at: str

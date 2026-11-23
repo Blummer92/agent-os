@@ -224,36 +224,46 @@ def test_duplicate_dev_validation_comments_share_identity_but_sha_change_does_no
     assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
 
 
-def test_exact_first_run_validation_selector_is_bounded_and_non_authorizing() -> None:
+def test_retired_first_run_validation_command_is_ignored_and_non_authorizing() -> None:
+    """GCE Wave 1 retired `/agent-os validate-first-run`: the command is no
+    longer admitted, carries no candidate SHA and no trigger identity."""
     result = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA}"))
-    assert result.status == "accepted"
-    assert result.reason == "accepted-first-run-validation-envelope"
-    assert result.first_run_candidate_sha_or_none == FIRST_RUN_SHA
+    assert (result.status, result.reason) == ("ignored", "malformed-trigger")
+    assert result.first_run_candidate_sha_or_none is None
     assert result.handoff_id_or_none is None
     assert result.source_capsule_id_or_none is None
-    assert result.logical_trigger_id_or_none is not None
+    assert result.logical_trigger_id_or_none is None
     assert result.execution_authorized is False
     assert result.scheduler_invoked is False
     assert result.side_effects_performed is False
+    # The serialized evidence schema is preserved: consumers still parse the
+    # field, now always null.
+    assert result.to_dict()["first_run_candidate_sha_or_none"] is None
 
 
-def test_first_run_validation_rejects_noncanonical_sha_and_extra_tokens() -> None:
+def test_retired_first_run_validation_rejects_noncanonical_sha_and_extra_tokens() -> None:
     short = admit(event("/agent-os validate-first-run abc"))
     upper = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA.upper()}"))
     extra = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA} --force"))
     assert (short.status, short.reason) == ("ignored", "malformed-trigger")
     assert (upper.status, upper.reason) == ("ignored", "malformed-trigger")
     assert (extra.status, extra.reason) == ("ignored", "malformed-trigger")
+    assert short.logical_trigger_id_or_none is None
+    assert upper.logical_trigger_id_or_none is None
+    assert extra.logical_trigger_id_or_none is None
 
 
-def test_duplicate_first_run_validation_comments_converge_but_sha_change_does_not() -> None:
+def test_retired_first_run_validation_rerun_and_duplicate_carry_no_identity() -> None:
     first = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA}"))
     duplicate_event = event(f"/agent-os validate-first-run {FIRST_RUN_SHA}")
     duplicate_event["comment"]["id"] = 9982
     duplicate = admit(duplicate_event)
     changed = admit(event(f"/agent-os validate-first-run {'e' * 40}"))
-    assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
-    assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
+    rerun = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA}"), run_attempt=2)
+    for result in (first, duplicate, changed, rerun):
+        assert result.logical_trigger_id_or_none is None
+        assert result.first_run_candidate_sha_or_none is None
+    assert (rerun.status, rerun.reason) == ("blocked", "workflow-rerun")
 
 
 def test_exact_codespaces_diagnostic_trigger_is_bounded_and_non_authorizing() -> None:

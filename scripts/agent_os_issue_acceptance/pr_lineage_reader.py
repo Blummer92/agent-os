@@ -90,7 +90,6 @@ from .github_issue_source import GitHubIssuePageResponse
 from .issue_operational_state import MAX_PRIMARY_CLAIMS, IssueState
 from .lifecycle_stage_acquisition import (
     ASSOCIATION_POLICIES,
-    ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1,
     ASSOCIATION_POLICY_DECLARED_NON_CLOSING_V1,
     LifecycleStageAcquisitionRequest,
     LifecycleStageAcquisitionResult,
@@ -652,7 +651,9 @@ class PrLineageAcquirer:
     observed_at: str
     per_page: int = DEFAULT_PAGE_SIZE
     max_pages: int = DEFAULT_MAX_PAGES
-    association_policy: str = ASSOCIATION_POLICY_CLOSING_DIRECTIVE_V1
+    # Required and keyword-only (#3690 CR-4): the composing caller (the
+    # shadow-run CLI) owns the policy choice; there is no library default.
+    association_policy: str = field(kw_only=True)
     _population: PrPopulation | None = field(default=None, init=False, repr=False)
     _index: dict[int, list[PrReference]] | None = field(default=None, init=False, repr=False)
     _observations: list[dict[str, object]] = field(default_factory=list, init=False, repr=False)

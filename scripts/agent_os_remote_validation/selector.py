@@ -60,6 +60,54 @@ _PROFILE_REASONS = {
 }
 
 
+#: Node projects whose focused commands run on the CI runner, as
+#: ``(project directory, installs its own dependencies, has a lockfile)``.
+#: This table must cover every focused rule whose commands invoke npm/npx;
+#: the rule-coverage test fails if a rule adds an npm project not listed here.
+#: The lockfile of each selected project feeds ``actions/setup-node`` caching.
+#: Teacher OS and capture run ``npm ci`` as registered plan commands; Picture
+#: Perfect Coach needs the workflow's dedicated install step because its plan
+#: command is ``npm test``. The UI cross-platform reference has no lockfile, so
+#: it must never contribute a cache path: it gets explicit no-cache Node setup
+#: instead of silently relying on the runner's default Node.
+_NODE_PROJECTS: tuple[tuple[str, bool, bool], ...] = (
+    ("08_Tooling/instructional-materials-coach/picture-perfect-coach", False, True),
+    ("08_Tooling/teacher-os-web", True, True),
+    ("08_Tooling/instructional-materials-coach/capture", True, True),
+    ("05_Examples/ui-cross-platform-reference", True, False),
+)
+
+
+def node_setup_requirements(commands: tuple[str, ...]) -> dict[str, Any]:
+    """Return the Node setup a selected command set needs; pure and typed.
+
+    ``needs_node`` is derived from actual Node-project commands, not from
+    lockfile existence, so a lockfile-less npm project still gets Node setup.
+    ``lock_paths`` feeds the setup-node npm cache and contains only projects
+    that really have a lockfile. ``install_dirs`` lists projects needing the
+    workflow's separate ``npm ci`` step; projects whose own plan commands
+    install are deliberately excluded so a Teacher OS-only plan never runs the
+    Picture Perfect install. ``no_cache`` is true exactly when Node is needed
+    but no selected project has a lockfile to cache from.
+    """
+    selected = [
+        (directory, self_installs, has_lock)
+        for directory, self_installs, has_lock in _NODE_PROJECTS
+        if any(command.startswith(f"cd {directory} && ") for command in commands)
+    ]
+    lock_paths = tuple(
+        f"{directory}/package-lock.json" for directory, _, has_lock in selected if has_lock
+    )
+    return {
+        "needs_node": bool(selected),
+        "lock_paths": lock_paths,
+        "install_dirs": tuple(
+            directory for directory, self_installs, _ in selected if not self_installs
+        ),
+        "no_cache": bool(selected) and not lock_paths,
+    }
+
+
 def load_rule_map(path: Path | None = None) -> dict[str, Any]:
     """Load rules at the caller boundary; selection itself remains pure."""
     data = json.loads((path or _RULES).read_text(encoding="utf-8"))

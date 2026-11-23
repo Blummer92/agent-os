@@ -7,10 +7,10 @@ actually fires.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import pwd
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +19,6 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[1]
-WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
 SCRIPTS = ROOT / "08_Tooling/agent-os-execution-service/scripts"
 PRIVILEGED = SCRIPTS / "agent-os-host-install"
 UNPRIVILEGED = SCRIPTS / "install-host-runtime"
@@ -398,17 +397,6 @@ def test_privileged_installer_verifies_its_own_path_ancestry() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_workflow_digest_pin_matches_the_tracked_installer() -> None:
-    """The route refuses on mismatch, so a stale pin is a silent outage."""
-    digest = hashlib.sha256(UNPRIVILEGED.read_bytes()).hexdigest()
-    pinned = re.search(
-        r"HOST_INSTALL_SCRIPT_SHA256: ([0-9a-f]{64})",
-        WORKFLOW.read_text(encoding="utf-8"),
-    )
-    assert pinned is not None
-    assert pinned.group(1) == digest
-
-
 def test_documented_bootstrap_establishes_the_helper_directory_first() -> None:
     """GNU install does not create a missing parent, and /usr/local/libexec is
     not part of Debian's stock tree."""
@@ -528,90 +516,107 @@ def test_documented_sudo_rule_authorizes_nothing_the_old_path_needed() -> None:
         assert banned not in block, banned
 
 
-def _case_block() -> str:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    body = text.split('case "$refusal" in', 1)[1].split("esac", 1)[0]
-    return 'case "$refusal" in' + body + "esac"
+# GCE Wave 1: the workflow refusal-mapping `case` block (refusal string ->
+# finite reason code) retired with the host-install step that consumed it.
+# Nothing maps refusals anymore, so a new refusal string can no longer
+# silently default anywhere. The inventory below pins static messages,
+# trust-ancestry messages, and embedded Python's dynamic refusal templates.
+# It is a source-level change detector, not proof of complete execution-path
+# coverage. Selected security-sensitive cases have real-execution tests above.
 
 
-def _classify(refusal: str) -> str:
-    program = (
-        'refusal="$1"\n'
-        "failure_reason=host-runtime-install-failed\n"
-        f"{_case_block()}\n"
-        'printf %s "$failure_reason"\n'
-    )
-    return subprocess.run(
-        ["/bin/sh", "-c", program, "sh", refusal],
-        env={"PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-
-
-@pytest.mark.parametrize(
-    ("refusal", "expected"),
-    [
-        ("privileged installer unavailable", "host-privileged-installer-unavailable"),
-        (
-            "privileged installer must be a root-owned regular file",
-            "host-privileged-installer-unsafe",
-        ),
-        ("privileged installer must run as root", "host-privileged-installer-misuse"),
-        (
-            "privileged installer argv must be exactly --source-sha <sha>",
-            "host-privileged-installer-misuse",
-        ),
-        (
-            "source SHA must be a lowercase 40-hex commit",
-            "host-privileged-installer-misuse",
-        ),
-        (
-            "privileged installer evidence malformed",
-            "host-privileged-installer-evidence-invalid",
-        ),
-        (
-            "privileged installer evidence source mismatch",
-            "host-privileged-installer-evidence-invalid",
-        ),
-        ("staging root must not be a symlink", "host-staging-root-unsafe"),
-        ("staging root is not root-owned 0700", "host-staging-root-unsafe"),
-        ("staged tree must be root-owned", "host-staged-source-unsafe"),
-        (
-            "staged entrypoint installer must not be a symlink",
-            "host-staged-source-unsafe",
-        ),
-        ("staged entrypoint installer missing", "host-staged-source-unsafe"),
-        ("source SHA is not on canonical main", "host-runtime-source-not-main"),
-        ("staged checkout does not match source SHA", "host-runtime-source-mismatch"),
-        ("checkout must be on main", "host-runtime-source-not-main"),
-        ("checkout does not match EXPECTED_SHA", "host-runtime-source-mismatch"),
-        ("passwordless bounded sudo unavailable", "host-passwordless-sudo-unavailable"),
-        ("sudo unavailable", "host-sudo-unavailable"),
-    ],
-)
-def test_every_refusal_maps_to_its_own_finite_reason_code(refusal, expected) -> None:
-    assert _classify(f"{REFUSAL_PREFIX}{refusal}") == expected
-
-
-def test_every_refusal_the_scripts_emit_is_classified() -> None:
-    """A new refusal must be mapped deliberately, never silently defaulted."""
-    emitted = set()
-    for script in (PRIVILEGED, UNPRIVILEGED):
-        text = script.read_text(encoding="utf-8")
-        emitted.update(re.findall(r'fail "([^"$]+)"', text))
-        emitted.update(re.findall(rf'{REFUSAL_PREFIX}([^"$\\]+)\\n', text))
-    # Preconditions the workflow itself guarantees may stay on the default.
-    unmapped = {
+# Every literal refusal and embedded Python f-string refusal template in both
+# retained installer scripts. Placeholder variables in templates are deliberate;
+# the values are not fabricated output from an executed privileged operation.
+PINNED_EMITTED_REFUSALS = frozenset(
+    {
         "EXPECTED_SHA must be a lowercase 40-hex commit",
         "REPOSITORY_ROOT must be absolute",
         "REPOSITORY_ROOT must be a git checkout",
+        "checkout does not match EXPECTED_SHA",
+        "checkout must be on main",
+        "entrypoint installer was not idempotent",
+        "entrypoint owner/group/mode mismatch",
+        "expected one agent-memory-context-manager wheel",
+        "expected one agent-os-execution-service wheel",
+        "expected one workflow-scheduler wheel",
+        "host OS identity unavailable",
+        "passwordless bounded sudo unavailable",
+        "privileged installer argv must be exactly --source-sha <sha>",
+        "privileged installer evidence malformed",
+        "privileged installer evidence source mismatch",
+        "privileged installer must be a root-owned regular file",
+        "privileged installer must run as root",
+        "privileged installer path is untrusted",
+        "privileged installer unavailable",
+        "python3 pip unavailable",
+        "qualified host must be Debian",
+        "qualified host must be Debian 12",
+        "runtime package root escaped site root: {package_name}",
+        "runtime package root unavailable: {package_name}",
+        "runtime package symlink directory: {package_name}",
+        "runtime package unsafe file: {package_name}",
+        "source SHA is not on canonical main",
+        "source SHA must be a lowercase 40-hex commit",
+        "staged checkout does not match source SHA",
+        "staged entrypoint installer missing",
+        "staged entrypoint installer must not be a symlink",
+        "staged tree must be root-owned",
+        "staging path is untrusted",
+        "staging root is not root-owned 0700",
+        "staging root must not be a symlink",
+        "sudo unavailable",
     }
-    for refusal in sorted(emitted - unmapped):
-        assert (
-            _classify(f"{REFUSAL_PREFIX}{refusal}") != "host-runtime-install-failed"
-        ), refusal
+)
+
+
+def _emitted_refusals(script: Path) -> set[str]:
+    text = script.read_text(encoding="utf-8")
+    emitted = set()
+    emitted.update(re.findall(r'fail "([^"$]+)"', text))
+    emitted.update(re.findall(rf"{REFUSAL_PREFIX}([^\"$\\]+)\\n", text))
+    # The privileged script also emits from embedded Python using dynamic
+    # f-strings. Pin their templates including placeholders; do not mistake
+    # a source inventory for executed-path coverage.
+    emitted.update(
+        re.findall(
+            rf'f"{re.escape(REFUSAL_PREFIX)}([^"\n]*\{{[^"\n]+\}}[^"\n]*)"',
+            text,
+        )
+    )
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(
+            ("require_trusted_path ", "require_trusted_ancestry ")
+        ):
+            continue
+        try:
+            message = shlex.split(stripped)[-1]
+        except ValueError:
+            continue
+        if "$" not in message:
+            emitted.add(message)
+    return emitted
+
+
+def test_emitted_refusal_inventory_is_pinned() -> None:
+    """Pin static messages and dynamic Python templates in both scripts."""
+    emitted = _emitted_refusals(PRIVILEGED) | _emitted_refusals(UNPRIVILEGED)
+    assert emitted == set(PINNED_EMITTED_REFUSALS)
+
+
+def test_dynamic_python_refusal_templates_are_detected(tmp_path: Path) -> None:
+    """Changing a dynamic embedded-Python refusal must break the inventory."""
+    source = PRIVILEGED.read_text(encoding="utf-8")
+    before = "runtime package root unavailable: {package_name}"
+    assert before in source
+    altered = tmp_path / "privileged-install-with-changed-refusal"
+    altered.write_text(
+        source.replace(before, "runtime package root missing: {package_name}", 1),
+        encoding="utf-8",
+    )
+    assert _emitted_refusals(altered) != set(PINNED_EMITTED_REFUSALS)
+    assert "runtime package root missing: {package_name}" in _emitted_refusals(altered)
 
 
 # --------------------------------------------------------------------------

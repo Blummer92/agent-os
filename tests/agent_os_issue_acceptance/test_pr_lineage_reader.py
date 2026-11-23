@@ -899,7 +899,7 @@ def test_acquirer_construction_is_validated() -> None:
     good = dict(
         repository=REPO, issue_transport=FakeIssueTransport(), page_reader=FakePageReader([]),
         detail_reader=FakeDetailReader([]), source_revision_reader=MainSha(MAIN_SHA),
-        observed_at=OBSERVED_AT,
+        observed_at=OBSERVED_AT, association_policy="closing-directive-v1",
     )
     PrLineageAcquirer(**good)
     for bad in (
@@ -909,6 +909,8 @@ def test_acquirer_construction_is_validated() -> None:
         {"source_revision_reader": "not-callable"},
         {"per_page": 0},
         {"max_pages": 0},
+        {"association_policy": "automatic"},
+        {"association_policy": None},
     ):
         with pytest.raises((TypeError, ValueError)):
             PrLineageAcquirer(**{**good, **bad})
@@ -1012,3 +1014,45 @@ def test_declared_non_closing_incomplete_pages_and_detail_drift_fail_closed() ->
     result = acquirer.acquire_lifecycle_stage(REPO, ISSUE).result
     assert result.outcome is LifecycleAcquisitionOutcome.UNAVAILABLE
     assert result.lifecycle_stage is None
+
+
+# #3690 CR-4: the composing caller must name the association policy; the
+# reader has no library default that could diverge from the CLI default.
+def _acquirer_fields_without_policy() -> dict[str, object]:
+    return dict(
+        repository=REPO, issue_transport=FakeIssueTransport(), page_reader=FakePageReader([]),
+        detail_reader=FakeDetailReader([]), source_revision_reader=MainSha(MAIN_SHA),
+        observed_at=OBSERVED_AT,
+    )
+
+
+def test_acquirer_association_policy_is_required() -> None:
+    with pytest.raises(TypeError, match="association_policy"):
+        PrLineageAcquirer(**_acquirer_fields_without_policy())  # type: ignore[call-arg]
+
+
+def test_acquirer_association_policy_is_keyword_only() -> None:
+    positional = (*_acquirer_fields_without_policy().values(), 100, 40)
+    with pytest.raises(TypeError):
+        PrLineageAcquirer(*positional, "closing-directive-v1")  # type: ignore[misc]
+
+
+def test_declared_non_closing_references_past_the_bound_fail_closed() -> None:
+    items = [
+        pr_item(n, body=f"Part of #{ISSUE}\nNon-closing: #{ISSUE}")
+        for n in range(1, MAX_PRIMARY_CLAIMS + 2)
+    ]
+    attempt, acquirer, _, details, _ = acquire(
+        items, association_policy="declared-non-closing-v1",
+    )
+    assert attempt.result.reason_codes == ("lifecycle-acquisition.incomplete-enumeration",)
+    assert details.calls == []  # bounded: no detail reads past the evaluator's bound
+    lineage = acquirer.observations[0]["lineage"]
+    assert lineage["declared_non_closing_references"] == list(range(1, MAX_PRIMARY_CLAIMS + 2))
+    assert REASON_CLAIMS_EXCEED_BOUND in lineage["enumeration_note"]
+    # Under the closing-directive policy the same references are not claims and
+    # are never counted toward the bound: semantics are unchanged by CR-4.
+    legacy, legacy_acquirer, _, legacy_details, _ = acquire(items)
+    assert legacy.result.reason_codes != ("lifecycle-acquisition.incomplete-enumeration",)
+    assert legacy_details.calls == []
+    assert "association_policy" not in legacy_acquirer.observations[0]["lineage"]

@@ -100,6 +100,10 @@ class AcceptanceInput:
     # callers such as the CLI must preserve that distinction explicitly.
     changed_files_supplied: bool = True
     diff_supplied: bool = False
+    # Raw merged-documentation evidence records (#3724), as parsed from JSON.
+    # They are validated against the evaluated issue inside the required-docs
+    # check; an empty tuple preserves the legacy per-PR contract exactly.
+    merged_doc_evidence: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True)

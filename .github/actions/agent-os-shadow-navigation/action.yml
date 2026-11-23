@@ -25,6 +25,14 @@ inputs:
     description: Optional finite-mission evidence-ledger identifier.
     required: false
     default: ""
+  scanner_evidence_jscpd:
+    description: Optional generated jscpd producer JSON path, advisory only.
+    required: false
+    default: ""
+  scanner_evidence_pyan3:
+    description: Optional generated pyan3 producer JSON path, advisory only.
+    required: false
+    default: ""
 
 outputs:
   report_path:
@@ -37,6 +45,9 @@ runs:
     - name: Run shadow navigation
       id: shadow
       shell: bash
+      env:
+        JSCPD_ADVISORY_PATH: ${{ inputs.scanner_evidence_jscpd }}
+        PYAN3_ADVISORY_PATH: ${{ inputs.scanner_evidence_pyan3 }}
       run: |
         set -euo pipefail
 
@@ -68,6 +79,13 @@ runs:
 
         if [ -n "${{ inputs.mission_id }}" ]; then
           args+=(--mission-id "${{ inputs.mission_id }}")
+        fi
+
+        if [ -n "$JSCPD_ADVISORY_PATH" ]; then
+          args+=(--scanner-evidence "$JSCPD_ADVISORY_PATH")
+        fi
+        if [ -n "$PYAN3_ADVISORY_PATH" ]; then
+          args+=(--scanner-evidence "$PYAN3_ADVISORY_PATH")
         fi
 
         python scripts/agent-os-shadow-run.py "${args[@]}"

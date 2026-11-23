@@ -159,6 +159,43 @@ existing admission (bugs: the duplicate and root-cause admission). Continuation,
 Codespaces and GCE routing, CKR6 consumption and backlog selection stay with their
 existing owners.
 
+### ChatGPT host request-triage consumer (#3308)
+
+The existing execution-service MCP host now exposes
+`reconcile_agent_os_proposed_work_tool`, which calls the one merged
+`navigation_registry.reconciliation.classify_proposed_work` implementation
+through the thin read-only `work_reconciliation_facade`. The existing
+`plan_connected_issue_creation_tool` can receive the same
+`reconciliation_evidence`; when supplied, any disposition other than
+`candidate-new-work` denies the connected create plan before the existing
+#2660 duplicate/root-cause admission. The candidate disposition **never**
+bypasses that downstream admission.
+
+The host must supply current bounded evidence from *existing* owners, never
+from newly implemented readers: current complete GitHub issue search and issue
+readback; #3441 lifecycle/PR-lineage acquisition under its actually selected
+association policy; matched reusable-capability registry rows; and conditional
+#3307 preflight after #3306 chronology/currentness evaluation. The evidence
+object contains `subject`, `github_search_complete`,
+`github_issue_evidence_current`, `pr_lineage_evidence_current`,
+`capability_registry_evidence_current`, `lineage`, `capabilities`,
+`navigation_applicable`, `navigation_evidence_current`, and
+`navigation_outcome`. Complete bounded empty collections are valid only
+when the readers actually proved the relevant search was complete. Missing,
+stale, malformed, contradictory or unverified facts yield `manual-review`.
+
+The new host tool is a pure projection with no GitHub/Sheets/Notion I/O,
+write authority, search algorithm, new registry, persistent state or
+background execution. The host must not omit this preflight before proposing
+new Agent OS work. The older `plan_connected_issue_creation_tool` signature
+remains backward-compatible for existing hosts, so **mandatory runtime
+enforcement of the preflight on every legacy call and live iOS host
+acceptance remain separate verification requirements**, not established by
+a passing unit test. Neither this integration nor an input flag attests that
+real remote evidence was fetched; acquisition and exact currentness must be
+proved by the host and independent QA.
+
+
 ## Roadmap
 
 1. Approve architecture and tests.

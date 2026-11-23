@@ -25,7 +25,10 @@ from .dev_validation_codespaces import (
 )
 
 _CODESPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,99}$", re.ASCII)
-_GITHUB_TOKEN_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN")
+_GITHUB_TOKEN_ENV_KEYS = (
+    "GH_TOKEN", "GITHUB_TOKEN",
+    "AGENT_OS_CODESPACES_READ_TOKEN", "AGENT_OS_CODESPACES_LIFECYCLE_TOKEN",
+)
 Run =Callable[..., subprocess.CompletedProcess[str]]
 Sleep = Callable[[float], None]
 Resolve = Callable[[], CodespaceSelection]

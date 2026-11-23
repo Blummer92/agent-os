@@ -33,20 +33,24 @@ class FakeRunner:
     observations: list[BranchUpdateObservation]
     calls: list[tuple[tuple[str, ...], str, dict[str, str]]] = field(default_factory=list)
     head_subject: str = ""
+    # Legacy tests can opt into synthetic successful lineage probes; new
+    # strict tests exercise every Git observation in its real call order.
+    strict_lineage: bool = False
 
     def run(self, argv, *, cwd, env):
         argv = tuple(argv)
         # #2921 adds read-only lineage probes before the existing preparation
         # sequence. Legacy provider tests model one admitted feature path and keep
         # their historical call assertions focused on the mutation lifecycle.
-        if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
-            return observation(stdout="scripts/example.py\n")
-        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
-            return observation(stdout=f"{OLD}\n")
-        if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
-            return observation(stdout="scripts/example.py\n")
-        if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
-            return observation()
+        if not self.strict_lineage:
+            if len(argv) >= 6 and argv[0:3] == ("git", "diff", "--name-only") and argv[-2:] == (MERGE_BASE, OLD):
+                return observation(stdout="scripts/example.py\n")
+            if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--no-merges" in argv:
+                return observation(stdout=f"{OLD}\n")
+            if len(argv) >= 2 and argv[0:2] == ("git", "diff-tree"):
+                return observation(stdout="scripts/example.py\n")
+            if len(argv) >= 3 and argv[0:3] == ("git", "rev-list", "--first-parent") and "--merges" in argv:
+                return observation()
         self.calls.append((argv, cwd, dict(env)))
         if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
             return observation(stdout=f"{self.head_subject}\n")
@@ -116,7 +120,6 @@ class FakeRepo:
     def compare(self, base, head):
         return SimpleNamespace(status="diverged")
 
-        return [SimpleNamespace(name=label) for label in ("branch:behind", "branch:current", "pr:draft", "validation:pending", "review:clear")]
 
 
 class FakeGithub:
@@ -439,13 +442,74 @@ def test_missing_merge_base_blocks_before_rebase_or_push():
 
 
 def test_rebase_failure_is_bounded_and_does_not_attempt_push():
+    # #3772: a rejected replay falls back to bounded merge-tree preparation;
+    # when the final tree also conflicts the attempt stays blocked and no
+    # remote transport is reached.
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(),
         observation(return_code=1),
+        observation(),
+        observation(return_code=1),
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
-    assert result.reason_code == "rebase-rejected"
+    assert result.reason_code == "reconciliation.semantic-conflict"
+    assert runner.calls[3][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[4][0] == ("git", "rebase", "--abort")
+    assert runner.calls[5][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_rebase_rejected_falls_back_to_merge_tree_candidate_and_updates_once():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(),
+        observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "updated"
+    assert result.old_head_sha == OLD and result.new_head_sha == NEW
+    assert runner.calls[3][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[4][0] == ("git", "rebase", "--abort")
+    assert runner.calls[5][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert runner.calls[10][0] == ("git", "diff", "--name-only", "--no-renames", MAIN, NEW)
+    assert sum("push" in call[0] for call in runner.calls) == 1
+
+
+def test_rebase_abort_failure_blocks_without_fallback_or_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(return_code=1),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "rebase-abort-rejected"
+    assert all("merge-tree" not in call[0] for call in runner.calls)
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_rebase_abort_uncertain_maps_to_ambiguous_without_fallback():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+        observation(return_code=None, timed_out=True, termination_confirmed=False),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "ambiguous"
+    assert result.reason_code == "rebase-abort-outcome-uncertain"
+    assert all("merge-tree" not in call[0] for call in runner.calls)
     assert all("push" not in call[0] for call in runner.calls)
 
 
@@ -471,6 +535,97 @@ def test_unproven_rebased_head_blocks_before_remote_transport():
     assert all("push" not in call[0] for call in runner.calls)
 
 
+def test_rebased_head_unchanged_blocks_before_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(),
+        observation(stdout=f"{OLD}\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "blocked"
+    assert result.reason_code == "rebased-head-unchanged"
+    assert result.new_head_sha is None
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_conflicted_snapshot_routes_directly_to_merge_tree_without_rebase():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(),
+        observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot(mergeability="conflicted")), runner))
+    assert result.status == "updated"
+    assert result.new_head_sha == NEW
+    assert runner.calls[2][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert all("rebase" not in argv for argv, _, _ in runner.calls)
+    assert sum("push" in argv for argv, _, _ in runner.calls) == 1
+
+
+def test_strict_lineage_runner_rejects_unattributed_scope_before_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout="unadmitted.txt\n"),
+    ], strict_lineage=True)
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "blocked"
+    assert result.reason_code == "lineage-integrity.admitted-scope-mismatch"
+    assert len(runner.calls) == 2
+    assert runner.calls[1][0] == ("git", "diff", "--name-only", "--no-renames", MERGE_BASE, OLD)
+    assert all("push" not in argv for argv, _, _ in runner.calls)
+
+
+def test_strict_lineage_runner_requires_explicit_history_before_one_push():
+    remote_ref = "refs/heads/agent/1237-publication-required-continuation"
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(),
+        observation(),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout=f"{OLD}\t{remote_ref}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\t{remote_ref}\n"),
+    ], strict_lineage=True)
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "updated"
+    assert result.new_head_sha == NEW
+    assert runner.observations == []
+    assert runner.calls[1][0] == ("git", "diff", "--name-only", "--no-renames", MERGE_BASE, OLD)
+    assert runner.calls[2][0] == ("git", "rev-list", "--first-parent", "--no-merges", f"{MERGE_BASE}..{OLD}")
+    assert runner.calls[3][0] == ("git", "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", OLD)
+    assert runner.calls[4][0] == ("git", "rev-list", "--first-parent", "--merges", f"{MERGE_BASE}..{OLD}")
+    assert sum("push" in argv for argv, _, _ in runner.calls) == 1
+
+
+def test_transport_rejection_blocks_with_exact_reason_and_no_second_push():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(return_code=1),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "blocked"
+    assert result.reason_code == "transport.push-rejected"
+    assert result.new_head_sha is None
+    assert sum("push" in argv for argv, _, _ in runner.calls) == 1
+
+
 def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
@@ -482,6 +637,8 @@ def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
     assert result.status == "ambiguous"
+    assert result.reason_code is not None and result.reason_code.startswith("transport.")
+    assert result.new_head_sha is None
     assert sum("push" in call[0] for call in runner.calls) == 1
 
 
@@ -737,6 +894,106 @@ def _local_integrity_provider(repo):
     )
 
 
+def test_conflicted_snapshot_uses_native_merge_tree_without_rebase(tmp_path):
+    # The snapshot is deliberately marked conflicted to prove topology
+    # dispatch: Git's independent final-tree reconciliation is still clean.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "switch", "-qc", "feature")
+    old = _commit_file(repo, "scripts/example.py", "feature\n", "feature")
+    _git(repo, "switch", "-q", "main")
+    main = _commit_file(repo, "main.txt", "main\n", "main")
+
+    remote = tmp_path / "remote.git"
+    remote.mkdir()
+    _git(remote, "init", "--bare", "-q")
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "origin", f"{old}:refs/heads/feature")
+    _git(repo, "checkout", "-q", "--detach", old)
+
+    live = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os", pr_number=1363,
+        base_branch="main", base_sha=main, head_branch="feature",
+        head_sha=old, current_main_sha=main, branch_state="behind",
+        mergeability="conflicted", changed_paths=("scripts/example.py",),
+    )
+    subject = _local_integrity_provider(repo)
+    subject.backing = FakeBacking(live)
+    result = subject.rebase_onto_main(
+        "Blummer92/agent-os", 1363, expected_head_sha=old,
+        expected_base_sha=main, current_main_sha=main,
+    )
+    assert result.status == "updated"
+    assert result.new_head_sha is not None and result.new_head_sha != old
+    assert _git_out(repo, "rev-parse", f"{result.new_head_sha}^1") == main
+    assert _git_out(repo, "diff", "--name-only", "--no-renames", main, result.new_head_sha) == "scripts/example.py"
+    assert all("rebase" not in argv for argv in subject.runner.calls)
+    assert sum("push" in argv for argv in subject.runner.calls) == 1
+
+
+def test_linear_replay_conflict_falls_back_to_merge_tree_candidate_with_local_git(tmp_path):
+    # #3772 shape: a linear feature lineage whose intermediate replay conflicts
+    # with current main while the final tree reconciles cleanly. The fallback
+    # must restore the working tree and produce the bounded merge-tree
+    # candidate through the same preparation path a conflicted branch uses.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+    _commit_file(repo, "changelog.txt", "anchor\n", "base")
+    _git(repo, "switch", "-qc", "agent/linear-replay-conflict")
+    _commit_file(repo, "changelog.txt", "feature entry\nanchor\n", "feature 1")
+    _commit_file(repo, "changelog.txt", "anchor\nfeature entry\n", "feature 2 repair")
+    feature_head = _git_out(repo, "rev-parse", "HEAD")
+    _git(repo, "switch", "-q", "main")
+    _commit_file(repo, "changelog.txt", "main entry\nanchor\n", "main advance")
+    current_main = _git_out(repo, "rev-parse", "HEAD")
+    merge_base = _git_out(repo, "merge-base", feature_head, current_main)
+
+    _git(repo, "checkout", "-q", "--detach", feature_head)
+    replay = _git(
+        repo,
+        "rebase",
+        "--no-autostash",
+        "--onto",
+        current_main,
+        merge_base,
+        feature_head,
+        check=False,
+    )
+    assert replay.returncode != 0
+
+    live = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os",
+        pr_number=3772,
+        base_branch="main",
+        base_sha=current_main,
+        head_branch="agent/linear-replay-conflict",
+        head_sha=feature_head,
+        current_main_sha=current_main,
+        branch_state="behind",
+        mergeability="mergeable",
+        changed_paths=("changelog.txt",),
+    )
+    subject = _local_integrity_provider(repo)
+    subject.backing = FakeBacking(live)
+    candidate = subject._rebase_rejected_fallback(
+        expected_head_sha=feature_head,
+        current_main_sha=current_main,
+        admitted_paths=live.changed_paths,
+    )
+
+    assert isinstance(candidate, str)
+    assert _git_out(repo, "rev-parse", f"{candidate}^1") == current_main
+    assert _git_out(repo, "diff", "--name-only", "--no-renames", current_main, candidate) == "changelog.txt"
+    assert (repo / "changelog.txt").read_text(encoding="utf-8") == "main entry\nanchor\nfeature entry\n"
+
+
 def _multiple_merge_fixture(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -825,6 +1082,61 @@ def test_multiple_merges_reject_expanded_scope_before_publication(tmp_path):
     assert result.reason_code == "lineage-integrity.admitted-scope-mismatch"
     assert result.new_head_sha is None
     assert all("push" not in argv for argv in subject.runner.calls)
+
+
+def test_lineage_commit_history_probe_failure_blocks_without_publication(monkeypatch):
+    runner = FakeRunner([])
+    original_run = runner.run
+
+    def fail_history(argv, *, cwd, env):
+        if tuple(argv[:4]) == ("git", "rev-list", "--first-parent", "--no-merges"):
+            return observation(return_code=1)
+        return original_run(argv, cwd=cwd, env=env)
+
+    monkeypatch.setattr(runner, "run", fail_history)
+    result = provider(FakeBacking(snapshot()), runner)._lineage_integrity_blocker(
+        merge_base_sha=MERGE_BASE, expected_head_sha=OLD,
+        admitted_paths=("scripts/example.py",),
+    )
+    assert result == "lineage-integrity.commit-history-unavailable"
+    assert all("push" not in argv for argv, _, _ in runner.calls)
+
+
+def test_lineage_malformed_merge_parents_block_before_transport():
+    class MergeHistoryRunner(FakeRunner):
+        def run(self, argv, *, cwd, env):
+            if tuple(argv[:4]) == ("git", "rev-list", "--first-parent", "--merges"):
+                self.calls.append((tuple(argv), cwd, dict(env)))
+                return observation(stdout=f"{MERGE_COMMIT}\n")
+            return super().run(argv, cwd=cwd, env=env)
+
+    runner = MergeHistoryRunner([observation(stdout=f"{MERGE_COMMIT}\n")])
+    result = provider(FakeBacking(snapshot()), runner)._lineage_integrity_blocker(
+        merge_base_sha=MERGE_BASE, expected_head_sha=OLD,
+        admitted_paths=("scripts/example.py",),
+    )
+    assert result == "lineage-integrity.merge-parents-ambiguous"
+    assert all("push" not in argv for argv, _, _ in runner.calls)
+
+
+def test_lineage_semantic_conflict_blocks_without_transport():
+    class MergeHistoryRunner(FakeRunner):
+        def run(self, argv, *, cwd, env):
+            if tuple(argv[:4]) == ("git", "rev-list", "--first-parent", "--merges"):
+                self.calls.append((tuple(argv), cwd, dict(env)))
+                return observation(stdout=f"{MERGE_COMMIT}\n")
+            return super().run(argv, cwd=cwd, env=env)
+
+    runner = MergeHistoryRunner([
+        observation(stdout=f"{MERGE_COMMIT} {MERGE_BASE} {OLD}\n"),
+        observation(return_code=1),
+    ])
+    result = provider(FakeBacking(snapshot()), runner)._lineage_integrity_blocker(
+        merge_base_sha=MERGE_BASE, expected_head_sha=OLD,
+        admitted_paths=("scripts/example.py",),
+    )
+    assert result == "lineage-integrity.semantic-conflict"
+    assert all("push" not in argv for argv, _, _ in runner.calls)
 
 
 def test_lineage_integrity_rejects_path_introduced_only_by_hand_built_merge(tmp_path):

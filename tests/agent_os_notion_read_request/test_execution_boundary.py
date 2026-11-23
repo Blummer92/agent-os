@@ -120,10 +120,17 @@ def test_workspace_wide_search_is_never_dispatched(verified_catalog) -> None:
             assert call["max_pages"] == 1; assert call["max_results"] <= 24
 
 
-def test_read_route_never_requires_gce(verified_catalog) -> None:
-    # #2816: the read fails closed on the schema mismatch before any
-    # dispatch beyond the bounded read-only calls, so no GCE surface is
-    # ever touched on this route.
+def test_coursewide_filter_fails_closed_before_any_gce_dependency_can_arise(verified_catalog) -> None:
+    # Renamed (EXP-S5): the old name claimed a GCE property this body never
+    # proves. What this body actually proves is that the read dies at the
+    # #2816/#3253/#3254 filter-vocabulary step (filter-property-unavailable)
+    # after only the bounded read-only dispatches, so no later step -- GCE
+    # or otherwise -- is ever reached on this path. The actual GCE refusal
+    # is proven by 08_Tooling/workflow-scheduler/tests/
+    # test_2283_notion_read_ingress.py::
+    # test_accepted_notion_read_envelope_is_never_routed_to_gce.
+    # NOTE: the rename changes this test's node ID; no other file in the
+    # repository referenced the old node ID (grep-verified).
     with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
         run(verified_catalog, RecordingExecutor())
 
@@ -159,18 +166,22 @@ def test_visual_assets_are_retrieved_through_the_canonical_unit_relation(verifie
     assert "reusable across units" not in repr(executor.calls).lower()
 
 
-def test_title_or_filename_similarity_cannot_substitute_for_the_relation(verified_catalog) -> None:
+def test_coursewide_filter_fails_closed_before_any_similarity_substitution_is_reached(verified_catalog) -> None:
     executor = RecordingExecutor(assets=[
         {"asset_id":"asset-photography-foundations-lookalike","exists":True,"approved_for_requested_use":True,"approved_student_reuse":True,"source_revision":9,"canonical_unit_relation":False},
         {"asset_id":APPROVED_ASSET,"exists":True,"approved_for_requested_use":True,"approved_student_reuse":True,"source_revision":3,"canonical_unit_relation":True},
     ])
-    # #2816: the read fails closed on the schema mismatch before any asset
-    # normalization, so similarity can never substitute for the relation.
+    # Renamed (EXP-S5 neighbor audit): the old name claimed a substitution
+    # property this body never reaches -- the read dies at the
+    # filter-vocabulary step before any asset normalization, so whether
+    # similarity could substitute for the relation is never tested here.
+    # NOTE: the rename changes this test's node ID; no other file in the
+    # repository referenced the old node ID (grep-verified).
     with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
         run(verified_catalog, executor)
 
 
-def test_public_projection_does_not_expose_internal_visual_library_identity(verified_catalog) -> None:
+def test_coursewide_filter_fails_closed_before_any_projection_is_produced(verified_catalog) -> None:
     executor = RecordingExecutor(assets=[{
         "asset_id": APPROVED_ASSET,
         "exists": True,
@@ -183,24 +194,46 @@ def test_public_projection_does_not_expose_internal_visual_library_identity(veri
             "drive_file_id": "private-drive-file-id",
         },
     }])
-    # #2816: the read fails closed before any result is produced or
-    # projected, so no internal identity can leak through projection.
+    # Renamed (EXP-S5 neighbor audit): the old name read as a general
+    # projection guarantee, but this body never exercises projection code
+    # -- the read fails closed before any result is produced or projected.
+    # The new name states only what this body proves.
+    # NOTE: the rename changes this test's node ID; no other file in the
+    # repository referenced the old node ID (grep-verified).
     with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
         run(verified_catalog, executor)
 
 
-def test_asset_existence_is_not_approved_use_or_production_authority(verified_catalog) -> None:
-    # #2816: the read fails closed on the schema mismatch before any asset
-    # evidence is normalized, so existence can never be mistaken for
-    # approval or production authority.
+def test_asset_authority_is_undecided_when_coursewide_filter_fails_closed(verified_catalog) -> None:
+    # Renamed (EXP-S5): the old name claimed an asset-authority property
+    # this body never reaches. What this body actually proves is that the
+    # read dies at the filter-vocabulary step before any asset evidence is
+    # normalized, so no eligibility or authority decision happens here at
+    # all. The existence != eligibility != production-authority contract
+    # is proven at the state-resolution layer, not here:
+    # tests/test_current_curriculum_state.py::
+    #   test_asset_exists_but_is_not_reusable_and_required_blocks,
+    #   test_approved_reusable_asset_reports_eligibility_without_authority,
+    #   test_ambiguous_asset_eligibility_needs_reconciliation.
+    # A run()-level asset oracle is blocked until the #2816/#3253/#3254
+    # filter vocabulary gap is resolved.
+    # NOTE: the rename changes this test's node ID; no other file in the
+    # repository referenced the old node ID (grep-verified).
     with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
         run(verified_catalog, RecordingExecutor())
 
 
-def test_unapproved_assets_never_become_eligible(verified_catalog) -> None:
+def test_coursewide_filter_fails_closed_before_any_eligibility_evaluation(verified_catalog) -> None:
     executor = RecordingExecutor(assets=[{"asset_id":UNAPPROVED_ASSET,"exists":True,"approved_for_requested_use":True,"approved_student_reuse":False,"source_revision":2,"canonical_unit_relation":True}])
-    # #2816: the read fails closed on the schema mismatch before any
-    # eligibility evaluation, so no unapproved asset can become eligible.
+    # Renamed (EXP-S5 neighbor audit): the old name claimed an eligibility
+    # property this body never reaches -- the read dies at the
+    # filter-vocabulary step before any eligibility evaluation, so whether
+    # an unapproved asset could become eligible is never tested here. The
+    # eligibility contract is proven at the state-resolution layer:
+    # tests/test_current_curriculum_state.py::
+    # test_asset_exists_but_is_not_reusable_and_required_blocks.
+    # NOTE: the rename changes this test's node ID; no other file in the
+    # repository referenced the old node ID (grep-verified).
     with pytest.raises(CurriculumReadError, match="filter-property-unavailable"):
         run(verified_catalog, executor)
 

@@ -11,6 +11,7 @@ from agent_os_execution_service.production_governed_resume_factory import (
     ProductionGovernedResumeFactoryError,
     _rebuild_advisory_result,
     build_production_governed_resume_bindings_for_handoff,
+    build_production_host_bootstrap_for_handoff,
 )
 from scripts.agent_os_execution_capabilities.approved_projection import (
     GovernedProjectionEvidenceResult,
@@ -227,6 +228,69 @@ def test_factory_consumes_canonical_runtime_request_into_1319(monkeypatch, tmp_p
     assert bootstrap_kwargs["run_verifier"] is verifier
     assert bootstrap_kwargs["runtime_request"] is request
     assert captured["cancelled"]() is False
+
+
+def test_bound_bootstrap_helper_returns_the_same_bootstrap_the_factory_wraps(monkeypatch, tmp_path):
+    """The Gate 2 bound path and the governed-resume factory share one binding."""
+    descriptor = SimpleNamespace(
+        handoff_id=HANDOFF_ID, repository="Blummer92/agent-os", issue_number=1217,
+        candidate_packet_id="candidate-packet:test", invocation_id=INVOCATION_ID,
+        source_sha=HEAD_SHA, required_environment_id="required-environment:test",
+        dependency_readiness_evidence_id="dependency-readiness:test",
+    )
+    packet = SimpleNamespace(
+        packet_id=descriptor.candidate_packet_id, repository=descriptor.repository,
+        issue_number=descriptor.issue_number, invocation_id=descriptor.invocation_id,
+        candidate_sha=descriptor.source_sha,
+    )
+    spec = SimpleNamespace(required_environment_id=descriptor.required_environment_id)
+    capsule = SimpleNamespace(
+        handoff_id=HANDOFF_ID, candidate_packet=packet,
+        required_environment_spec=spec, validation_plan_id="validation-plan:test",
+    )
+    request = SimpleNamespace(invocation_descriptor=descriptor, restart_capsule=capsule)
+    loaded = SimpleNamespace(request=request, source="runtime-execution-request")
+    configuration = SimpleNamespace(checkpoint_store_root=tmp_path)
+    readiness = object()
+    advisory = object()
+    transport = object()
+    verifier = object()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(factory, "load_production_host_configuration", lambda: configuration)
+    monkeypatch.setattr(factory, "canonical_evaluated_at", lambda: "2026-08-21T12:00:00Z")
+    monkeypatch.setattr(factory, "load_runtime_execution_request_or_legacy", lambda root, handoff: loaded)
+    monkeypatch.setattr(factory, "_bind_descriptor_and_capsule", lambda *args: None)
+    monkeypatch.setattr(factory, "load_dependency_readiness", lambda root, identity: readiness)
+    monkeypatch.setattr(factory, "_rebuild_advisory_result", lambda *args: advisory)
+    monkeypatch.setattr(factory, "LiveRepositoryEvidenceReader", lambda **kwargs: captured.setdefault("reader_kwargs", kwargs) or object())
+    monkeypatch.setattr(factory, "build_host_github_read_transport_from_environment", lambda: transport)
+    monkeypatch.setattr(factory, "build_subprocess_verifier_runner", lambda: verifier)
+
+    bootstrap = object()
+
+    def build_bootstrap(**kwargs):
+        captured["bootstrap_kwargs"] = kwargs
+        return bootstrap
+
+    monkeypatch.setattr(factory, "build_production_host_bootstrap", build_bootstrap)
+    result = build_production_host_bootstrap_for_handoff(HANDOFF_ID)
+    assert result is bootstrap
+    assert captured["bootstrap_kwargs"]["runtime_request"] is request
+    assert captured["bootstrap_kwargs"]["configuration"] is configuration
+    assert captured["bootstrap_kwargs"]["evaluated_at"] == "2026-08-21T12:00:00Z"
+    assert captured["reader_kwargs"]["dependency_readiness"] is readiness
+    assert captured["reader_kwargs"]["validation_result"] is advisory
+
+
+def test_no_cancellation_probe_accepts_the_protocol_checkpoint_argument():
+    """Self-QA finding: the probe must match CancellationProbe, not crash on it."""
+    from agent_os_execution_service.production_governed_resume_factory import (
+        _no_cancellation_requested,
+    )
+
+    assert _no_cancellation_requested() is False
+    assert _no_cancellation_requested(object()) is False
 
 
 def test_factory_fails_closed_when_canonical_or_legacy_runtime_load_fails(

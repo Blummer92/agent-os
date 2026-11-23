@@ -11,6 +11,9 @@
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/sshd:1": {}
   },
+  "containerEnv": {
+    "AGENT_OS_CHECKPOINT_STORE_ROOT": "/workspaces/agent-os-state/checkpoints"
+  },
   "remoteEnv": {
     "AGENT_OS_NETWORK_MODE": "local-only"
   },

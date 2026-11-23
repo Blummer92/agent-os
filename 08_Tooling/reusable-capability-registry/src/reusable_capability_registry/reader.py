@@ -6,7 +6,7 @@ from typing import Any
 import re
 
 import yaml
-from yaml.nodes import MappingNode
+from yaml.nodes import MappingNode, SequenceNode
 
 from .models import CapabilityRecord
 
@@ -51,10 +51,12 @@ class _DuplicateMappingKeyError(yaml.YAMLError):
 class _UniqueKeySafeLoader(yaml.SafeLoader):
     """SafeLoader variant that rejects duplicate explicitly authored keys."""
 
-    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[Any, Any]:
-        if not isinstance(node, MappingNode):
-            return super().construct_mapping(node, deep=deep)
+    def __init__(self, stream: Any) -> None:
+        super().__init__(stream)
+        self._flattened: set[MappingNode] = set()
+        self._flattening: set[MappingNode] = set()
 
+    def _check_explicit_keys(self, node: MappingNode) -> None:
         seen: set[tuple[str, Any]] = set()
         for key_node, _ in node.value:
             if key_node.tag == _MERGE_TAG:
@@ -79,7 +81,44 @@ class _UniqueKeySafeLoader(yaml.SafeLoader):
                 )
             seen.add(identity)
 
-        return super().construct_mapping(node, deep=deep)
+    def flatten_mapping(self, node: MappingNode) -> None:
+        """Apply registry merge precedence before SafeLoader constructs values.
+
+        Assignment is last-wins: prepend merge sources in reverse sequence
+        order, then append the authored keys. Check each original mapping
+        before merging, including inline sources never constructed on their own.
+        """
+        if node in self._flattened:
+            return
+        if node in self._flattening:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                "recursive YAML merge", node.start_mark,
+            )
+        self._flattening.add(node)
+        try:
+            self._check_explicit_keys(node)
+            merged = []
+            authored = []
+            for key, value in node.value:
+                if key.tag != _MERGE_TAG:
+                    if key.tag == "tag:yaml.org,2002:value":
+                        key.tag = "tag:yaml.org,2002:str"
+                    authored.append((key, value))
+                    continue
+                sources = value.value if isinstance(value, SequenceNode) else (value,)
+                for source in reversed(sources):
+                    if not isinstance(source, MappingNode):
+                        raise yaml.constructor.ConstructorError(
+                            "while constructing a mapping", node.start_mark,
+                            "expected a mapping for merging", source.start_mark,
+                        )
+                    self.flatten_mapping(source)
+                    merged.extend(source.value)
+            node.value = merged + authored
+            self._flattened.add(node)
+        finally:
+            self._flattening.remove(node)
 
 
 def repository_root() -> Path:

@@ -94,6 +94,49 @@ are never identities.
 ## Pull Request Evidence
 PRs should include linked issue, summary, files changed, tests, docs, blockers,
 handoffs, risks, and an Issue Acceptance Report or manual-only explanation.
+The shipped PR template defaults the linked-issue section to a non-closing
+reference (`Part of #N`); a closing keyword is an explicit opt-in admitted
+only with a closure admission for the exact issue. The template's
+criterion-preservation section names the linked issue and requires either a
+per-criterion mapping (each acceptance criterion quoted unchanged, with its
+PR evidence) or an explicit manual-review statement. Handoff packets carry
+the criterion set through `criterion_preservation.py`: the packet reports
+every criterion parsed from the canonical issue body with its identity
+preserved, and packet verification returns manual-review for any criterion
+that was dropped or reworded.
+## Cumulative Required-Docs Coverage
+The `required docs` check covers a declaration when a file changed in the
+evaluated PR matches it. A declaration may also be covered by documentation
+an earlier merged PR delivered for the same issue (#3724), but only through
+producer-verified evidence: the source PR is merged and in this repository;
+the canonical linked-issue parser (`report_only_issue_number`) associates its
+own title and body with exactly the evaluated issue; its merge commit is an
+ancestor of the evaluated base; each counted documentation file has the
+identical blob at the merge commit and at the evaluated base; and the
+evidence is bound to the issue's current `required_docs` list. A GitHub
+cross-reference only nominates a candidate. Documentation edited, reverted,
+or deleted after the merge, ambiguous or bare linkage, changed declarations,
+and malformed or unavailable evidence contribute no coverage; a producer
+failure leaves current-PR coverage as the only path, so it can never turn a
+failure into a pass. Omitting the evidence preserves per-PR results exactly.
+## Criterion-Level Satisfaction
+`criterion_satisfaction.py` projects criterion-level satisfaction for one
+issue from evidence gathered across all linked PRs. Every original criterion
+receives exactly one disposition: `satisfied`, `unsatisfied`, `stale`,
+`missing`, `contradicted`, or `manual-review`, with traceable evidence
+pointers or an explicit missing-evidence reason. Evidence rules: a record
+counts only when it is a per-criterion verdict bound to the exact
+issue-body version (sha256) and to the authoritative PR head in the
+lineage; evidence bound to a superseded head or a prior body version is
+`stale`; current evidence sources that disagree make the criterion
+`contradicted`; merge state, CI success, and review success are PR signals,
+never criterion evidence. An issue reports complete satisfaction only when
+every criterion is `satisfied`; missing, stale, contradicted, or unresolved
+criteria always prevent it. The projection registers in the Acceptance
+Report only through the informational channel
+(`AcceptanceReport.informational_checks`): it never enters the overall
+result, blockers, or workflow exit code, and it is evidence for independent
+QA judgment — never a readiness, merge, or closure admission.
 ## Acceptance Report Schema
 ```text
 Issue Acceptance Report

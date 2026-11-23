@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
+from ._stdout_frame import extract_framed_payload
 from .dev_validation import (
     DevValidationRequest,
     REPOSITORY,
@@ -34,7 +35,7 @@ SCANNER_PROOF_VALIDATION_ARGV = ("python", "-m", "scripts.agent_os_github_issue_
 # caller-selectable interpreter, package, or argv surface.
 DEV_VALIDATION_NODE = "/usr/local/libexec/agent-os-dev-validation-node"
 DEV_VALIDATION_NODE_MODULES = "/opt/agent-os/dev-validation-node-runtime/node_modules"
-DEV_VALIDATION_VITEST_VERSION = "5.0.3"
+DEV_VALIDATION_VITEST_VERSION = "5.0.4"
 _FRAME_START = "===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
@@ -68,7 +69,7 @@ SHEETS_SMOKE_PROBE=SHEETS_SMOKE_IMPORT_PRELUDE+";import json;from workflow_sched
 NODE="/usr/local/libexec/agent-os-dev-validation-node"
 NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
 VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
-NODE_PROBE="const v=require(process.argv[1]+'/vitest/package.json').version;if(v!=='5.0.3'||!process.versions.node.startsWith('22.'))process.exit(1)"
+NODE_PROBE="const v=require(process.argv[1]+'/vitest/package.json').version;if(v!=='5.0.4'||!process.versions.node.startsWith('22.'))process.exit(1)"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
  MATERIALS_ID:(
@@ -271,13 +272,6 @@ def _host_command(request: object) -> str:
     return shlex.join((HOST_PYTHON, "-c", _HOST_RUNNER_SOURCE, request.repository, str(request.issue_number), request.branch, request.source_sha, request.validation_id, request.request_id))
 
 
-def _extract_framed_payload(stdout: object) -> str | None:
-    if type(stdout) is not str or stdout.count(_FRAME_START) != 1 or stdout.count(_FRAME_END) != 1:
-        return None
-    start=stdout.find(_FRAME_START);end=stdout.find(_FRAME_END)
-    return stdout[start+len(_FRAME_START):end].strip() if start>=0 and end>start else None
-
-
 def _failure(request: DevValidationRequest, reason: str) -> dict[str, object]:
     return {"schema_version":"1.0","status":"needs-decision","reason_codes":[reason],"repository":request.repository,"issue_number":request.issue_number,"branch":request.branch,"tested_sha":request.source_sha,"validation_id":request.validation_id,"request_id":request.request_id,"cleanup_complete":False,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
 
@@ -323,7 +317,9 @@ def run_dev_validation_over_ssh(adapter: GcloudIapAdapter, request: DevValidatio
     except subprocess.TimeoutExpired as error:
         return _ssh_transport_timeout(request, error)
     if completed.returncode!=0:return _ssh_failure(request,completed)
-    framed=_extract_framed_payload(completed.stdout)
+    framed=extract_framed_payload(
+        completed.stdout, frame_start=_FRAME_START, frame_end=_FRAME_END
+    )
     if framed is None:return _failure(request,"dev-validation-frame-invalid")
     try:payload=json.loads(framed)
     except json.JSONDecodeError:return _failure(request,"dev-validation-evidence-not-json")
