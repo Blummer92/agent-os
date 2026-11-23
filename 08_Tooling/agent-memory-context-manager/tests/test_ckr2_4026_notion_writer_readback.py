@@ -204,3 +204,66 @@ def test_permutation_of_distinct_matching_lessons_is_deterministic():
     second = select_coding_knowledge(request(), tuple(reversed(choices)))
     assert first.to_json() == second.to_json()
     assert first.selected_count == 3
+
+
+@pytest.mark.parametrize("changes", [
+    {"use_when": (
+        GUIDANCE,
+        "However, never use readback to verify a persisted Notion revision.",
+    )},
+    {"use_when": (
+        "After a Notion writer persists data, use readback to verify it; "
+        "do not use readback to verify persisted changes.",
+    )},
+    {"avoid_when": (
+        "Never use Notion writer readback to verify persisted changes.",
+    )},
+    {"avoid_when": (
+        "The Notion writer should not use independent readback verification.",
+    )},
+    {"avoid_when": (
+        "Skip readback when verifying a persisted Notion revision.",
+    )},
+    {"avoid_when": (
+        "Avoid using readback verification for Notion writer changes.",
+    )},
+])
+def test_mixed_affirmative_and_negative_readback_guidance_cannot_be_special(changes):
+    # Both use_when and avoid_when are lesson-owned evidence. An affirmative
+    # sentence cannot cancel an explicit conflicting instruction.
+    result = select_coding_knowledge(request(), (candidate(**changes),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.selected == ()
+    assert result.authority_created is False
+    assert result.github_write_performed is False
+    assert result.notion_write_performed is False
+
+
+def test_unrelated_avoid_when_condition_does_not_erase_qualified_text_match():
+    # Only an explicit readback warning in avoid_when vetoes the special rule.
+    result = select_coding_knowledge(
+        request(),
+        (candidate(avoid_when=("Avoid when only formatting a README.",)),),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("notion-writer-readback-text-match",)
+    assert result.authority_created is False
+
+
+def test_generic_notion_keyword_match_stays_advisory_even_with_negative_guidance():
+    # The pre-existing generic keyword route is deliberately unchanged.
+    # Its SUFFICIENT value cannot be treated as PR-2 applicability, verified
+    # observations, mutation authority, or proof of a live Notion lesson.
+    req = request(capability_keywords=("Notion",))
+    lesson = candidate(
+        avoid_when=("Never use readback verification for persisted Notion changes.",),
+    )
+    result = select_coding_knowledge(req, (lesson,))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("ecosystem-capability-match",)
+    assert result.authority_created is False
+    assert result.side_effects_performed is False
+    assert result.notion_write_performed is False
+    assert result.github_write_performed is False
+    assert "verified-observation" not in result.to_json().casefold()
