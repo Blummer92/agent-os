@@ -108,3 +108,59 @@ def test_no_raw_lesson_text_in_qualification_receipt():
     outcome = check(reviewed_entry(), (request("native host continuation"),), (request("testing"),))
     assert "host" not in str(outcome).casefold()
     assert "continuation" not in str(outcome).casefold()
+
+
+def test_actual_reviewed_continuation_entry_exposes_metadata_miss():
+    """Narrative relevance is not a CKR2 match when taxonomy cannot surface it."""
+    outcome = qualify_reviewed_create(
+        catalog.CONTINUATION_CONSUMER_REQUEST_ID,
+        positive_requests=(request("native host continuation", task="trace the live host consumer"),),
+        hard_negative_requests=(request("testing", task="unrelated packaging test"),),
+    )
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("expected-task-not-selected",)
+    assert outcome.positive_hits == 0
+    assert outcome.hard_negative_false_positives == 0
+    assert outcome.publication_authorized is False
+
+
+def test_actual_reviewed_continuation_entry_rejects_generic_false_positive():
+    """A broad governance signal matching an unrelated task must fail review."""
+    outcome = qualify_reviewed_create(
+        catalog.CONTINUATION_CONSUMER_REQUEST_ID,
+        positive_requests=(request("failure-avoidance", task="host consumer continuation failure"),),
+        hard_negative_requests=(request("failure-avoidance", task="unrelated wheel packaging failure"),),
+    )
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("unrelated-task-false-positive",)
+    assert outcome.positive_hits == 1
+    assert outcome.hard_negative_false_positives == 1
+    assert outcome.activation_authorized is False
+
+
+def test_review_counts_multiple_positive_and_negative_requests():
+    outcome = check(
+        reviewed_entry(),
+        (
+            request("failure-avoidance", task="host continuation failure"),
+            request("failure-avoidance", task="unconsumed host decision"),
+        ),
+        (
+            request("testing", task="unrelated packaging fixture"),
+            request("testing", task="unrelated frontend snapshot"),
+        ),
+    )
+    assert outcome.qualified
+    assert (outcome.positive_hits, outcome.positive_total) == (2, 2)
+    assert (outcome.hard_negative_false_positives, outcome.hard_negative_total) == (0, 2)
+
+
+def test_review_refuses_oversized_and_untyped_review_scenarios():
+    entry = reviewed_entry()
+    too_many = tuple(request("failure-avoidance", task=f"case {i}") for i in range(9))
+    result = check(entry, too_many, (request("testing"),))
+    assert result.reason_codes == ("bounded-review-scenarios-required",)
+    assert not result.qualified
+    result = check(entry, (request("failure-avoidance"),), ("not a typed request",))
+    assert result.reason_codes == ("bounded-review-scenarios-required",)
+    assert not result.qualified
