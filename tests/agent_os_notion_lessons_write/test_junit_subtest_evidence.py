@@ -16,11 +16,19 @@ import xml.etree.ElementTree as ET
 import pytest
 
 
+def _source_conftest() -> str:
+    """Load the canonical sibling fixture or give a useful failure if moved."""
+    source = Path(__file__).resolve().parent / "conftest.py"
+    if not source.is_file():
+        pytest.fail(f"Canonical subtest conftest fixture missing: {source}", pytrace=False)
+    return source.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("failing", [False, True])
 def test_unittest_subtests_emit_distinct_case_evidence(tmp_path: Path, failing: bool) -> None:
     # JUnit is finalized at pytest session end; a subprocess verifies real output.
     (tmp_path / "conftest.py").write_text(
-        Path(__file__).with_name("conftest.py").read_text(encoding="utf-8"),
+        _source_conftest(),
         encoding="utf-8",
     )
     assertion = "self.assertLess(value, 2)" if failing else "self.assertLess(value, 3)"
@@ -65,7 +73,7 @@ def test_conftest_import_priority_is_stable_with_preexisting_pythonpath(tmp_path
     nested = tmp_path / "tests" / "agent_os_notion_lessons_write"
     nested.mkdir(parents=True)
     (nested / "conftest.py").write_text(
-        Path(__file__).with_name("conftest.py").read_text(encoding="utf-8"),
+        _source_conftest(),
         encoding="utf-8",
     )
     paths = [
@@ -98,8 +106,9 @@ def test_conftest_import_priority_is_stable_with_preexisting_pythonpath(tmp_path
     # Deliberately invert the initial priority to exercise reordering.
     env["PYTHONPATH"] = os.pathsep.join(str(p) for p in reversed(paths))
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "test_import_priority.py"],
-        cwd=nested, env=env, text=True, capture_output=True,
+        [sys.executable, "-m", "pytest", "-q",
+         "tests/agent_os_notion_lessons_write/test_import_priority.py"],
+        cwd=tmp_path, env=env, text=True, capture_output=True,
         check=False, timeout=30,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -108,7 +117,7 @@ def test_conftest_import_priority_is_stable_with_preexisting_pythonpath(tmp_path
 def test_subtest_report_hook_only_changes_call_phase(tmp_path: Path) -> None:
     """Even if future pytest emits phase-bearing reports, do not split identities."""
     (tmp_path / "conftest.py").write_text(
-        Path(__file__).with_name("conftest.py").read_text(encoding="utf-8"),
+        _source_conftest(),
         encoding="utf-8",
     )
     (tmp_path / "test_phase.py").write_text(
