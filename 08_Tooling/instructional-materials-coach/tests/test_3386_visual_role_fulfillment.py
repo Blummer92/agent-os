@@ -32,12 +32,10 @@ import pytest
 
 from instructional_materials_coach.artifact_content_qa import (
     QA_STATE_PLACEMENT_UNVERIFIED,
-    QA_STATE_PROVENANCE_UNRESOLVED,
     QA_STATE_VERIFIED,
     QA_STATE_VISUAL_MISMATCH,
     QA_STATE_VISUAL_ROLE_MISMATCH,
     ArtifactObservation,
-    DocsContentBlock,
     TerminalQAExpectations,
     VisualExpectation,
     evaluate_artifact_qa,
@@ -47,8 +45,9 @@ from instructional_materials_coach.connected_visual_placement import (
     VisualPlacementBinding,
     plan_visual_placement_bindings,
 )
-from instructional_materials_coach.image_provenance import ImageProvenance
 from instructional_materials_coach.placement_receipts import (
+    BATCH_PROOF_CONTRACT,
+    batch_proof_fingerprint,
     build_placement_record,
     load_placement_records,
 )
@@ -160,29 +159,6 @@ def test_observed_kind_reads_from_governed_compatibility_evidence():
 # Binding fixtures: bindings -> terminal-QA expectations -> QA verdict
 # ---------------------------------------------------------------------------
 
-def _provenance() -> ImageProvenance:
-    # #3389: kind tests carry explicit AI-disclosure provenance so the
-    # provenance dimension passes and the kind assertions stay focused.
-    return ImageProvenance(origin_kind="ai-generated")
-
-
-def _caption_blocks(pairs: tuple[tuple[str, str], ...]) -> tuple[DocsContentBlock, ...]:
-    """Build docs_blocks where each (image_id, caption) pair becomes an
-    image block immediately followed by its caption block (#3389
-    structural adjacency)."""
-    blocks: list[DocsContentBlock] = []
-    for i, (image_id, caption) in enumerate(pairs):
-        blocks.append(
-            DocsContentBlock(container=("body",), index=2 * i, text="",
-                             image_ids=(image_id,))
-        )
-        blocks.append(
-            DocsContentBlock(container=("body",), index=2 * i + 1,
-                             text=caption, image_ids=())
-        )
-    return tuple(blocks)
-
-
 def _binding(role_id: str, slot_id: str, asset_id: str, *,
              expected: str = "photography",
              observed: str | None = "diagram") -> VisualPlacementBinding:
@@ -192,7 +168,6 @@ def _binding(role_id: str, slot_id: str, asset_id: str, *,
         required=True, slot_id=slot_id,
         expected_representation_class=expected,
         observed_representation_class=observed,
-        image_provenance=_provenance(),
     )
 
 
@@ -202,7 +177,7 @@ def _record(role_id: str, slot_id: str, asset_id: str, observed: str | None,
         receipt={
             "asset_id": asset_id, "drive_file_id": "drive-1", "role_id": role_id,
             "artifact_type": "docs", "artifact_id": "doc-1",
-            "artifact_revision_id": "r0", "marker": None, "container_id": None,
+            "artifact_revision_id": "r0", "marker": None, "container_id": "body",
             "inserted_element_id": inserted or f"img-{slot_id}", "state": "verified",
         },
         content_identity=dict(IDENTITY),
@@ -210,7 +185,6 @@ def _record(role_id: str, slot_id: str, asset_id: str, observed: str | None,
         eligibility_evidence=None, transport_name="test",
         post_insertion_revision=revision,
         observed_representation_class=observed,
-        image_provenance=_provenance().to_dict(),
     )
 
 
@@ -219,20 +193,60 @@ def _observation(*, revision: str = "r1", images: tuple[str, ...] = ("img-0",),
     return ArtifactObservation(
         artifact_type="docs", artifact_id="doc-1", revision_id=revision,
         full_text=text, token_hits=(), image_element_ids=images,
-        docs_blocks=_caption_blocks(tuple((img, "AI-generated image") for img in images)),
     )
 
 
 def _evaluate(bindings: tuple[VisualPlacementBinding, ...],
               records: tuple[dict[str, Any], ...],
-              observation: ArtifactObservation):
+              observation: ArtifactObservation,
+              batch_proofs: tuple[dict[str, Any], ...] = ()):
     expectations = TerminalQAExpectations.build_from_requests(
         idempotency_key=KEY, visual_placements=bindings,
     )
     return evaluate_artifact_qa(
         artifact_type="docs", artifact_id="doc-1", expectations=expectations,
         observation=observation, placement_records=records, idempotency_key=KEY,
+        batch_proofs=batch_proofs,
     )
+
+
+def _batch_proof(records: tuple[dict[str, Any], ...]) -> dict[str, Any]:
+    """Hand-attested reconciled batch proof for a multi-receipt batch.
+
+    Current main (#3258/#3659) requires a reconciled batch proof before a
+    multi-receipt batch can be admitted; the proof is attested here (not
+    synthesized by placement) and its fingerprint is recomputed by the
+    verifier, so tampering is still caught. Pattern follows
+    tests/test_3566_worksheet_quality_regression.py on main.
+    """
+    members = [
+        {
+            "role_id": r["role_id"],
+            "slot_id": r["slot_id"],
+            "batch_artifact_type": "docs",
+            "artifact_id": "doc-1",
+            "asset_id": r.get("asset_id"),
+            "drive_file_id": r.get("drive_file_id"),
+            "content_identity": dict(r["content_identity"]),
+            "inserted_element_id": r["inserted_element_id"],
+            "post_insertion_revision_id": r["post_insertion_revision_id"],
+            "member_source": "placed",
+        }
+        for r in records
+    ]
+    proof = {
+        "proof_contract": BATCH_PROOF_CONTRACT,
+        "idempotency_key": KEY,
+        "batch_artifact_type": "docs",
+        "artifact_id": "doc-1",
+        "initial_revision_id": "r0",
+        "final_revision_id": "r1",
+        "ordered_members": members,
+        "insertion_continuity": [],
+        "reconciled_at": "2026-10-20T00:00:00+00:00",
+    }
+    proof["proof_fingerprint"] = batch_proof_fingerprint(proof)
+    return proof
 
 
 def _codes(report) -> list[str]:
@@ -286,7 +300,10 @@ def test_four_role_mismatched_images_cannot_pass_by_count():
         for slot in FOUR_SLOTS
     )
     images = tuple(f"img-{slot}" for slot in FOUR_SLOTS)
-    report = _evaluate(bindings, records, _observation(images=images))
+    report = _evaluate(
+        bindings, records, _observation(images=images),
+        batch_proofs=(_batch_proof(records),),
+    )
     assert report.state == QA_STATE_VISUAL_ROLE_MISMATCH
     mismatches = [f for f in report.findings if f.code == "qa-visual-role-kind-mismatch"]
     assert len(mismatches) == 4
@@ -473,15 +490,9 @@ def _signed_requirement(required_class: str | None) -> dict[str, Any]:
 def _diagram_candidate() -> dict[str, Any]:
     """A governed v2 candidate whose compatibility evidence assigns it the
     ``diagram`` class (the Fix This Photo reproduction: schematic line
-    illustrations placed where photographs were required). The library
-    record carries reviewed image-provenance evidence in ``extra_fields``
-    (#3389: the existing intake surface, never a new registry)."""
+    illustrations placed where photographs were required)."""
     cand = _repo_fixture("valid_visual_asset_compatibility_v2.json")
     cand["compatibility_evidence"]["cohesion_profile"]["representation_class"] = "diagram"
-    cand["library_record"]["extra_fields"]["image_provenance"] = {
-        "origin_kind": "ai-generated",
-        "source_detail": "test intake review",
-    }
     return cand
 
 
@@ -499,9 +510,7 @@ def _plan_and_bind(requirement: dict[str, Any], candidates: list[dict[str, Any]]
 
 def _receipt_from_binding(binding: VisualPlacementBinding, image_id: str) -> dict[str, Any]:
     """Build the durable receipt exactly the way _place_one_binding does:
-    the binding's observed class and provenance are carried, never
-    re-derived."""
-    provenance = binding.image_provenance
+    the binding's observed class is carried, never re-derived."""
     return build_placement_record(
         receipt={
             "asset_id": binding.asset_id, "drive_file_id": binding.drive_file_id,
@@ -515,7 +524,6 @@ def _receipt_from_binding(binding: VisualPlacementBinding, image_id: str) -> dic
         required=binding.required,
         eligibility_evidence=binding.eligibility_evidence,
         observed_representation_class=binding.observed_representation_class,
-        image_provenance=provenance.to_dict() if provenance is not None else None,
         transport_name="test", post_insertion_revision="r1",
     )
 
