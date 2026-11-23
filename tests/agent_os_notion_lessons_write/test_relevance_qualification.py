@@ -362,3 +362,38 @@ def test_structural_fixture_accepts_exact_descriptive_types_without_narrative_pa
 def test_structural_fixture_fails_closed_on_invalid_contracts(entry, reason):
     with pytest.raises(ValueError, match=f"^{reason}$"):
         catalog.validate_entry(entry)
+
+
+def test_title_echo_library_hint_cannot_qualify_generic_relevance():
+    """Claude F1: the lesson's own title is not independent library context."""
+    entry = reviewed_entry()
+    title = entry["properties"]["Lesson Learned"]
+    title_echo = CodingKnowledgeRequest(
+        task_reference="unrelated packaging maintenance",
+        ecosystem_hints=("agent-os",),
+        library_hints=(title,),
+        capability_keywords=(),
+        specialized_knowledge_required=True,
+    )
+    result = check(entry, (title_echo,), (request("testing"),))
+    assert not result.qualified
+    assert result.reason_codes == ("positive-relevance-basis-unverified",)
+    assert result.positive_hits == 1
+    assert result.publication_authorized is False
+    assert result.activation_authorized is False
+
+
+def test_title_echo_cannot_rescue_generic_capability_overlap():
+    """A generic classification plus a self-referential title stays unverified."""
+    entry = reviewed_entry()
+    positive = CodingKnowledgeRequest(
+        task_reference="unrelated wheel packaging",
+        ecosystem_hints=("agent-os",),
+        library_hints=(entry["properties"]["Lesson Learned"],),
+        capability_keywords=("failure-avoidance",),
+        specialized_knowledge_required=True,
+    )
+    result = check(entry, (positive,), (request("testing"),))
+    assert not result.qualified
+    assert "positive-relevance-basis-unverified" in result.reason_codes
+    assert result.publication_authorized is False
