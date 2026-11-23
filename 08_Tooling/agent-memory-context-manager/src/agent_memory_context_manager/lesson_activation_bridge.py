@@ -35,6 +35,7 @@ from .coding_knowledge_selection import (
     _match_candidate,
     _norm,
     contextual_tie_scores,
+    required_library_coverage_order,
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
@@ -430,7 +431,11 @@ def _bound_relevant_lessons_with_order(
                 request, (_as_selection_candidate(item[2]) for item in group)
             )
             order = sorted(range(len(group)), key=lambda index: (-scores[index], group[index][1]))
-            reordered.extend(group[index] for index in order)
+            ordered = [group[index] for index in order]
+            coverage_order = required_library_coverage_order(
+                request, (_as_selection_candidate(item[2]) for item in ordered)
+            )
+            reordered.extend(ordered[index] for index in coverage_order)
         ranked = reordered
         # Rank identities, not individual revisions. A second revision of
         # a selected ID may be unranked, but must still reach CKR2's
