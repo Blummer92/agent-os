@@ -163,7 +163,10 @@ class WorkflowTests(unittest.TestCase):
     def test_workflow_exposes_existing_secret_only_after_admission(self):
         import yaml
         value = yaml.safe_load((ROOT / WORKFLOW_PATH).read_text())
-        self.assertEqual(value["permissions"], {"contents": "read"})
+        # Create-once protection requires an atomic, permanent GitHub ref.
+        # Only the trusted main workflow with owner admission can use this
+        # contents:write scope, and the token is passed only to execute.
+        self.assertEqual(value["permissions"], {"contents": "write"})
         self.assertFalse(value["concurrency"]["cancel-in-progress"])
         triggers = value.get("on", value.get(True))
         self.assertEqual(set(triggers), {"issue_comment"})
@@ -173,6 +176,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(secrets), 1)
         self.assertGreater(steps.index(secrets[0]), 2)
         self.assertEqual(secrets[0]["env"]["NOTION_TOKEN"], "${{ secrets.NOTION_TOKEN }}")
+        self.assertEqual(secrets[0]["env"]["GITHUB_TOKEN"], "${{ github.token }}")
+        for step in steps:
+            if step is not secrets[0]:
+                self.assertNotIn("GITHUB_TOKEN", step.get("env", {}))
+                self.assertNotIn("NOTION_TOKEN", step.get("env", {}))
         self.assertEqual(secrets[0]["env"]["AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"], "${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}")
         self.assertNotIn("continue-on-error", str(steps))
 
