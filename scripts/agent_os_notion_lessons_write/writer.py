@@ -305,6 +305,14 @@ def execute(request: AdmittedRequest, client) -> dict:
             result.update(status="conflict", reason_code="lesson-appeared-before-create")
             return result
         intended = properties(request.request_id)
+        if page_id is None:
+            # Durable, atomic create-once reservation BEFORE any Notion POST.
+            # GitHub's fixed ref namespace is keyed by normalized reviewed
+            # title, so another authorized request cannot race a lagging
+            # Notion title index. A failed/previously held reservation refuses
+            # with ZERO Notion attempts; never reuse or automatically release.
+            client.reserve_create(request.request_id)
+            result["create_reservation_acquired"] = True
         # No automatic retry, including timeout/429/provider errors. Once a
         # write is attempted, uncertainty must never be reported as zero writes.
         result.update(write_attempts=1, status="uncertain", reason_code="write-or-readback-unconfirmed")
