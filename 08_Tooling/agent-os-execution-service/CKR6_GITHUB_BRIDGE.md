@@ -360,3 +360,34 @@ may use the anchor-free API form
 `https://api.github.com/repos/Blummer92/agent-os/issues/comments/<id>`, because
 a host write route was observed rewriting `#issuecomment-` anchors in comment
 bodies (comment 6080494403); the `#issuecomment` form remains valid.
+
+
+## Pre-publication bounded request composer (#3690)
+
+The optional `agent_os_execution_service.ckr6_request_composer` CLI is a
+**read-only command composer**, not a GitHub publisher or an authorization gate.
+It calls the canonical `ckr6_github_bridge.parse_envelope` before emitting
+a command and rejects oversized fields rather than truncating task context.
+This would have rejected PR4's 523-character `task_reference` before posting
+(the canonical bound is 512 characters).
+
+Example (from a checkout with the execution-service package importable):
+
+```sh
+python -m agent_os_execution_service.ckr6_request_composer \
+  --input request.json \
+  --pr-number 4092 \
+  --head-sha 65ec5114839655a0484303713cb9857896dfe029
+```
+
+For PR requests, the JSON `issue_number` must equal `--pr-number`, and its
+`task_reference` must contain exactly one matching PR reference and one
+matching 40-hex head SHA. The command is printed to stdout **only** after
+validation. Any failure emits a finite reason to stderr and exits 2 with
+no command output. No request is automatically shortened or rewritten.
+
+This tool does not independently authenticate the GitHub comment author,
+check the current remote head, establish issue-primary or exact-file route
+authority, select lessons, perform Notion reads, post a request, admit
+mutations, or authorize Ready/merge. A trusted host must still verify the
+canonical GitHub state and follow the existing CKR6 and governance gates.
