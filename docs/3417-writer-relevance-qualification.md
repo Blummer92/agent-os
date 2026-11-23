@@ -52,3 +52,58 @@ python -m pytest tests/agent_os_notion_lessons_write/test_writer.py tests/agent_
 For shape checks, use the finite schema only: `{target_lesson_id: str | None, properties: mapping}`. Creates require every key in `NARRATIVE_TYPES`; updates allow a nonempty writable subset. Optional descriptive fields and their constraints come from `DESCRIPTIVE_TYPES`, `MAX_APPLIES_TO`, `MAX_SUPPORTING_REFS`, and the canonical repository-only source-link validators. `PROTECTED_FIELDS` must never appear in a reviewed write. The catalog definitions, not a duplicated text summary, remain the authoritative contract.
 
 In the test suite, `structural_entry()` uses one-character, nonblank narrative placeholders for **catalog validation only**; it is never passed off as proof that a lesson is relevant to a task. CKR2/CKR11 positive and hard-negative evaluations keep mechanism-bearing reviewed text and real typed requests. Thus compact external schema summaries do not leak or overfit narrative prose, but also cannot substitute for semantic applicability or Notion persistence evidence.
+
+
+## Durable create-once reservation against delayed Notion index visibility
+
+A Notion data-source title query is not a transactional uniqueness constraint.
+Even when every POST is followed by canonical GET1/GET2, a first POST can commit,
+lose its response, and remain invisible to a later request's query. PR #4101
+now prevents the **second POST**, not just an automatic retry in the first run.
+
+At the create mutation boundary, after canonical owner admission, source/schema
+checks and exact-title reconciliation, the live writer calls
+`LiveLessonsClient.reserve_create(request_id)`. That operation performs one
+authenticated, atomic `POST /repos/Blummer92/agent-os/git/refs` to create an
+immutable, create-only Git tag reference under
+`refs/tags/agent-os-notion-create-once-v1/<sha256>`. The digest is calculated
+from the NFKC-normalized, trimmed, casefolded reviewed lesson title, so separate
+reviewed request IDs with the same title share the same reservation. No lesson
+prose, credentials, or arbitrary user URL appears in the ref or receipt.
+
+The GitHub Actions workflow grants `contents: write` only to the trusted
+owner-admitted job; `GITHUB_TOKEN` is passed only to the secret-bearing execute
+step, not the initial admission step. The GitHub API **create-ref** operation
+must succeed with a matching 201 receipt before the first Notion POST is
+permitted. There is no check-then-create race, GitHub-ref retry, or automatic
+ref deletion. A duplicate (422), authorization/transport failure, or missing
+receipt fails closed with **zero Notion mutations**. Git ref creation itself
+is an external side effect, not an activation or Notion mutation.
+
+This is an **at-most-once create-attempt guarantee** under the trust assumption
+that the GitHub reservation refs are not deleted or modified by an authorized
+repository administrator. It addresses the precise delayed-index sequence:
+the first response can be lost and the Notion lookup empty, but any second
+owner-authorized create for that title cannot acquire the permanent ref and
+therefore cannot issue a duplicate POST. It does **not** promise at-least-once
+delivery or that every attempted write is persisted: if the Git ref is committed
+but the Notion POST fails (or never starts), future creates are still blocked.
+That is deliberate safety-over-liveness behavior. On uncertain outcomes,
+inspect Notion and the permanent GitHub reservation; **do not delete/rearm the
+tag or silently resubmit**. Any manual recovery/rearm requires separate,
+governed authorization and independent destination evidence.
+
+Updates retain their distinct exact-`Lesson ID` / owner-bound revision rules
+and do not acquire create reservations. Reconciliation of an already-existing
+identical canonical lesson returns `unchanged` without creating a new ref.
+Existing readback, independent verifier and CKR2 relevance guarantees are not
+broadened by this one-shot reservation. The GitHub tag is a reservation claim,
+not proof that Notion accepted a write; publication/activation remains forbidden
+without the independent canonical readback and existing governance.
+
+Offline regression tests: `tests/agent_os_notion_lessons_write/test_create_reservation.py`
+exercise a create-only Git ref API double with concurrent contenders, duplicate
+claims, lost reservation receipts, missing credentials, separate reviewed IDs
+with equivalent titles, and the delayed-Notion-index two-owner-request sequence.
+Actual GitHub tag creation and live Notion behavior have not been exercised by
+these offline tests.
