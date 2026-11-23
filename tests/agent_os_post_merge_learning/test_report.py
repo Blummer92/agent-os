@@ -113,3 +113,105 @@ class TestLearning(unittest.TestCase):
     def test_negative_invalid_message(self):
         with self.assertRaisesRegex(report.EvidenceError, "commit-message-invalid"):
             report.build_report(Reader([{"sha": "1"*40, "commit": {"message": 3}}]), SHA, 4101, 100)
+
+
+    def test_invalid_commit_counts_fail_as_metadata(self):
+        for count in (0, True, False, -1):
+            with self.subTest(count=count), self.assertRaisesRegex(report.EvidenceError, "pr-metadata-invalid"):
+                report._validate_pr({**pr(1), "commits": count}, REPO, SHA)
+
+    def test_terminal_validation_non_success_and_pending_conflict(self):
+        for state in ("neutral", "action_required", "stale", "startup_failure"):
+            self.assertEqual(report._validate_run({**run(), "conclusion": state}, SHA)["state"], state)
+        for bad in ({**run(), "conclusion": None},
+                    {**run(), "status": "queued", "conclusion": "success"}):
+            with self.assertRaises(report.EvidenceError):
+                report._validate_run(bad, SHA)
+
+    def test_explicit_validation_run_must_not_be_missing(self):
+        reader = Reader([commit(1, "fix(api): repair")])
+        original = reader.get
+        reader.get = lambda path: None if path == "/actions/runs/100" else original(path)
+        with self.assertRaisesRegex(report.EvidenceError, "validation-run-evidence-missing"):
+            report.build_report(reader, SHA, 4101, 100)
+
+    def test_discussion_truncation_is_visible(self):
+        reader = Reader([commit(1, "feat(api): normal")])
+        original = reader.get
+        def get(path):
+            if "/reviews?" in path or "/comments?" in path:
+                page = int(path.rsplit("page=", 1)[1])
+                return [{}] * (3 if page == 3 else 100)
+            return original(path)
+        reader.get = get
+        result = report.build_report(reader, SHA, 4101, None)
+        evidence = result["supporting_evidence"]
+        self.assertEqual(evidence["review_count_observed"], 200)
+        self.assertTrue(evidence["review_history_truncated"])
+        self.assertTrue(evidence["issue_comment_history_truncated"])
+        self.assertEqual(result["status"], "review-needed")
+
+    def test_failed_check_links_missing_is_not_truncation(self):
+        reader = Reader([commit(1, "fix(api): repair")])
+        original = reader.get
+        def get(path):
+            if path.endswith("/check-runs?per_page=100"):
+                return {"total_count": 2, "check_runs": [
+                    {"conclusion": "failure", "html_url": None},
+                    {"conclusion": "failure", "html_url": "https://example.org/other"}]}
+            return original(path)
+        reader.get = get
+        evidence = report.build_report(reader, SHA, 4101, None)["supporting_evidence"]
+        self.assertEqual(evidence["failed_check_refs_unavailable"], 2)
+        self.assertFalse(evidence["failed_check_refs_truncated"])
+
+    def test_failed_check_budget_is_explicit(self):
+        reader = Reader([commit(1, "fix(api): repair")])
+        original = reader.get
+        def get(path):
+            if path.endswith("/check-runs?per_page=100"):
+                return {"total_count": 32, "check_runs": [
+                    {"conclusion": "failure", "html_url": "https://github.com/Blummer92/agent-os/runs/123"}] * 32}
+            return original(path)
+        reader.get = get
+        evidence = report.build_report(reader, SHA, 4101, None)["supporting_evidence"]
+        self.assertEqual(len(evidence["failed_check_refs"]), 30)
+        self.assertTrue(evidence["failed_check_refs_truncated"])
+
+    def test_uppercase_sha_normalizes(self):
+        self.assertEqual(report._sha("F" * 40), SHA)
+        self.assertEqual(report.build_report(Reader([commit(1, "feat(api): normal")]), "F" * 40, 4101, None)["merge_sha"], SHA)
+
+    def test_fix_heavy_evidence_preserves_test_links(self):
+        records = [commit(i, "fix(api): repair") for i in range(1, 24)]
+        records += [commit(24, "test(api): regression"), commit(25, "test(api): hard negative")]
+        lead = report.build_report(Reader(records), SHA, 4101, None)["review_leads"][0]
+        self.assertTrue(lead["evidence_truncated"])
+        self.assertEqual(len(lead["evidence_refs"]), report.MAX_REFS_PER_GROUP)
+        self.assertTrue(any(ref.endswith("/commit/" + f"{n:040x}") for n in (24, 25) for ref in lead["evidence_refs"]))
+
+    def test_markdown_cell_escaping(self):
+        result = report.build_report(Reader([commit(1, "fix(api): repair")]), SHA, 4101, None)
+        result["review_leads"][0]["scope"] = "bad|row\nnext"
+        self.assertIn("bad\\|row next", report.render_summary(result))
+
+    def test_http_errors_have_bounded_reason_codes(self):
+        import urllib.error
+        from unittest.mock import patch
+        reader = report.GitHubReader(REPO, "synthetic-token")
+        class Opener:
+            def __init__(self, code): self.code = code
+            def open(self, request, timeout):
+                raise urllib.error.HTTPError(request.full_url, self.code, "private", {}, None)
+        for code, reason in ((301, "github-read-redirect-rejected"),
+                             (401, "github-read-unauthorized"),
+                             (403, "github-read-forbidden"),
+                             (404, "github-read-not-found"),
+                             (429, "github-read-rate-limited"),
+                             (502, "github-read-upstream-error")):
+            with self.subTest(code=code), patch("urllib.request.build_opener", return_value=Opener(code)):
+                with self.assertRaisesRegex(report.EvidenceError, "^" + reason + "$"):
+                    reader.get("/pulls/4101")
+
+    def test_redirect_handler_refuses_forwarding(self):
+        self.assertIsNone(report._RejectRedirects().redirect_request(None, None, 302, "redirect", {}, "https://evil.invalid"))
