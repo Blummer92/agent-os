@@ -255,3 +255,25 @@ Docs/Slides revisions, and exports the top-level `placeVisual` entrypoint used b
 owners remain unchanged. The added Node conformance tests use injected fake services.
 This reference update does **not** deploy Apps Script, grant execution permissions,
 authorize external writes, or prove live persisted-artifact acceptance.
+
+## Consolidated #3257 producer revision identity (#3651)
+
+PR #3808 is the retained producer-reference reconciliation for the earlier
+#3651 implementation. The Python consumer's fail-closed revision safeguards
+and its seven-case regression module were already integrated on `main` and
+are identical by Git blob to the existing #3808 branch:
+`placement_transport.py` (`3bfe645f80b0892c7d1bea057e0e77dae25e6e10`)
+and `test_3257_producer_revision_identity.py`
+(`1df331dc3b652ab26e162479ef487205442048a4`).
+
+The reference script retains the requested `artifact_revision_id`, rejects
+missing revision identity, obtains real persisted Docs inline object IDs from
+readback instead of synthesizing `docs-child-<index>`, and returns requested
+and post-placement revisions. Sequential batch insertions may legitimately
+advance revisions, so live revision equality is not asserted by the script;
+repository-side batch continuity governs that relationship. The original
+seven Node conformance cases from #3651 are retained unchanged in #3808,
+with three additional API entrypoint/Slides preflight cases. No Apps Script
+deployment, live mutation, or completion authority is implied. This document
+preserves the distinct historical rationale and source issue #3257; closing
+#3651 as superseded does not close its issue or replace current-head CI.
