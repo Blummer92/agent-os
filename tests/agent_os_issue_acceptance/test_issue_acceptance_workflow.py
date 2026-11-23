@@ -169,11 +169,11 @@ def test_report_only_acceptance_workflow_summary_runs_when_checker_fails():
     by_name = {step["name"]: step for step in steps}
 
     summary = by_name["Publish report summary"]
-    assert summary.get("if") == "always()"
+    assert summary.get("if") == "always() && steps.exact_file.outputs.route != 'exact-file'"
     assert content.count("if: always()") == 1
 
     checker = by_name["Run report-only issue acceptance checker"]
-    assert "if" not in checker
+    assert checker.get("if") == "steps.exact_file.outputs.route != 'exact-file'"
     assert 'exit "$checker_exit_code"' in checker["run"]
 
     # The summary consumes the report file defensively: a missing report
@@ -398,13 +398,13 @@ def test_m14_summary_always_does_not_mask_checker_failure():
     by_name = {step["name"]: step for step in report_steps}
 
     summary = by_name["Publish report summary"]
-    assert summary.get("if") == "always()"
+    assert summary.get("if") == "always() && steps.exact_file.outputs.route != 'exact-file'"
     assert content.count("if: always()") == 1
     assert not _m14_is_masking_continue_on_error(summary)
     assert "GITHUB_STEP_SUMMARY" in summary["run"]
 
     checker = by_name["Run report-only issue acceptance checker"]
-    assert "if" not in checker
+    assert checker.get("if") == "steps.exact_file.outputs.route != 'exact-file'"
     assert not _m14_is_masking_continue_on_error(checker)
     names = [step["name"] for step in report_steps]
     assert names.index("Run report-only issue acceptance checker") < names.index(
