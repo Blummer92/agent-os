@@ -478,6 +478,44 @@ def _finite_terminal_page_signature(
     }
 
 
+def _relevance_miss_counters(
+    request: CodingKnowledgeRequest,
+    lessons: list[LessonRecordEvidence],
+) -> dict[str, int]:
+    """Count unmatched controlled signals without exposing any lesson text.
+
+    These observational counters never affect relevance, sufficiency,
+    admission, retrieval budgets, or trusted result comments.
+    """
+    normalize = lambda value: value.strip().casefold()
+    ecosystems = {normalize(value) for value in request.ecosystem_hints + request.language_hints}
+    capabilities = {normalize(value) for value in request.capability_keywords}
+    libraries = {normalize(value) for value in request.library_hints}
+    paths = tuple(normalize(value) for value in request.target_path_hints)
+    ecosystem_rows = capability_rows = library_rows = path_rows = 0
+    available_library_names = set()
+    for lesson in lessons:
+        title = normalize(lesson.title)
+        library = normalize(lesson.library_name) if lesson.library_name else ""
+        available_library_names.add(title)
+        if library:
+            available_library_names.add(library)
+        ecosystem_rows += int(bool(ecosystems and normalize(lesson.ecosystem) in ecosystems))
+        candidate_capabilities = {normalize(lesson.capability_kind)} | {
+            normalize(value) for value in lesson.keywords
+        }
+        capability_rows += int(bool(capabilities & candidate_capabilities))
+        library_rows += int(bool(libraries and (title in libraries or library in libraries)))
+        path_rows += int(bool(library and any(library in path for path in paths)))
+    return {
+        "miss_ecosystem_rows": ecosystem_rows,
+        "miss_capability_rows": capability_rows,
+        "miss_exact_library_rows": library_rows,
+        "miss_target_path_rows": path_rows,
+        "miss_library_hints_not_named": len(libraries - available_library_names),
+    }
+
+
 def orchestrate_lesson_retrieval(
     request: CodingKnowledgeRequest,
     *,
@@ -529,6 +567,8 @@ def orchestrate_lesson_retrieval(
             # back by selection, status mapping or admission.
             diagnostics["selection_basis"] = basis.basis
             diagnostics["best_bucket_tied_identities"] = basis.tied_identities
+            if basis.basis == "no-relevant-signal":
+                diagnostics.update(_relevance_miss_counters(current_request, accumulated))
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
             diagnostics["terminal_query_bucket"] = terminal_query_bucket

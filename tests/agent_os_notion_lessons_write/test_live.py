@@ -5,14 +5,16 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-import urllib.request
 
-from tests.agent_os_notion_lessons_write.test_writer import Client, CONTEXT, PAGE_ID, REVISION, SOURCE_ID, event, page
-from scripts.agent_os_notion_lessons_write.admission import (
-    AdmittedRequest, OWNER_ID, REPOSITORY, REPOSITORY_ID, WriteBlocked,
+from tests.agent_os_notion_lessons_write.test_writer import (
+    CONTEXT, PAGE_ID, SOURCE_ID, event,
 )
-from scripts.agent_os_notion_lessons_write.catalog import REQUEST_ID, WRITABLE_TYPES
-from scripts.agent_os_notion_lessons_write.admission import verify_current_request
+from scripts.agent_os_notion_lessons_write.admission import (
+    AdmittedRequest, REPOSITORY, WriteBlocked, verify_current_request,
+)
+from scripts.agent_os_notion_lessons_write.catalog import (
+    LL93_METADATA_REQUEST_ID, REQUEST_ID,
+)
 from scripts.agent_os_notion_lessons_write.live import LiveLessonsClient, _NoRedirect
 from scripts.agent_os_notion_lessons_write.writer import properties
 
@@ -34,6 +36,9 @@ class LiveTests(unittest.TestCase):
     def client(self):
         client = object.__new__(LiveLessonsClient)
         client.request_id = REQUEST_ID
+        # This fixture bypasses __init__ to inspect low-level HTTP shapes;
+        # a production client defaults to False until its atomic ref is won.
+        client._create_reserved = True
         client.source_id = SOURCE_ID
         client._token = "test-only-not-a-real-credential"
         from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
@@ -51,12 +56,13 @@ class LiveTests(unittest.TestCase):
                 return Response(json.dumps({"id": PAGE_ID}).encode())
         client = self.client()
         client._opener = Opener()
-        client.create(properties())
-        client.update(PAGE_ID, properties())
+        intended = properties()
+        client.create(intended)
+        client.update(PAGE_ID, intended)
         create, update = client._opener.requests
         self.assertEqual(create.full_url, "https://api.notion.com/v1/pages")
         self.assertEqual(create.method, "POST")
-        self.assertEqual(json.loads(create.data), {"parent": {"type": "data_source_id", "data_source_id": SOURCE_ID}, "properties": properties()})
+        self.assertEqual(json.loads(create.data), {"parent": {"type": "data_source_id", "data_source_id": SOURCE_ID}, "properties": intended})
         self.assertEqual(update.full_url, "https://api.notion.com/v1/pages/" + PAGE_ID)
         self.assertEqual(update.method, "PATCH")
         self.assertEqual(set(json.loads(update.data)), {"properties"})
@@ -66,11 +72,48 @@ class LiveTests(unittest.TestCase):
         for key, value in (("Approval", {"checkbox": True}), ("schema", {}), ("What Happened", {"rich_text": [{"text": {"content": "private student details"}}]})):
             intended = properties()
             intended[key] = value
+            client._create_reserved = True  # isolate each invalid HTTP body
             with self.subTest(key=key), self.assertRaisesRegex(WriteBlocked, "reviewed-narrative"):
                 client.create(intended)
 
+    def test_direct_create_requires_reservation_and_consumes_it_before_post(self):
+        class Response(io.BytesIO):
+            status = 201
+        class Opener:
+            def __init__(self):
+                self.requests = []
+            def open(self, request, timeout):
+                self.requests.append(request)
+                return Response(json.dumps({"id": PAGE_ID}).encode())
+        client = self.client()
+        client._create_reserved = False
+        client._opener = Opener()
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-required"):
+            client.create(properties())
+        self.assertEqual(client._opener.requests, [])
+        with patch(
+            "scripts.agent_os_notion_lessons_write.create_reservation.reserve_once"
+        ) as reserve:
+            client.reserve_create(REQUEST_ID)
+            reserve.assert_called_once_with(REQUEST_ID)
+        self.assertTrue(client._create_reserved)
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-already-consumed"):
+            client.reserve_create(REQUEST_ID)
+        self.assertEqual(client.create(properties()), {"id": PAGE_ID})
+        self.assertFalse(client._create_reserved)
+        self.assertEqual(len(client._opener.requests), 1)
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-required"):
+            client.create(properties())
+        self.assertEqual(len(client._opener.requests), 1)
+
+    def test_live_reservation_is_bound_to_registered_reviewed_request(self):
+        client = self.client()
+        client._create_reserved = False
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-request-mismatch"):
+            client.reserve_create("foreign-request")
+        self.assertFalse(client._create_reserved)
+
     def test_lesson_id_query_is_bounded_to_reviewed_target(self):
-        from scripts.agent_os_notion_lessons_write.catalog import LL93_METADATA_REQUEST_ID
         client = self.client()
         with self.assertRaisesRegex(WriteBlocked, "finite-lesson-identity"):
             client.find_lesson(93)  # create entry has no Lesson ID target
@@ -111,8 +154,10 @@ class LiveTests(unittest.TestCase):
 
     def test_ckr6_composition_constructs_read_tasks_only(self):
         import runpy
-        # Exercise the immutable canonical module directly: the partial local
-        # source mirror need not initialize the unrelated execution-service API.
+        # Intentionally execute the standalone leaf source, not its package
+        # initializer: that package's unrelated API dependencies are not
+        # available in this focused test surface. Relative imports added to
+        # the leaf would require changing this explicit isolation contract.
         resolve_lesson_read_route = runpy.run_path(str(ROOT / "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/lesson_reader_composition.py"))["resolve_lesson_read_route"]
         from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
         class Reader(NotionReadOnlyAdapter):
@@ -139,8 +184,8 @@ class CurrentnessTests(unittest.TestCase):
                     "scripts.agent_os_notion_lessons_write.admission._get",
                     side_effect=[e["issue"], self.comment(e, number)]) as get:
                 verify_current_request(e, request, context=CONTEXT)
-            self.assertEqual([call.args[0] for call in get.call_args_list],
-                             [f"/issues/{number}", "/issues/comments/100"])
+                self.assertEqual([call.args[0] for call in get.call_args_list],
+                                 [f"/issues/{number}", "/issues/comments/100"])
 
     def test_edited_moved_or_pr_current_comment_refuses(self):
         e = event()
@@ -153,9 +198,16 @@ class CurrentnessTests(unittest.TestCase):
                 value["issue_url"] = f"https://api.github.com/repos/{REPOSITORY}/issues/3305"
             else:
                 issue["pull_request"] = {}
+            expected_reason = {
+                "edited": "edited-comment-refused",
+                "moved": "canonical-comment-target-mismatch",
+                "pull_request": "ordinary-issue-request-required",
+            }[kind]
             with self.subTest(kind=kind), patch(
                     "scripts.agent_os_notion_lessons_write.admission._get",
-                    side_effect=[issue, value]), self.assertRaises(WriteBlocked):
+                    side_effect=[issue, value]), self.assertRaisesRegex(
+                        WriteBlocked, f"^{expected_reason}$"
+                    ):
                 verify_current_request(e, request, context=CONTEXT)
 
 
@@ -163,7 +215,10 @@ class WorkflowTests(unittest.TestCase):
     def test_workflow_exposes_existing_secret_only_after_admission(self):
         import yaml
         value = yaml.safe_load((ROOT / WORKFLOW_PATH).read_text())
-        self.assertEqual(value["permissions"], {"contents": "read"})
+        # Create-once protection requires an atomic, permanent GitHub ref.
+        # Only the trusted main workflow with owner admission can use this
+        # contents:write scope, and the token is passed only to execute.
+        self.assertEqual(value["permissions"], {"contents": "write"})
         self.assertFalse(value["concurrency"]["cancel-in-progress"])
         triggers = value.get("on", value.get(True))
         self.assertEqual(set(triggers), {"issue_comment"})
@@ -171,10 +226,22 @@ class WorkflowTests(unittest.TestCase):
         steps = value["jobs"]["lessons_write"]["steps"]
         secrets = [step for step in steps if "NOTION_TOKEN" in step.get("env", {})]
         self.assertEqual(len(secrets), 1)
-        self.assertGreater(steps.index(secrets[0]), 2)
+        names = [step.get("name") for step in steps]
+        self.assertLess(
+            names.index("Admit exact owner request without credentials"),
+            names.index("Execute one bounded write and two canonical readbacks"),
+        )
+        self.assertEqual(
+            secrets[0].get("name"), "Execute one bounded write and two canonical readbacks"
+        )
         self.assertEqual(secrets[0]["env"]["NOTION_TOKEN"], "${{ secrets.NOTION_TOKEN }}")
+        self.assertEqual(secrets[0]["env"]["GITHUB_TOKEN"], "${{ github.token }}")
+        for step in steps:
+            if step is not secrets[0]:
+                self.assertNotIn("GITHUB_TOKEN", step.get("env", {}))
+                self.assertNotIn("NOTION_TOKEN", step.get("env", {}))
         self.assertEqual(secrets[0]["env"]["AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"], "${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}")
-        self.assertNotIn("continue-on-error", str(steps))
+        self.assertTrue(all("continue-on-error" not in step for step in steps))
 
     def test_workflow_is_not_bound_to_one_implementation_issue(self):
         import yaml

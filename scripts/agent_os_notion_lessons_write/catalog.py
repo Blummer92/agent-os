@@ -652,14 +652,16 @@ LESSONS = MappingProxyType({
 def _valid_value(name: str, value: object) -> bool:
     kind = WRITABLE_TYPES[name]
     if kind == "multi_select":
+        # Validate element types before hashing to make even unhashable values
+        # a finite reviewed-entry refusal rather than an unexpected TypeError.
         return (type(value) is tuple and 0 < len(value) <= MAX_APPLIES_TO
-                and len(set(value)) == len(value)
                 and all(type(item) is str and item.strip() == item and 0 < len(item) <= 100
-                        for item in value))
+                        for item in value)
+                and len(set(value)) == len(value))
     if name == SUPPORTING_SOURCE_LINKS:
         return (type(value) is tuple and 0 < len(value) <= MAX_SUPPORTING_REFS
-                and len(set(value)) == len(value)
-                and all(type(item) is str and _valid_supporting_ref(item) for item in value))
+                and all(type(item) is str and _valid_supporting_ref(item) for item in value)
+                and len(set(value)) == len(value))
     if type(value) is not str or not value.strip() or len(value) > MAX_TEXT:
         return False
     if kind == "url":

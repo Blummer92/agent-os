@@ -28,6 +28,9 @@ class LiveLessonsClient:
 
     def __init__(self, request_id: str = REQUEST_ID) -> None:
         self.request_id = request_id
+        # Per-client one-shot barrier prevents accidental repeated POSTs even
+        # after a valid permanent GitHub reservation was acquired.
+        self._create_reserved = False
         # Called only after credential-free owner admission. Imports remain
         # lazy and reuse the existing read composition, credential and version.
         self._token = os.environ.get("NOTION_TOKEN", "").strip()
@@ -109,7 +112,22 @@ class LiveLessonsClient:
         except Exception:
             raise WriteBlocked("notion-write-outcome-unconfirmed") from None
 
+    def reserve_create(self, request_id: str) -> None:
+        """Create a permanent GitHub reservation before ANY Notion POST."""
+        if request_id != self.request_id:
+            raise WriteBlocked("create-reservation-request-mismatch")
+        if self._create_reserved:
+            raise WriteBlocked("create-reservation-already-consumed")
+        from .create_reservation import reserve_once
+        reserve_once(request_id)
+        self._create_reserved = True
+
     def create(self, properties: Mapping) -> Mapping:
+        if self._create_reserved is not True:
+            raise WriteBlocked("create-reservation-required")
+        # Consume BEFORE the POST, even when the network times out or the
+        # provider replies with an error. A second call cannot repeat it.
+        self._create_reserved = False
         return self._mutate(page_id=None, intended=properties)
 
     def update(self, page_id: str, properties: Mapping) -> Mapping:

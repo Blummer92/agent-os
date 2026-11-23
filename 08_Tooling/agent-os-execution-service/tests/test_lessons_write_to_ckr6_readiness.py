@@ -73,6 +73,7 @@ class FakeNotion:
         self.page = deepcopy(existing)
         self.number = new_lesson_number
         self.sent = []
+        self.create_reservations = []
         schema = {name: {"type": kind} for name, kind in
                   {**catalog.WRITABLE_TYPES, "Lesson ID": "unique_id", "Status": "select"}.items()}
         for name, options in OPTIONS.items():
@@ -84,6 +85,13 @@ class FakeNotion:
 
     def schema(self):
         return deepcopy(self._schema)
+
+    def reserve_create(self, request_id):
+        # Offline writer-to-reader integration: assert the reviewed create
+        # acquired its claim before mutation. The GitHub atomic contract and
+        # competing owner requests are tested independently.
+        assert catalog.entry_for(request_id)["target_lesson_id"] is None
+        self.create_reservations.append(request_id)
 
     def find_exact(self, title):
         return {"results": [deepcopy(self.page)] if self.page else [], "has_more": False}
@@ -139,6 +147,8 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
     result = execute(AdmittedRequest(100, issue_number=3417, request_id=CREATE_WITH_METADATA), notion)
 
     assert result["status"] == "persisted" and result["readback_verified"] is True
+    assert notion.create_reservations == [CREATE_WITH_METADATA]
+    assert result["create_reservation_acquired"] is True
     assert result["lesson_id"] == "LL-101"
     assert result["activation_prerequisites"] == {
         "required_fields_present": False,
@@ -161,6 +171,7 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
     # A re-run is `unchanged` and now reports the page ready.
     rerun = execute(AdmittedRequest(101, issue_number=3417, request_id=CREATE_WITH_METADATA), notion)
     assert rerun["status"] == "unchanged"
+    assert notion.create_reservations == [CREATE_WITH_METADATA]
     assert rerun["activation_prerequisites"] == {
         "required_fields_present": True, "missing_owner_activation": [], "missing_reviewed_metadata": [],
     }
@@ -171,6 +182,8 @@ def test_reviewed_create_without_area_is_reported_unretrievable_and_owner_activa
     result = execute(AdmittedRequest(100, issue_number=3417, request_id=CREATE_WITHOUT_METADATA), notion)
 
     assert result["status"] == "persisted"
+    assert notion.create_reservations == [CREATE_WITHOUT_METADATA]
+    assert result["create_reservation_acquired"] is True
     assert result["activation_prerequisites"] == {
         "required_fields_present": False,
         "missing_owner_activation": ["Status", "Surface Before Work?"],
@@ -191,6 +204,7 @@ def test_reviewed_metadata_update_of_existing_lesson_reaches_retrieval_after_own
     result = execute(request, notion)
 
     assert result["status"] == "persisted" and result["lesson_id"] == "LL-93"
+    assert notion.create_reservations == []  # updates never claim a create key
     assert result["activation_prerequisites"]["missing_reviewed_metadata"] == []
     assert result["activation_prerequisites"]["missing_owner_activation"] == ["Status", "Surface Before Work?"]
     assert set(notion.sent[0]) == set(catalog.lesson_for(UPDATE_METADATA))

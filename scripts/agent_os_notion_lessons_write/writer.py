@@ -222,6 +222,36 @@ def activation_prerequisites(page: Mapping) -> dict:
     }
 
 
+def _create_protected_fields_safe(page: Mapping) -> bool:
+    """A newly created lesson cannot acquire owner-only activation by accident.
+
+    The live database may default Status to New; Surface remains false. An
+    unexpected activated or malformed state cannot certify a routine write.
+    This is NOT proof the page was created by this request.
+    """
+    props = page.get("properties")
+    if not isinstance(props, Mapping):
+        return False
+    status = props.get("Status")
+    surface = props.get("Surface Before Work?")
+    if (not isinstance(status, Mapping) or status.get("type") != "select"
+            or not isinstance(surface, Mapping) or surface.get("type") != "checkbox"
+            or surface.get("checkbox") is not False):
+        return False
+    selection = status.get("select")
+    return selection is None or (
+        isinstance(selection, Mapping) and selection.get("name") == "New"
+    )
+
+
+def _page_state(page: Mapping) -> tuple:
+    """Compare write-relevant state, not volatile read-adapter request IDs."""
+    return tuple(page.get(key) for key in (
+        "id", "parent", "properties", "last_edited_time",
+        "archived", "is_archived", "in_trash",
+    ))
+
+
 def execute(request: AdmittedRequest, client) -> dict:
     """Consume owner admission under the existing policy, never infer authority."""
     result = {
@@ -268,13 +298,21 @@ def execute(request: AdmittedRequest, client) -> dict:
             # Reacquire at the mutation boundary. Never overwrite a newer page.
             current = client.get_page(page_id)
             _page(current, source_id, page_id)
-            if current != existing:
+            if _page_state(current) != _page_state(existing):
                 result.update(status="conflict", reason_code="page-changed-before-write")
                 return result
         elif _find_title(client, source_id, lesson) is not None:
             result.update(status="conflict", reason_code="lesson-appeared-before-create")
             return result
         intended = properties(request.request_id)
+        if page_id is None:
+            # Durable, atomic create-once reservation BEFORE any Notion POST.
+            # GitHub's fixed ref namespace is keyed by normalized reviewed
+            # title, so another authorized request cannot race a lagging
+            # Notion title index. A failed/previously held reservation refuses
+            # with ZERO Notion attempts; never reuse or automatically release.
+            client.reserve_create(request.request_id)
+            result["create_reservation_acquired"] = True
         # No automatic retry, including timeout/429/provider errors. Once a
         # write is attempted, uncertainty must never be reported as zero writes.
         result.update(write_attempts=1, status="uncertain", reason_code="write-or-readback-unconfirmed")
@@ -289,13 +327,39 @@ def execute(request: AdmittedRequest, client) -> dict:
             else:
                 page_id = written
         except Exception:
-            # Existing exact target can still be canonically read. A create
-            # without an exact returned identity stays uncertain; never retry.
             if page_id is None:
-                return result
+                # The POST may have committed. Do not retry it. A bounded,
+                # single title lookup may recover a candidate page identity.
+                try:
+                    recovered = _find_title(client, source_id, lesson)
+                    if recovered is None:
+                        result["recovery_reason"] = "recovery-not-visible"
+                        return result
+                    page_id = _page(recovered, source_id)
+                except WriteBlocked as exc:
+                    result["recovery_reason"] = {
+                        "ambiguous-lesson": "recovery-ambiguous",
+                        "incomplete-reconciliation": "recovery-incomplete",
+                        "page-destination-mismatch": "recovery-identity-invalid",
+                        "query-identity-mismatch": "recovery-identity-invalid",
+                        "inactive-page": "recovery-identity-invalid",
+                    }.get(str(exc), "recovery-unavailable")
+                    return result
+                except Exception:
+                    result["recovery_reason"] = "recovery-unavailable"
+                    return result
+                # Recovered identity proves current state only, NOT causality.
+                result["create_receipt_recovered"] = True
+            else:
+                # PATCH may have succeeded despite its missing response. The
+                # original stable page identity permits a direct GET.
+                result["update_receipt_recovered"] = True
         result["page_id"] = page_id
         readback = client.get_page(page_id)
         _page(readback, source_id, page_id)
+        if existing is None and not _create_protected_fields_safe(readback):
+            result.update(reason_code="protected-field-present-after-create")
+            return result
         if receipt_mismatch:
             result.update(reason_code="write-receipt-target-mismatch")
             return result

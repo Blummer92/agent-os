@@ -134,6 +134,58 @@ def test_n2_completed_no_match_is_no_relevant_signal():
     assert _basis_facts(result) == [FACT + "no-relevant-signal"]
 
 
+def test_4101_complete_no_match_reports_controlled_signal_misses_without_admission(tmp_path):
+    # Synthetic 87-row read; this does not certify any real Notion lesson.
+    result = _run(
+        [_row(n) for n in range(10, 97)],
+        ecosystem_hints=("agent-os",),
+        language_hints=("python",),
+        capability_keywords=(
+            "atomic create-once reservation", "write response loss",
+            "Notion lesson writer", "CKR2 relevance qualification",
+            "exact-head regression testing",
+        ),
+        library_hints=("Notion API", "GitHub Git References API", "pytest"),
+        target_path_hints=("scripts/agent_os_notion_lessons_write/live.py",),
+    )
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["selection_reason_codes"] == ["no-relevant-candidate"]
+    assert result["selected_lesson_ids"] == []
+    assert result["substantial_hypothesis_admissible"] is False
+    diag = result["retrieval_diagnostics"]
+    assert diag["read_count"] == 1
+    assert diag["normalized_rows"] == 87
+    assert diag["skipped_rows"] == 0
+    assert diag["selection_basis"] == "no-relevant-signal"
+    assert diag["miss_ecosystem_rows"] == 87
+    assert diag["miss_capability_rows"] == 0
+    assert diag["miss_exact_library_rows"] == 0
+    assert diag["miss_target_path_rows"] == 0
+    assert diag["miss_library_hints_not_named"] == 3
+    projected = bridge.retrieval_diagnostics_projection(result)
+    assert projected is not None
+    target = tmp_path / "retrieval-diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(projected, target)
+    artifact = json.loads(target.read_text(encoding="utf-8"))
+    assert artifact["miss_capability_rows"] == 0
+    assert artifact["miss_library_hints_not_named"] == 3
+    text = target.read_text(encoding="utf-8")
+    assert "Notion API" not in text
+    assert "atomic create-once reservation" not in text
+
+
+def test_4101_generic_notion_tag_does_not_satisfy_required_libraries():
+    result = _run(
+        [_row(n) for n in (10, 11, 12)],
+        capability_keywords=("Notion",),
+        library_hints=("Notion API", "GitHub Git References API", "pytest"),
+    )
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["selection_reason_codes"] == ["required-library-uncovered"]
+    assert result["substantial_hypothesis_admissible"] is False
+    assert result["retrieval_diagnostics"]["selection_basis"] == "generic-unique"
+
+
 # --- not-evaluated vs no-relevant-signal control matrix (owner decision 2026-11-18) ---
 # Status, admission, selected IDs, sufficiency fact and reason codes are pinned as
 # literals: only the basis value may differ between these paths.

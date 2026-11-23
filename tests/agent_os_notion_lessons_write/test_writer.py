@@ -114,6 +114,11 @@ class Client:
             value["properties"]["Guardrail"]["rich_text"] = []
         return value
 
+    def reserve_create(self, request_id):
+        # Offline fake accepts any reviewed catalog request. Atomic GitHub
+        # create-only semantics are exercised by test_create_reservation.py.
+        return None
+
     def create(self, intended):
         self.calls.append("write")
         self.sent.append(deepcopy(intended))
@@ -598,6 +603,237 @@ class RunnerTests(unittest.TestCase):
 from scripts.agent_os_notion_lessons_write.verify_live_write import verify_persisted_write
 
 
+class LostCreateReceiptRecoveryTests(unittest.TestCase):
+    """An uncertain POST is never replayed; only exact state can be recovered."""
+
+    class ReconciledClient(Client):
+        # A real Notion data-source query can observe the newly created page
+        # after the POST succeeded but its transport response was lost.
+        def find_exact(self, title):
+            if "write" in self.calls:
+                self.rows = [deepcopy(self.page)]
+            return super().find_exact(title)
+
+    def test_lost_response_recovers_exact_page_without_second_post(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertEqual(outcome["reason_code"], "exact-canonical-readback-confirmed")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertTrue(outcome["readback_verified"])
+        self.assertEqual(outcome["page_id"], PAGE_ID)
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls[-3:], ["write", "query", "get"])
+        self.assertNotIn("credential-class", json.dumps(outcome))
+
+        # A second observer checks exact canonical current state, never writes.
+        after = len(client.calls)
+        verified = verify_persisted_write(
+            outcome, lambda _request_id: client, expected_request_id=REQUEST_ID
+        )
+        self.assertEqual(verified["status"], "verified-current-state")
+        self.assertTrue(verified["persisted_state_verified"])
+        self.assertFalse(verified["write_causality_established"])
+        self.assertEqual(client.calls[after:], ["binding", "get"])
+
+        # A fresh owner attempt reconciles, rather than creating another row.
+        client.raise_mutation = False
+        again = execute(AdmittedRequest(101), client)
+        self.assertEqual(again["status"], "unchanged")
+        self.assertEqual(again["write_attempts"], 0)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_lost_response_without_visible_page_stays_uncertain(self):
+        client = Client()
+        client.raise_mutation = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertFalse(outcome["readback_verified"])
+        self.assertIsNone(outcome["page_id"])
+        self.assertEqual(outcome["recovery_reason"], "recovery-not-visible")
+        self.assertNotIn("create_receipt_recovered", outcome)
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls[-2:], ["write", "query"])
+
+    def test_ambiguous_or_incomplete_recovery_never_claims_success(self):
+        for case in ("duplicate", "has_more", "wrong_identity", "query_failure"):
+            class BadRecovery(self.ReconciledClient):
+                def find_exact(self, title):
+                    if "write" in self.calls and case == "query_failure":
+                        self.calls.append("query")
+                        raise TimeoutError("private-notion-query")
+                    reply = super().find_exact(title)
+                    if "write" in self.calls:
+                        if case == "duplicate":
+                            reply["results"].append(deepcopy(reply["results"][0]))
+                        elif case == "has_more":
+                            reply["has_more"] = True
+                        elif case == "wrong_identity":
+                            reply["results"][0]["parent"]["data_source_id"] = PAGE_ID
+                    return reply
+
+            with self.subTest(case=case):
+                client = BadRecovery()
+                client.raise_mutation = True
+                outcome = execute(AdmittedRequest(100), client)
+                self.assertEqual(outcome["status"], "uncertain")
+                self.assertEqual(outcome["write_attempts"], 1)
+                self.assertFalse(outcome["readback_verified"])
+                self.assertNotIn("create_receipt_recovered", outcome)
+                self.assertEqual(outcome["recovery_reason"], {
+                    "duplicate": "recovery-ambiguous",
+                    "has_more": "recovery-incomplete",
+                    "wrong_identity": "recovery-identity-invalid",
+                    "query_failure": "recovery-unavailable",
+                }[case])
+                self.assertEqual(client.calls.count("write"), 1)
+                self.assertNotIn("private-notion-query", json.dumps(outcome))
+
+    def test_recovered_page_with_different_content_is_not_persisted(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        client.readback_mismatch = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "canonical-readback-mismatch")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_second_read_failure_after_recovery_is_not_success(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        client.fail_readback = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_malformed_create_receipt_reconciles_only_if_state_matches(self):
+        class MalformedReceipt(self.ReconciledClient):
+            def create(self, intended):
+                self.raise_mutation = False
+                super().create(intended)
+                return {}
+
+        client = MalformedReceipt()
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+
+class ClaudeDurabilityQATests(unittest.TestCase):
+    """Claude #4101 F3/F4/F7: safety, provenance, stable updates."""
+
+    def test_foreign_activated_page_cannot_be_claimed_as_recovered_create(self):
+        class ForeignActivated(Client):
+            def create(self, intended):
+                self.calls.append("write")
+                raise TimeoutError("private-transport-after-no-commit")
+
+            def find_exact(self, title):
+                self.calls.append("query")
+                if "write" not in self.calls:
+                    return {"results": [], "has_more": False}
+                self.page = page()
+                self.page["properties"]["Status"] = {
+                    "type": "select", "select": {"name": "Applied"},
+                }
+                self.page["properties"]["Surface Before Work?"] = {
+                    "type": "checkbox", "checkbox": True,
+                }
+                return {"results": [deepcopy(self.page)], "has_more": False}
+
+        client = ForeignActivated()
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "protected-field-present-after-create")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_receipted_create_with_activated_protected_fields_is_uncertain(self):
+        class ActivationByAutomation(Client):
+            def create(self, intended):
+                result = super().create(intended)
+                self.page["properties"]["Surface Before Work?"]["checkbox"] = True
+                return result
+
+        outcome = execute(AdmittedRequest(100), ActivationByAutomation())
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "protected-field-present-after-create")
+
+    def test_status_new_default_is_nonactivated_with_surface_false(self):
+        class NewByDefault(Client):
+            def create(self, intended):
+                result = super().create(intended)
+                self.page["properties"]["Status"] = {
+                    "type": "select", "select": {"name": "New"},
+                }
+                return result
+
+        outcome = execute(AdmittedRequest(100), NewByDefault())
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertTrue(outcome["readback_verified"])
+        self.assertFalse(outcome["activation_prerequisites"]["required_fields_present"])
+
+    def test_update_ignores_volatile_provider_request_id_but_checks_real_state(self):
+        class RequestTaggedPages(Client):
+            def get_page(self, page_id):
+                item = super().get_page(page_id)
+                item["request_id"] = f"provider-request-{self.reads}"
+                return item
+
+        client = RequestTaggedPages(page())
+        outcome = execute(update_request(), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_update_timeout_records_recovered_receipt_without_claiming_causality(self):
+        client = Client(page())
+        client.raise_mutation = True
+        outcome = execute(update_request(), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertIs(outcome["update_receipt_recovered"], True)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_runner_persists_uncertain_receipt_before_abnormal_termination(self):
+        class AbruptWrite(Client):
+            def create(self, intended):
+                self.calls.append("write")
+                raise KeyboardInterrupt("simulated abrupt process interruption")
+
+        from scripts.agent_os_notion_lessons_write.runner import main
+
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"],
+               "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF,
+               "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", env, clear=True):
+            root = Path(folder)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient",
+                return_value=AbruptWrite(),
+            ), patch(
+                "scripts.agent_os_notion_lessons_write.runner.verify_current_request",
+                return_value=None,
+            ), self.assertRaises(KeyboardInterrupt):
+                main(["--phase", "execute", "--event", str(root / "event.json"),
+                      "--output", str(root / "result.json")])
+            receipt = json.loads((root / "result.json").read_text())
+            self.assertEqual(receipt["status"], "uncertain")
+            self.assertEqual(receipt["reason_code"], "execution-incomplete")
+            self.assertEqual(receipt["write_attempts"], 1)
+            self.assertFalse(receipt["readback_verified"])
+
+
 class IndependentPersistedWriteTests(unittest.TestCase):
     def test_second_canonical_get_confirms_state_after_writer_attempt(self):
         client = Client()
@@ -756,6 +992,37 @@ class RunnerIndependentReadbackTests(unittest.TestCase):
         self.assertEqual(verification["status"], "verified-current-state")
         self.assertEqual(client.calls.count("write"), 1)
         self.assertEqual(client.calls.count("get"), 2)
+
+    def test_lost_create_response_completes_only_after_two_exact_page_reads(self):
+        client = LostCreateReceiptRecoveryTests.ReconciledClient()
+        client.raise_mutation = True
+        code, writer_result, independent = self._execute(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(writer_result["status"], "persisted")
+        self.assertTrue(writer_result["create_receipt_recovered"])
+        self.assertEqual(writer_result["write_attempts"], 1)
+        self.assertTrue(independent["persisted_state_verified"])
+        self.assertFalse(independent["write_causality_established"])
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls.count("get"), 2)
+
+    def test_lost_create_response_with_failed_independent_check_exits_nonzero(self):
+        class IndependentDrift(LostCreateReceiptRecoveryTests.ReconciledClient):
+            def get_page(self, page_id):
+                value = super().get_page(page_id)
+                if self.reads > 1:
+                    value["last_edited_time"] = "2026-10-09T00:00:00.000Z"
+                return value
+
+        client = IndependentDrift()
+        client.raise_mutation = True
+        code, writer_result, independent = self._execute(client)
+        self.assertEqual(code, 1)
+        self.assertEqual(writer_result["status"], "persisted")
+        self.assertTrue(writer_result["create_receipt_recovered"])
+        self.assertFalse(independent["persisted_state_verified"])
+        self.assertEqual(independent["reason_code"], "independent-revision-mismatch")
+        self.assertEqual(client.calls.count("write"), 1)
 
     def test_independent_stale_revision_fails_the_runner_without_retry(self):
         class DriftClient(Client):

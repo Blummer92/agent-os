@@ -28,7 +28,10 @@ def _bounded_reason(exc: WriteBlocked) -> str:
 def _save_receipt(path: Path, value: dict) -> bool:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        # A killed process must never leave a partially overwritten receipt.
+        pending = path.with_name(path.name + ".tmp")
+        pending.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        pending.replace(path)
         return True
     except OSError:
         return False
@@ -86,6 +89,14 @@ def main(argv: list[str] | None = None) -> int:
             from .live import LiveLessonsClient
             from .writer import execute
             client = LiveLessonsClient(request.request_id)
+            # A credential-bearing execution can terminate abruptly after the
+            # remote mutation. Persist a fail-closed provisional receipt BEFORE
+            # invoking the writer; never fall back to "admitted, zero writes".
+            result.update(status="uncertain", reason_code="execution-incomplete",
+                          comment_id=request.comment_id, write_attempts=1,
+                          readback_verified=False)
+            if not _save_receipt(args.output, result):
+                return 1  # No write if the provisional receipt cannot be stored.
             phase = "execution"
             candidate = execute(request, client)
             if type(candidate) is not dict:
