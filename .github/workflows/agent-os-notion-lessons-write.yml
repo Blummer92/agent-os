@@ -4,8 +4,10 @@ on:
   issue_comment:
     types: [created]
 
+# Only the trusted, owner-admitted main-workflow execution can create
+# permanent one-shot Git refs. Needed for durable atomic deduplication.
 permissions:
-  contents: read
+  contents: write
 
 # Serialize this one destination across all admitted comments. Do not cancel a
 # secret-bearing write. Reruns are refused by admission before credential use.
@@ -44,6 +46,9 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+          # Scoped job token (contents:write) can only create a deterministic
+          # one-shot ref through the fixed GitHub REST endpoint. Never publish it.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # If the job dies before writing its result, the summary must never
           # reuse admission.json and falsely claim zero write attempts.
@@ -82,7 +87,8 @@ jobs:
               summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
               for key in ('reason_code', 'recovery_reason', 'write_attempts',
                           'readback_verified', 'page_id', 'lesson_id', 'revision',
-                          'create_receipt_recovered', 'update_receipt_recovered'):
+                          'create_reservation_acquired', 'create_receipt_recovered',
+                          'update_receipt_recovered'):
                   summary.write(f'{key}: `{result.get(key)}`\n\n')
               summary.write('independent_state_verification: `' + verification.get('status', 'not-run') + '`\n\n')
               summary.write('persisted_state_verified: `' + str(verification.get('persisted_state_verified') is True) + '`\n\n')
