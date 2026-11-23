@@ -1,467 +1,439 @@
+"""Contract and local execution tests for the advisory acceptance workflow."""
+
+import json
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+import yaml
+
+from scripts.agent_os_issue_acceptance.checks.banned_patterns import check
+from scripts.agent_os_issue_acceptance.models import IssueMetadata, Status
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
+VERIFY_REF = "Verify main dispatch"
+CHECKOUT = "Check out trusted report evaluator"
+VERIFY = "Verify trusted evaluator revision"
+BUILD = "Build local acceptance fixtures from PR data"
+CHECKER = "Run report-only issue acceptance checker"
+SUMMARY = "Publish report summary"
+FIXTURE_DIR = "tmp/agent_os_issue_acceptance_report"
+PR_NUMBER = "23"
+ORIGINAL_HEAD = "a" * 40
+BASE = "b" * 40
+EVALUATOR = "c" * 40
+PR_FIXTURE = {
+    "number": int(PR_NUMBER), "title": "Fixes #71", "body": "Fixes #71",
+    "changedFiles": 1, "files": [{"path": "example.py"}],
+    "headRefOid": ORIGINAL_HEAD, "baseRefOid": BASE,
+}
 
 
-def _content() -> str:
+@pytest.fixture
+def workflow_text():
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_report_only_acceptance_workflow_exists_and_calls_checker():
-    content = _content()
-
-    assert "Agent OS Issue Acceptance Report" in content
-    assert "pull_request:" in content
-    assert "workflow_dispatch:" in content
-    assert "actions/checkout@v7" in content
-    assert "./.github/actions/setup-python-dev" in content
-    assert "python -m scripts.agent_os_issue_acceptance.cli" in content
-    assert "GITHUB_STEP_SUMMARY" in content
-
-
-def test_report_only_acceptance_workflow_uses_shared_environment_after_checkout():
-    content = _content()
-
-    checkout = content.index("uses: actions/checkout@v7")
-    shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
-    assert checkout < shared_setup
-    assert "uses: actions/setup-python@v6" not in content
-    assert "python -m pip install -r requirements-dev.txt" not in content
-
-
-def test_report_only_acceptance_workflow_uses_observed_at_and_file_based_transport_inputs():
-    content = _content()
-
-    assert "--transport-issue-body-file" in content
-    assert "--transport-fresh-issue-body-file" in content
-    assert "--transport-observed-at" in content
-    assert "tmp/agent_os_issue_acceptance_report/issue_recheck.md" in content
-    assert "gh issue view \"$linked_issue\" --json body" in content
-    assert '> "$out/issue.md" || :' not in content
-
-
-def test_report_only_acceptance_workflow_uses_read_permissions():
-    content = _content()
-
-    assert "contents: read" in content
-    assert "issues: read" in content
-    assert "pull-requests: read" in content
-
-    forbidden = [
-        "contents: " + "write",
-        "issues: " + "write",
-        "pull-requests: " + "write",
-        "statuses: " + "write",
-        "checks: " + "write",
-        "actions: " + "write",
-    ]
-    for pattern in forbidden:
-        assert pattern not in content
-
-
-def test_report_only_acceptance_workflow_has_no_mutation_paths():
-    content = _content()
-
-    forbidden = [
-        "gh issue " + "edit",
-        "gh issue " + "close",
-        "gh pr " + "edit",
-        "gh pr " + "merge",
-        "add-" + "label",
-        "remove-" + "label",
-        "set-" + "label",
-        "github.rest.issues." + "addLabels",
-        "github.rest.issues." + "removeLabel",
-        "github.rest.issues." + "setLabels",
-        "github.rest.issues." + "update",
-        "github.rest.pulls." + "update",
-        "branch-" + "protection",
-        "updateBranch" + "Protection",
-    ]
-    for pattern in forbidden:
-        assert pattern not in content
-
-
-def test_report_only_acceptance_workflow_collects_local_fixtures():
-    content = _content()
-
-    assert "tmp/agent_os_issue_acceptance_report/issue.md" in content
-    assert "tmp/agent_os_issue_acceptance_report/pr_body.md" in content
-    assert "tmp/agent_os_issue_acceptance_report/changed_files.txt" in content
-    assert "tmp/agent_os_issue_acceptance_report/diff.patch" in content
-    assert "gh pr view" in content
-    assert "gh issue view" in content
-    assert "parse_linked_issue_result" in content
-    # E4 (#3506, D3): fixtures are collected for the report-only issue
-    # number, so unambiguous non-closing PRs are evaluated too — the
-    # RESOLVED-only gate is gone.
-    assert "report_only_issue_number" in content
-    assert (
-        "from scripts.agent_os_issue_acceptance.parse_pr import "
-        "report_only_issue_number" in content
-    )
-    assert "LinkedIssueParseStatus.RESOLVED" not in content
-    assert "from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue\n" not in content
-
-
-def test_report_only_acceptance_workflow_bounds_issue_lookup_to_resolved_result():
-    # Name retained for continuity; the behaviour it pins is now the
-    # E4 (#3506, D3) report-only contract: the single lookup is bounded
-    # by report_only_issue_number, which returns the RESOLVED issue, or
-    # the single unambiguous declared non-closing target for report-only
-    # evaluation, and nothing (empty -> manual-review) for ambiguous or
-    # unresolvable associations. It never grants closure.
-    content = _content()
-
-    assert content.count("result = parse_linked_issue_result(") == 1
-    assert content.count("report_only_issue_number(result)") == 1
-    assert "number = report_only_issue_number(result)" in content
-    assert "print(number or \"\")" in content
-    assert "if result.status == LinkedIssueParseStatus.RESOLVED:" not in content
-    assert "print(result.issue_number" not in content
-    # E3 (#3506, D3): the checker step must expose the child result —
-    # a `fail` report (checker exit 1) fails this non-required check
-    # instead of being masked by an unconditional green `exit 0`.
-    assert 'exit "$checker_exit_code"' in content
-    acceptance_tail = content.split("checker_exit_code=${PIPESTATUS[0]}", 1)[1]
-    assert "\n          exit 0\n" not in acceptance_tail.split("Publish report summary", 1)[0]
-    assert 'printf \'%s\\n\' "$linked_issue" > "$out/linked_issue.txt"' in content
-    assert 'linked_issue="$(cat tmp/agent_os_issue_acceptance_report/linked_issue.txt 2>/dev/null || true)"' in content
-    assert 'if [ -n "$linked_issue" ]; then' in content
-    assert 'gh issue view "$linked_issue"' in content
-
-
-def test_report_only_acceptance_workflow_preserves_initial_issue_lookup_failure():
-    content = _content()
-
-    marker = 'issue_body_retrieval_failed.txt'
-    initial_lookup = 'if ! gh issue view "$linked_issue" --json body --jq \' .body // ""\''
-    assert marker in content
-    assert "printf '%s\\n' false > \"$out/issue_body_retrieval_failed.txt\"" in content
-    assert "printf '%s\\n' true > \"$out/issue_body_retrieval_failed.txt\"" in content
-    assert 'issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"' in content
-    assert "--transport-issue-body-retrieval-failed" in content
-    assert initial_lookup.replace("' ", "'") in content
-
-
-def test_report_only_acceptance_workflow_publishes_report_without_gating():
-    content = _content()
-
-    assert "set +e" in content
-    assert "PIPESTATUS[0]" in content
-    assert "checker_exit_code=" in content
-    assert "exit 0" in content
-    assert "Report-only boundary" in content
-
-
-def test_report_only_acceptance_workflow_summary_runs_when_checker_fails():
-    # NB-2 (#3506, follow-up to D3): the "Publish report summary" step
-    # must run even when the checker step fails (E3), so the failing
-    # report is rendered instead of the step being skipped. The checker
-    # step itself is unchanged: its non-zero exit still determines the
-    # job/check result, and no other step gains `if: always()`.
-    import yaml
-
-    content = _content()
-    workflow = yaml.safe_load(content)
-    steps = workflow["jobs"]["report"]["steps"]
-    by_name = {step["name"]: step for step in steps}
-
-    summary = by_name["Publish report summary"]
-    assert summary.get("if") == "always()"
-    assert content.count("if: always()") == 1
-
-    checker = by_name["Run report-only issue acceptance checker"]
-    assert "if" not in checker
-    assert 'exit "$checker_exit_code"' in checker["run"]
-
-    # The summary consumes the report file defensively: a missing report
-    # (earlier step failed before the checker ran) degrades to an
-    # explicit notice instead of failing the step and truncating the
-    # summary; a partial report is rendered as-is.
-    assert (
-        "if [ -f tmp/agent_os_issue_acceptance_report/report.txt ]; then"
-        in summary["run"]
-    )
-    assert "cat tmp/agent_os_issue_acceptance_report/report.txt" in summary["run"]
-    assert "Report output unavailable" in summary["run"]
-    assert "Report-only boundary" in summary["run"]
-
-
-def test_report_only_acceptance_workflow_declares_pr_number_dispatch_input():
-    content = _content()
-
-    assert "pr_number:" in content
-    assert "PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}" in content
-
-
-def test_report_only_acceptance_workflow_binds_transport_provenance():
-    content = _content()
-
-    assert "--transport-repository" in content
-    assert "--transport-issue-number" in content
-    assert "--transport-issue-body-file" in content
-    assert "--transport-pr-head-sha" in content
-    assert "--transport-evaluator-sha" in content
-    assert "--transport-workflow-run-id" in content
-    assert "--transport-workflow-run-attempt" in content
-    assert "--transport-fresh-pr-head-sha" in content
-    assert "--transport-issue-body-retrieval-failed" in content
-
-
-def test_report_only_acceptance_workflow_uses_live_provenance_fetches():
-    content = _content()
-
-    assert "git rev-parse HEAD" in content
-    assert "gh pr view \"$GITHUB_PR_NUMBER\" --json headRefOid" in content
-    assert "gh issue view \"$linked_issue\" --json body --jq '.body // \"\"'" in content
-    assert "--transport-fresh-issue-body-file \"$fresh_issue_body_file\"" in content
-    assert "--transport-fresh-pr-head-sha \"$fresh_pr_head_sha\"" in content
-
-
-def test_report_only_acceptance_workflow_routes_missing_pr_number_to_manual_review():
-    content = _content()
-
-    assert 'if [ -z "${PR_NUMBER:-}" ]; then' in content
-    assert "Manual workflow dispatch did not provide a pull request number." in content
-    assert (
-        "This report-only workflow should route missing pull request context "
-        "to manual review or fail according to IA2 semantics."
-    ) in content
-
-
-def test_report_only_acceptance_workflow_reconciles_changed_file_count():
-    content = _content()
-
-    assert 'gh pr view "$PR_NUMBER" --json changedFiles --jq \'.changedFiles\'' in content
-    assert 'retrieved_changed_files="$(wc -l < "$out/changed_files.txt"' in content
-    assert 'if [ "$retrieved_changed_files" != "$authoritative_changed_files" ]; then' in content
-    assert 'printf \'%s\\n\' true > "$out/changed_files_incomplete.txt"' in content
-    assert "--changed-files-incomplete" in content
-
-
-def test_report_only_acceptance_workflow_records_diff_retrieval_failure():
-    content = _content()
-
-    assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' not in content
-    assert 'if ! gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"; then' in content
-    assert 'printf \'%s\\n\' true > "$out/diff_retrieval_failed.txt"' in content
-    assert "--diff-retrieval-failed" in content
-
-
-def test_report_only_acceptance_workflow_enables_documentation_advisory_before_transport():
-    content = _content()
-
-    advisory = content.index("--documentation-advisory")
-    transport = content.index('"${transport_args[@]}"')
-    assert advisory < transport
-    assert content.count("--documentation-advisory") == 1
-
-
-def test_report_only_acceptance_workflow_binds_token_for_every_gh_step():
-    """Each report step that calls gh must receive the existing scoped token."""
-    import yaml
-
-    workflow = yaml.safe_load(_content())
-    steps = workflow["jobs"]["report"]["steps"]
-    gh_steps = [step for step in steps if "gh " in step.get("run", "")]
-
-    assert {step["name"] for step in gh_steps} == {
-        "Build local acceptance fixtures from PR data",
-        "Run report-only issue acceptance checker",
-    }
-    for step in gh_steps:
-        assert step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
-
-
-# ---------------------------------------------------------------------------
-# M14 regression coverage (#3506): failure masking via `continue-on-error`.
-#
-# Mutation M14 inserts `continue-on-error: true` into the Issue Acceptance
-# workflow's checker job/step. That turns a failing checker (E3: a `fail`
-# report exits 1 and must surface as a red, non-required check) back into
-# a green check, silently undoing E3/NB-2 (live run 39785092963). Before
-# these tests, both the step-level and job-level forms of the mutation
-# passed the whole workflow test file undetected (18 passed). Exit-code
-# propagation itself is already pinned by
-# test_report_only_acceptance_workflow_bounds_issue_lookup_to_resolved_result
-# and test_report_only_acceptance_workflow_summary_runs_when_checker_fails;
-# the tests below pin the masking surfaces those tests do not cover.
-# ---------------------------------------------------------------------------
-
-
-def _m14_workflow():
-    import yaml
-
-    return yaml.safe_load(_content())
-
-
-def _m14_is_masking_continue_on_error(step_or_job) -> bool:
-    """True if a job/step dict carries a masking continue-on-error value.
-
-    Absent key and an explicit false/no are not masking. The boolean
-    ``True`` (YAML ``true``/``yes``), the strings ``"true"``/``"True"``,
-    and any GitHub expression string (which can evaluate to true) are.
-    """
-    if "continue-on-error" not in step_or_job:
-        return False
-    value = step_or_job["continue-on-error"]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() not in {"false", "no", "0", ""}
-    return bool(value)
-
-
-def test_m14_checker_job_and_step_do_not_continue_on_error():
-    workflow = _m14_workflow()
-    report_job = workflow["jobs"]["report"]
-
-    # Job-level masking (`jobs.report.continue-on-error: true`).
-    assert not _m14_is_masking_continue_on_error(report_job)
-
-    # Step-level masking on the checker step itself.
-    steps = {step["name"]: step for step in report_job["steps"]}
-    checker = steps["Run report-only issue acceptance checker"]
-    assert not _m14_is_masking_continue_on_error(checker)
-
-    # Raw-text backstop: catches spellings the YAML value check could
-    # normalise away (quoted strings, expressions) on the target job.
-    content = _content()
-    assert "continue-on-error: true" not in content
-    assert "continue-on-error: 'true'" not in content
-    assert 'continue-on-error: "true"' not in content
-
-
-def test_m14_no_job_or_step_in_workflow_continues_on_error():
-    # No alternate masking boundary: no job and no step anywhere in the
-    # workflow may soften a failure with continue-on-error. In
-    # particular the summary step must not gain it either — its
-    # `if: always()` (NB-2) is only safe because a successful summary
-    # cannot change the checker step's failed conclusion, which is
-    # exactly what continue-on-error would break.
-    workflow = _m14_workflow()
-
-    for job_name, job in workflow["jobs"].items():
-        assert not _m14_is_masking_continue_on_error(job), job_name
-        for step in job.get("steps", []):
-            assert not _m14_is_masking_continue_on_error(step), (
-                job_name,
-                step.get("name"),
-            )
-
-
-def test_m14_checker_invocation_is_not_masked_by_or_true_or_exit_zero():
-    workflow = _m14_workflow()
-    steps = {step["name"]: step for step in workflow["jobs"]["report"]["steps"]}
-    checker_run = steps["Run report-only issue acceptance checker"]["run"]
-
-    # The checker CLI pipeline itself must not be masked: no `|| true`,
-    # `|| :`, or `|| exit 0` swallowing its status. (Scoped to the CLI
-    # invocation segment: the unrelated `cat ... || true` for the
-    # optional linked_issue.txt lookup elsewhere in the script does not
-    # touch the checker's exit code and is not a masking boundary.)
-    cli_segment = checker_run[
-        checker_run.index("python -m scripts.agent_os_issue_acceptance.cli") :
-        checker_run.index("checker_exit_code=")
-    ]
-    assert "||" not in cli_segment
-    assert "continue-on-error" not in checker_run
-
-    # Non-zero exit is preserved, not swallowed (complements the E3
-    # assertions in the pre-existing tests referenced above): the
-    # PIPESTATUS capture is taken and the final meaningful line of the
-    # step re-raises exactly that code; there is no unconditional
-    # `exit 0` line anywhere in the checker step.
-    assert "checker_exit_code=${PIPESTATUS[0]}" in checker_run
-    stripped_lines = [line.strip() for line in checker_run.splitlines()]
-    assert "exit 0" not in stripped_lines
-    meaningful = [
-        line
-        for line in stripped_lines
-        if line and not line.startswith("#")
-    ]
-    assert meaningful[-1] == 'exit "$checker_exit_code"'
-
-
-def test_m14_summary_always_does_not_mask_checker_failure():
-    # NB-2 semantics, pinned structurally as the pre-existing NB-2 test
-    # models them: the summary is the ONLY `if: always()` step, it runs
-    # after the checker, it carries no continue-on-error, and the
-    # checker carries no `if` — so a successful summary renders the
-    # report but cannot turn the failed checker step (and therefore the
-    # job/check conclusion) green.
-    workflow = _m14_workflow()
-    content = _content()
+@pytest.fixture
+def workflow(workflow_text):
+    # PyYAML defaults to YAML 1.1, where plain on would become True.
+    text = re.sub(r"^on:", "'on':", workflow_text, flags=re.MULTILINE)
+    return yaml.safe_load(text)
+
+
+@pytest.fixture
+def steps(workflow):
     report_steps = workflow["jobs"]["report"]["steps"]
-    by_name = {step["name"]: step for step in report_steps}
-
-    summary = by_name["Publish report summary"]
-    assert summary.get("if") == "always()"
-    assert content.count("if: always()") == 1
-    assert not _m14_is_masking_continue_on_error(summary)
-    assert "GITHUB_STEP_SUMMARY" in summary["run"]
-
-    checker = by_name["Run report-only issue acceptance checker"]
-    assert "if" not in checker
-    assert not _m14_is_masking_continue_on_error(checker)
-    names = [step["name"] for step in report_steps]
-    assert names.index("Run report-only issue acceptance checker") < names.index(
-        "Publish report summary"
-    )
+    by_name = {step.get("name"): step for step in report_steps}
+    assert len(by_name) == len(report_steps) and None not in by_name, report_steps
+    for expected in (VERIFY_REF, CHECKOUT, VERIFY, BUILD, CHECKER, SUMMARY):
+        assert expected in by_name, f"Missing workflow step {expected!r}: {list(by_name)}"
+    return by_name
 
 
-def test_m14_workflow_remains_advisory_and_report_only():
-    # Advisory/non-required is pinned the way the pre-existing tests pin
-    # it: read-only permissions, the report-only boundary statement, and
-    # no required-check or mutation machinery in the YAML (whether the
-    # check is required lives in branch protection/rulesets, outside
-    # this file — nothing here may claim or simulate it). The honest-red
-    # behaviour above is what keeps that advisory check meaningful.
-    workflow = _m14_workflow()
-    content = _content()
-
+def test_dispatch_is_manual_read_only_and_advisory(workflow, steps):
+    assert workflow["name"] == "Agent OS Issue Acceptance Report"
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["pr_number"]["required"] is False
+    assert set(workflow["jobs"]) == {"report"}
+    assert "needs" not in workflow["jobs"]["report"]
     assert workflow["permissions"] == {
         "contents": "read",
         "issues": "read",
         "pull-requests": "read",
     }
-    assert "Report-only boundary" in content
-    assert (
-        "this workflow does not approve, merge, label, close, or mutate"
-        in content
+    assert steps[BUILD]["env"]["PR_NUMBER"] == "${{ inputs.pr_number }}"
+    assert "Report-only boundary: this workflow does not approve, merge, label, close, or mutate" in steps[SUMMARY]["run"]
+
+
+def test_only_trusted_dispatch_revision_supplies_checker(steps):
+    checkout = steps[CHECKOUT]
+    assert checkout.get("uses", "").startswith("actions/checkout@")
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert checkout["with"]["persist-credentials"] is False
+    assert sum(step.get("uses", "").startswith("actions/checkout@") for step in steps.values()) == 1
+    assert steps[VERIFY]["env"]["EXPECTED_EVALUATOR_SHA"] == "${{ github.sha }}"
+    assert steps[VERIFY_REF]["env"]["EXPECTED_DISPATCH_REF"] == "${{ github.ref }}"
+    setup_name = "Set up Python test environment"
+    assert setup_name in steps, "Missing shared Python environment setup"
+    assert steps[setup_name].get("uses") == "./.github/actions/setup-python-dev"
+    expected = (VERIFY_REF, CHECKOUT, VERIFY, setup_name, BUILD, CHECKER)
+    assert [name for name in steps if name in expected] == list(expected)
+    assert "python -m scripts.agent_os_issue_acceptance.cli" in steps[CHECKER]["run"]
+    tokens = {name: step["env"]["GH_TOKEN"] for name, step in steps.items()
+              if "GH_TOKEN" in step.get("env", {})}
+    assert tokens == dict.fromkeys((BUILD, CHECKER), "${{ github.token }}")
+
+
+def test_no_write_command_or_failure_masking(workflow, workflow_text, steps):
+    forbidden = (
+        "gh issue edit", "gh issue close", "gh pr edit", "gh pr merge",
+        "add-label", "remove-label", "set-label", "github.rest.issues.addLabels",
+        "github.rest.issues.removeLabel", "github.rest.issues.setLabels", "github.rest.issues.update",
+        "github.rest.pulls.update", "branch-protection", "updateBranchProtection",
     )
+    assert not [pattern for pattern in forbidden if pattern in workflow_text]
+    report = workflow["jobs"]["report"]
+    for name, job_or_step in [("report", report), *steps.items()]:
+        value = job_or_step.get("continue-on-error", False)
+        assert value is False, f"{name!r} must not mask failures: {value!r}"
+    assert {name: step["if"] for name, step in steps.items() if "if" in step} == {SUMMARY: "always()"}
+    assert list(steps)[-1:] == [SUMMARY], "Summary must run after the checker"
+    assert "PIPESTATUS" in steps[CHECKER]["run"]
 
 
-def test_acceptance_workflow_uses_net_pr_diff_not_commit_series():
-    """The scanner must evaluate the final delivered change, not removed history."""
-    source = _content()
-    assert 'gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"' in source
-    assert 'gh pr diff "$PR_NUMBER" --patch' not in source
-    assert 'diff_retrieval_failed.txt' in source
-    assert 'evidence_args+=(--diff-retrieval-failed)' in source
+def test_report_only_linkage_and_net_diff_contract(steps):
+    build = steps[BUILD]["run"]
+    assert "parse_linked_issue_result(" in build
+    assert "report_only_issue_number(" in build
+    assert "LinkedIssueParseStatus" not in build
+    assert re.search(r'gh pr diff "\$PR_NUMBER" [^\n]*--color=never', build)
+    assert 'gh pr diff "$PR_NUMBER" --patch' not in build
+    assert "diff_retrieval_failed.txt" in build
+    checker = steps[CHECKER]["run"]
+    assert "--diff-retrieval-failed" in checker
+    assert "--changed-files-incomplete" in checker
+    assert checker.count("--documentation-advisory") == 1
 
 
 def test_net_diff_still_rejects_new_secrets_and_not_removed_history():
-    """A removed historical secret must not taint the delivered net diff."""
-    from scripts.agent_os_issue_acceptance.checks.banned_patterns import check
-    from scripts.agent_os_issue_acceptance.models import IssueMetadata, Status
-
-    # Assemble a synthetic literal so this test does not itself introduce
-    # sensitive-looking material into the PR's final text.
     candidate = "se" + "cret" + " = " + repr("synthetic-test-canary-only")
-    old_patch = "diff --git a/example.py b/example.py\n+status = 'old'\n+" + candidate + "\n"
-    removal_patch = "diff --git a/example.py b/example.py\n-" + candidate + "\n+status = 'safe'\n"
-    history = old_patch + removal_patch
-    # Exactly the same final content may have harmless modifications.
+    history = (
+        "diff --git a/example.py b/example.py\n+status = 'old'\n+" + candidate
+        + "\ndiff --git a/example.py b/example.py\n-" + candidate + "\n+status = 'safe'\n"
+    )
     final_net_diff = "diff --git a/example.py b/example.py\n+status = 'safe'\n"
-    surviving_net_diff = final_net_diff + "+" + candidate + "\n"
     metadata = IssueMetadata.empty()
-
-    # The original per-commit input false-positively matches removed history.
     assert check(metadata, history).status == Status.FAIL
-    # The fixed workflow supplies only final net changes.
     assert check(metadata, final_net_diff).status == Status.PASS
-    # A real addition that survives in the delivered diff stays blocked.
-    assert check(metadata, surviving_net_diff).status == Status.FAIL
+    assert check(metadata, final_net_diff + "+" + candidate + "\n").status == Status.FAIL
+
+
+@pytest.fixture
+def runner(tmp_path, steps):
+    """Execute Bash steps offline; only GitHub and the CLI's output are simulated."""
+    stub = tmp_path / "stub"
+    stub.write_text(f"#!{sys.executable}\n" + f'''
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+tool = Path(sys.argv[0]).name
+if tool == "git":
+    assert args == ["rev-parse", "HEAD"]
+    print({EVALUATOR!r})
+elif tool == "python":
+    if args[:2] == ["-m", "scripts.agent_os_issue_acceptance.cli"]:
+        Path("checker-args.json").write_text(json.dumps(args[2:]))
+        if os.environ.get("CHECKER_MODE") == "real":
+            os.execv(sys.executable, [sys.executable, *args])
+        if os.environ.get("CHECKER_MODE") == "exception":
+            raise RuntimeError("synthetic checker error")
+        verdict = os.environ.get("CHECKER_VERDICT", "manual-review")
+        print("# Report\\n\\nFixture output\\nOverall result: " + verdict)
+        sys.exit(int(os.environ.get("CHECKER_EXIT", 0)))
+    if args[:2] == ["-m", "scripts.agent_os_issue_acceptance.build_merged_doc_evidence"]:
+        Path(args[args.index("--output") + 1]).write_text("[]")
+    else:
+        os.execv(sys.executable, [sys.executable, *args])
+else:
+    log = Path("gh-calls")
+    prior_calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    index = sum(call[:3] == args[:3] for call in prior_calls)
+    with log.open("a") as stream:
+        print(json.dumps(args), file=stream)
+    kind, verb, number, repo_flag, repo, *options = args
+    assert repo_flag == "--repo" and repo == os.environ["GITHUB_REPOSITORY"], args
+    expected = os.environ["PR_NUMBER"] if kind == "pr" else "71"
+    assert number == expected, args
+    scenario = json.loads(Path("gh-responses.json").read_text())
+    if verb == "diff":
+        assert options == ["--color=never"], args
+        print("diff --git a/example.py b/example.py")
+        sys.exit(int(scenario["diff_failure"]))
+    assert verb == "view" and len(options) == 2 and options[0] == "--json", args
+    response = scenario[kind][index]
+    if response == "unavailable":
+        sys.exit(1)
+    if response == "malformed":
+        print("not JSON")
+    elif response == "duplicate":
+        for body in ("first fixture", "second fixture"):
+            print(json.dumps(dict(number=71, body=body)))
+    else:
+        print(json.dumps({{key: response[key] for key in options[1].split(",") if key in response}}))
+''', encoding="utf-8")
+    stub.chmod(0o755)
+    for name in ("gh", "python", "git"):
+        (tmp_path / name).symlink_to(stub)
+
+    env = dict(
+        os.environ, PATH=f"{tmp_path}:{os.environ.get('PATH', os.defpath)}",
+        PYTHONPATH=os.pathsep.join((str(ROOT), os.environ.get("PYTHONPATH", ""))),
+        GH_TOKEN="local-test-only", PR_NUMBER=PR_NUMBER, GITHUB_PR_NUMBER=PR_NUMBER,
+        GITHUB_REPOSITORY="example/project", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
+        GITHUB_OUTPUT="output", GITHUB_STEP_SUMMARY="summary", REPORT_DIR=str(tmp_path / FIXTURE_DIR),
+    )
+    _configure(tmp_path)
+    outcome = "skipped"
+
+    def run(name, *, missing=(), **overrides):
+        nonlocal outcome
+        active = {key: val for key, val in (env | overrides).items() if key not in missing}
+        if name == SUMMARY:
+            output = tmp_path / env["GITHUB_OUTPUT"]
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines()) if output.exists() else {}
+            active.update(CHECKER_STATE=values.get("checker_state", ""),
+                          CHECKER_EXIT_CODE=values.get("checker_exit_code", ""),
+                          CHECKER_OUTCOME=outcome)
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", steps[name]["run"]],
+            cwd=tmp_path, env=active, text=True, capture_output=True, timeout=10,
+        )
+        if name == CHECKER:
+            outcome = "success" if result.returncode == 0 else "failure"
+        return result
+
+    return run, tmp_path
+
+
+def _configure(tmp, *, initial=None, fresh=None, issue=None, diff_failure=False):
+    first = PR_FIXTURE if initial is None else initial
+    (tmp / "gh-responses.json").write_text(json.dumps({
+        "pr": [first, first if fresh is None else fresh],
+        "issue": [{"number": 71, "body": "first issue body"}] * 2 if issue is None else issue,
+        "diff_failure": diff_failure,
+    }), encoding="utf-8")
+
+
+def _args(tmp):
+    return json.loads((tmp / "checker-args.json").read_text(encoding="utf-8"))
+
+
+def _option(args, key):
+    exact = [i for i, arg in enumerate(args) if arg == key]
+    attached = [arg[len(key) + 1:] for arg in args if arg.startswith(key + "=")]
+    assert len(exact) + len(attached) == 1, args
+    return attached[0] if attached else args[exact[0] + 1]
+
+
+def _assert_ok(result):
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def _run_fixture_and_checker(run):
+    for step in (BUILD, CHECKER):
+        _assert_ok(run(step))
+
+
+@pytest.mark.parametrize("ref,sha,expected", [
+    ("refs/heads/main", EVALUATOR, 0),
+    ("refs/heads/topic", EVALUATOR, 1),
+    ("refs/heads/main", BASE, 1),
+])
+def test_dispatch_verifier_requires_main_and_exact_checkout(runner, ref, sha, expected):
+    run, _ = runner
+    first = run(VERIFY_REF, EXPECTED_DISPATCH_REF=ref)
+    final = run(VERIFY, EXPECTED_EVALUATOR_SHA=sha) if first.returncode == 0 else first
+    assert final.returncode == expected
+
+
+def test_combines_pr_metadata_without_reusing_the_fresh_observation(runner):
+    run, tmp = runner
+    _run_fixture_and_checker(run)
+    calls = [json.loads(line) for line in (tmp / "gh-calls").read_text().splitlines()]
+    kinds = [tuple(call[:3]) for call in calls]
+    assert kinds.count(("pr", "view", PR_NUMBER)) == 2, calls
+    assert kinds.count(("pr", "diff", PR_NUMBER)) == 1, calls
+    assert kinds.count(("issue", "view", "71")) == 2, calls
+    args = _args(tmp)
+    assert _option(args, "--transport-pr-number") == PR_NUMBER
+    assert _option(args, "--transport-pr-head-sha") == ORIGINAL_HEAD
+    assert _option(args, "--transport-fresh-pr-head-sha") == ORIGINAL_HEAD
+    assert _option(args, "--transport-evaluator-sha") == EVALUATOR
+    assert _option(args, "--transport-workflow-run-id") == "123"
+    assert _option(args, "--transport-workflow-run-attempt") == "1"
+    assert _option(args, "--transport-issue-number") == "71"
+    assert "--transport-observed-at" in args
+
+
+@pytest.mark.parametrize("title", ["  Padded title  ", "Résumé 日本語 $5", "--documentation-advisory", "x" * 256])
+def test_title_is_one_unchanged_checker_argument(runner, title):
+    run, tmp = runner
+    _configure(tmp, initial={**PR_FIXTURE, "title": title})
+    _run_fixture_and_checker(run)
+    args = _args(tmp)
+    assert _option(args, "--pr-title") == title
+
+
+@pytest.mark.parametrize("bad", [
+    "malformed", "unavailable", {}, {"number": 1},
+    *[dict(PR_FIXTURE, title=title) for title in ("", "Title\nline two", "Title\rreturn", "Title\x07bell", "x" * 10000)],
+])
+def test_invalid_initial_metadata_cannot_run_checker(runner, bad):
+    run, tmp = runner
+    _configure(tmp, initial=bad)
+    result = run(BUILD)
+    assert result.returncode != 0
+    if isinstance(bad, dict) and (title := bad.get("title")):
+        assert title not in result.stdout + result.stderr
+    assert not (tmp / "checker-args.json").exists()
+    _assert_ok(run(SUMMARY))
+    assert "NOT_RUN" in (tmp / "summary").read_text()
+
+
+@pytest.mark.parametrize("change", [{"headRefOid": "d" * 40}, {"body": "A newer description"}, {"number": 8}])
+def test_stale_or_mismatched_pr_metadata_never_looks_current(runner, change):
+    run, tmp = runner
+    _configure(tmp, fresh={**PR_FIXTURE, **change})
+    _assert_ok(run(BUILD))
+    result = run(CHECKER)
+    if "headRefOid" in change:
+        _assert_ok(result)
+        args = _args(tmp)
+        assert _option(args, "--transport-pr-head-sha") == ORIGINAL_HEAD
+        assert _option(args, "--transport-fresh-pr-head-sha") == change["headRefOid"]
+    else:
+        assert result.returncode != 0
+        assert not (tmp / "checker-args.json").exists()
+
+
+@pytest.mark.parametrize("drift", ["stale-pr-head", "stale-issue"])
+def test_workflow_and_real_checker_flag_stale_transport(runner, drift):
+    run, tmp = runner
+    fixtures = Path(__file__).parent / "fixtures"
+    pr = {**PR_FIXTURE, "body": (fixtures / "pr_body_valid.md").read_text().replace("#164", "#71")}
+    issue = (fixtures / "issue_valid.md").read_text()
+    observed_issue = issue + "\nUpdated issue notes.\n" if drift == "stale-issue" else issue
+    fresh = {**pr, "headRefOid": "d" * 40} if drift == "stale-pr-head" else pr
+    _configure(tmp, initial=pr, fresh=fresh,
+               issue=[{"number": 71, "body": body} for body in (issue, observed_issue)])
+    _assert_ok(run(BUILD))
+    run(CHECKER, CHECKER_MODE="real")
+    _assert_ok(run(SUMMARY))
+    report = (tmp / "summary").read_text()
+    assert f"transport_state: {drift}" in report, report
+    assert "execution_authorized: false" in report, report
+
+
+@pytest.mark.parametrize("issue", [
+    [{"number": 71, "body": "old"}, {"number": 71, "body": "new"}],
+    ["unavailable", {"number": 71, "body": "new"}],
+    ["duplicate", {"number": 71, "body": "new"}],
+    [{"number": 71, "body": "old"}, "duplicate"],
+    [{"number": 71, "body": "old"}, {"number": "71", "body": "wrong number type"}],
+    [{"number": 71, "body": "old"}, "malformed"],
+    [{"number": 71, "body": "old"}, {"number": 72, "body": "wrong issue"}],
+])
+def test_issue_reads_are_separate_and_failures_preserved(runner, issue):
+    run, tmp = runner
+    _configure(tmp, issue=issue)
+    _run_fixture_and_checker(run)
+    args = _args(tmp)
+    if not isinstance(issue[0], dict) or not isinstance(issue[1], dict) or issue[1]["number"] != 71:
+        assert "--transport-issue-body-retrieval-failed" in args
+    else:
+        initial = (tmp / _option(args, "--transport-issue-body-file")).read_text()
+        fresh = (tmp / _option(args, "--transport-fresh-issue-body-file")).read_text()
+        assert initial.strip() == "old" and fresh.strip() == "new"
+
+
+@pytest.mark.parametrize("mode,exit_code,verdict,status", [
+    ("", 1, "fail", "CHECKER_FAIL"),
+    ("exception", 1, "fail", "EXECUTION_ERROR"),
+    ("", 0, "manual-review", "MANUAL_REVIEW"),
+])
+def test_checker_failure_is_not_masked_and_summary_reports_verdict(runner, mode, exit_code, verdict, status):
+    run, tmp = runner
+    _assert_ok(run(BUILD))
+    result = run(CHECKER, CHECKER_MODE=mode, CHECKER_EXIT=str(exit_code), CHECKER_VERDICT=verdict)
+    assert result.returncode == exit_code
+    _assert_ok(run(SUMMARY))
+    rendered = (tmp / "summary").read_text()
+    assert f"Checker status: {status}" in rendered and "NOT_RUN" not in rendered
+    assert f"Checker exit code: {exit_code}" in rendered
+    assert "Report-only boundary" in rendered
+    if not mode:
+        assert f"Overall result: {verdict}" in rendered
+
+
+@pytest.mark.parametrize("failure", ["unset", "missing", "tee"])
+def test_checker_setup_or_report_write_failure_is_nonzero(runner, failure):
+    run, tmp = runner
+    _assert_ok(run(BUILD))
+    options = {}
+    if failure == "unset":
+        options["missing"] = ("GITHUB_RUN_ID",)
+    if failure == "missing":
+        (tmp / FIXTURE_DIR / "pr_title.txt").unlink()
+    if failure == "tee":
+        (tmp / FIXTURE_DIR / "report.txt").mkdir()
+    assert run(CHECKER, **options).returncode != 0
+    _assert_ok(run(SUMMARY))
+    assert "Checker status: EXECUTION_ERROR" in (tmp / "summary").read_text()
+
+
+@pytest.mark.parametrize("fresh", ["malformed", "unavailable", {}])
+def test_invalid_fresh_pr_observation_fails_closed(runner, fresh):
+    run, tmp = runner
+    _configure(tmp, fresh=fresh)
+    _assert_ok(run(BUILD))
+    assert run(CHECKER).returncode != 0
+    assert not (tmp / "checker-args.json").exists()
+    _assert_ok(run(SUMMARY))
+    assert "Checker status: EXECUTION_ERROR" in (tmp / "summary").read_text()
+
+
+def test_missing_manual_dispatch_context_remains_explicit_manual_review(runner):
+    run, tmp = runner
+    _assert_ok(run(BUILD, PR_NUMBER=""))
+    _assert_ok(run(CHECKER, GITHUB_PR_NUMBER=""))
+    args = _args(tmp)
+    assert "--transport-pr-number" not in args
+    assert "did not provide a pull request number" in Path(_option(args, "--pr-body")).read_text()
+    assert not (tmp / "gh-calls").exists()
+
+
+def test_incomplete_paths_and_diff_failure_are_explicit_evidence_flags(runner):
+    run, tmp = runner
+    _configure(tmp, initial={**PR_FIXTURE, "changedFiles": 2}, diff_failure=True)
+    _run_fixture_and_checker(run)
+    args = _args(tmp)
+    assert "--changed-files-incomplete" in args
+    assert "--diff-retrieval-failed" in args
+    assert Path(_option(args, "--diff")).read_text() == ""
+
+
+@pytest.mark.parametrize("body,issue_expected", [
+    ("Part of #71\n\nNon-closing: #71", True),
+    ("Addresses #71 and #72", False),
+])
+def test_only_report_scoped_unambiguous_issue_is_fetched(runner, body, issue_expected):
+    run, tmp = runner
+    _configure(tmp, initial={**PR_FIXTURE, "body": body, "title": "Report"})
+    _run_fixture_and_checker(run)
+    args = _args(tmp)
+    assert ("--transport-issue-number" in args) is issue_expected
