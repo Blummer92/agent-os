@@ -92,8 +92,11 @@ def test_conftest_import_priority_is_stable_with_preexisting_pythonpath(tmp_path
     (nested / "test_import_priority.py").write_text(
         "from pathlib import Path\n"
         "import sys\n"
-        "import agent_os_path_priority_probe as probe\n"
         "def test_canonical_path_priority():\n"
+        "    # If a parent conftest already imported the name, sys.modules wins.\n"
+        "    assert 'agent_os_path_priority_probe' not in sys.modules, (" 
+        "'Probe already imported before nested conftest applied path priority')\n"
+        "    import agent_os_path_priority_probe as probe\n"
         "    root = Path(__file__).resolve().parents[2]\n"
         "    expected = (root / '08_Tooling' / 'agent-memory-context-manager' / 'src',\n"
         "                root / 'src',\n"
