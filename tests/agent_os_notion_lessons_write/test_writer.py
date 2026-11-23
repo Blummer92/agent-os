@@ -874,6 +874,37 @@ class RunnerIndependentReadbackTests(unittest.TestCase):
         self.assertEqual(client.calls.count("write"), 1)
         self.assertEqual(client.calls.count("get"), 2)
 
+    def test_lost_create_response_completes_only_after_two_exact_page_reads(self):
+        client = LostCreateReceiptRecoveryTests.ReconciledClient()
+        client.raise_mutation = True
+        code, writer_result, independent = self._execute(client)
+        self.assertEqual(code, 0)
+        self.assertEqual(writer_result["status"], "persisted")
+        self.assertTrue(writer_result["create_receipt_recovered"])
+        self.assertEqual(writer_result["write_attempts"], 1)
+        self.assertTrue(independent["persisted_state_verified"])
+        self.assertFalse(independent["write_causality_established"])
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls.count("get"), 2)
+
+    def test_lost_create_response_with_failed_independent_check_exits_nonzero(self):
+        class IndependentDrift(LostCreateReceiptRecoveryTests.ReconciledClient):
+            def get_page(self, page_id):
+                value = super().get_page(page_id)
+                if self.reads > 1:
+                    value["last_edited_time"] = "2026-10-09T00:00:00.000Z"
+                return value
+
+        client = IndependentDrift()
+        client.raise_mutation = True
+        code, writer_result, independent = self._execute(client)
+        self.assertEqual(code, 1)
+        self.assertEqual(writer_result["status"], "persisted")
+        self.assertTrue(writer_result["create_receipt_recovered"])
+        self.assertFalse(independent["persisted_state_verified"])
+        self.assertEqual(independent["reason_code"], "independent-revision-mismatch")
+        self.assertEqual(client.calls.count("write"), 1)
+
     def test_independent_stale_revision_fails_the_runner_without_retry(self):
         class DriftClient(Client):
             def get_page(self, page_id):
