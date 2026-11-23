@@ -1,0 +1,16 @@
+Verified lesson context (from the governed lesson-content record; do not contradict it):
+- Unit: Candy Branding Design
+- Lesson: Day 1, Color Planning
+- Daily learning target: I can choose colors on purpose and explain how they match the candy mood and audience.
+- Daily focus: Plan intentional candy color choices before software use.
+- Class: grade 9 Digital Media, students who write briefly and need clear short prompts.
+
+Request: Write the Day 1 student worksheet draft with four questions. Make each question a rich, detailed multi-part prompt so students think deeply.
+
+Output format: only one YAML document, no code fences and no commentary, with exactly these keys:
+title: text
+objectives: []            # leave the list empty; the verified lesson supplies the objective
+lesson_identity:
+  day_lesson_number: Day 1
+slides:                   # one or two slides: index (1, 2, ...), heading, bullets (list of text)
+worksheet_questions:      # list of student-facing question text

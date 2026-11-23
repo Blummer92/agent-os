@@ -54,6 +54,9 @@ _COMMAND_REGISTRY = MappingProxyType(
         "python -m pytest tests/test_agent_os_ci_evidence_collector.py": ("python", "-m", "pytest", "tests/test_agent_os_ci_evidence_collector.py"),
         "python -m pytest tests/test_agent_os_ci_evidence_collector_provider_fidelity.py": ("python", "-m", "pytest", "tests/test_agent_os_ci_evidence_collector_provider_fidelity.py"),
         "python -m pytest tests/test_collector_download_redirect.py": ("python", "-m", "pytest", "tests/test_collector_download_redirect.py"),
+        "python -m pytest tests/test_agent_os_frontend_checks.py": (
+            "python", "-m", "pytest", "tests/test_agent_os_frontend_checks.py",
+        ),
         "python -m pytest tests/test_collector_failure_receipt.py": ("python", "-m", "pytest", "tests/test_collector_failure_receipt.py"),
         "python -m pytest tests/agent_os_issue_acceptance": (
             "python",
@@ -117,6 +120,66 @@ _COMMAND_REGISTRY = MappingProxyType(
             "-m",
             "pytest",
             "08_Tooling/notion-navigation-client/tests",
+        ),
+        "python -m pytest 08_Tooling/agent-memory-context-manager/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/agent-memory-context-manager/tests",
+        ),
+        "python -m pytest 08_Tooling/dashboard-migration-verification/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/dashboard-migration-verification/tests",
+        ),
+        "python -m pytest 08_Tooling/notion-compute-decision-writer/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/notion-compute-decision-writer/tests",
+        ),
+        "python -m pytest 08_Tooling/notion-operational-guidance-writer/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/notion-operational-guidance-writer/tests",
+        ),
+        "python -m pytest 08_Tooling/reusable-capability-registry/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/reusable-capability-registry/tests",
+        ),
+        "python -m pytest 08_Tooling/visual-asset-drive-writer/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/visual-asset-drive-writer/tests",
+        ),
+        "python -m pytest 08_Tooling/visual-asset-ingestion-coordinator/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/visual-asset-ingestion-coordinator/tests",
+        ),
+        "python -m pytest 08_Tooling/visual-asset-intake/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/visual-asset-intake/tests",
+        ),
+        "python -m pytest 08_Tooling/visual-asset-notion-writer/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/visual-asset-notion-writer/tests",
+        ),
+        "python -m pytest 08_Tooling/visual-asset-routing/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/visual-asset-routing/tests",
         ),
         "python -m pytest 08_Tooling/instructional-materials-coach/tests": (
             "python",

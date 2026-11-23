@@ -5,10 +5,13 @@ Learning-only comments and unbound issue-level preflights are not PR mutations.
 """
 from __future__ import annotations
 
+import argparse
+import datetime
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +44,7 @@ class RevalidationBlocked(ValueError):
         "gate-run-missing", "gate-run-association-unverified",
         "gate-run-population-incomplete", "gate-run-invalid",
         "rerun-permission-denied", "rerun-request-failed", "github-read-failed",
+        "result-not-returned", "result-provenance-unverified", "gate-run-in-progress",
     })
 
     def __init__(self, code: str):
@@ -228,11 +232,64 @@ def select_run(pr, listing):
     return None
 
 
-def evaluate(event, token):
+
+def _completed_result_for_owner(event, token):
+    """Read back one correlated bot receipt; do not trust job success alone."""
+    comment = event["comment"]
+    if not _unedited_comment(comment) or comment.get("user", {}).get("id") != OWNER_ID:
+        raise RevalidationBlocked("request-provenance-unverified")
+    request_id = comment["id"]
+    number = event["issue"]["number"]
+    since = urllib.parse.quote(comment["created_at"], safe="")
+    listing = api("GET", f"/issues/{number}/comments?per_page=100&since={since}", token)
+    if not isinstance(listing, list) or len(listing) >= 100:
+        raise RevalidationBlocked("result-provenance-unverified")
+    matching = []
+    for item in listing:
+        if not isinstance(item, dict) or item.get("user", {}).get("id") != BOT_ID:
+            continue
+        if not _unedited_comment(item):
+            continue
+        try:
+            result = parse_ckr6_result_comment(item.get("body"))
+        except (ValueError, TypeError):
+            continue
+        if (result.get("request_comment_id") != request_id
+                or result.get("issue_number") != number
+                or result.get("repository") != REPO):
+            continue
+        if item["created_at"] < comment["created_at"]:
+            continue
+        matching.append({**result, "receipt_created_at": item["created_at"]})
+    if len(matching) != 1:
+        raise RevalidationBlocked(
+            "result-not-returned" if not matching else "result-provenance-unverified"
+        )
+    envelope = _parse_owner_request(event, comment)
+    if matching[0].get("operation") != envelope.operation:
+        raise RevalidationBlocked("result-provenance-unverified")
+    if envelope.operation == "failed-repair" and matching[0].get("attempt_id") != envelope.attempt_id:
+        raise RevalidationBlocked("result-provenance-unverified")
+    return matching[0]
+
+
+def _parse_time(value):
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+
+
+def evaluate(event, token, *, postback_complete=False):
     """Non-admission disposition for reporting; only an exact match may rerun."""
     if not triggered(event):
         return {"disposition": "not-applicable", "reason_code": "event-not-eligible", "run_ids": []}
     target, reason = _target(event, token)
+    receipt = None
+    if postback_complete and target is not None:
+        receipt = _completed_result_for_owner(event, token)
     if target is None:
         return {"disposition": "not-applicable", "reason_code": reason, "run_ids": []}
     number, sha = target
@@ -261,6 +318,52 @@ def evaluate(event, token):
     run_id = select_run(pr, runs)
     if run_id is None:
         raise RevalidationBlocked("gate-run-missing")
+    if postback_complete:
+        # Wait only for the already verified exact-head gate run. The first
+        # read is immediate; at most twelve further reads are allowed.
+        # No rerun is posted while the gate remains active.
+        first_attempt = None
+        for poll_index in range(13):
+            run = api("GET", f"/actions/runs/{run_id}", token)
+            if (not isinstance(run, dict) or type(run.get("id")) is not int
+                    or run["id"] != run_id
+                    or type(run.get("run_attempt")) is not int
+                    or run["run_attempt"] < 1):
+                raise RevalidationBlocked("gate-run-invalid")
+            attempt = run["run_attempt"]
+            if first_attempt is None:
+                first_attempt = attempt
+            elif attempt != first_attempt:
+                # An independently started rerun changed the gate while
+                # polling; never POST based on a different attempt.
+                raise RevalidationBlocked("gate-run-invalid")
+            state = run.get("status")
+            if state == "completed":
+                if run.get("conclusion") in {"cancelled", "skipped", "timed_out", "action_required"}:
+                    raise RevalidationBlocked("gate-run-invalid")
+                break
+            if state not in {"queued", "in_progress", "waiting", "pending", "requested"}:
+                raise RevalidationBlocked("gate-run-invalid")
+            if poll_index == 12:
+                raise RevalidationBlocked("gate-run-in-progress")
+            time.sleep(5)
+        else:
+            raise RevalidationBlocked("gate-run-in-progress")
+        # Receipt-correlated idempotency on the START of the latest gate
+        # attempt (run_started_at is the latest attempt's start; created_at
+        # is not). An attempt that started before this request's result
+        # receipt may not have seen it, even when it finished after the
+        # receipt (straddle), so it is rerun once. An attempt that started
+        # after the receipt was triggered by it (or a later event) and is
+        # not rerun again. Equal or unparseable timestamps are ambiguous at
+        # the API's one-second resolution and fail closed. This is bounded
+        # to one rerun per receipt, never a proof that the gate saw it.
+        receipt_at = _parse_time(receipt.get("receipt_created_at") if isinstance(receipt, dict) else None)
+        started_at = _parse_time(run.get("run_started_at"))
+        if receipt_at is None or started_at is None or started_at == receipt_at:
+            raise RevalidationBlocked("gate-run-invalid")
+        if started_at > receipt_at:
+            return {"disposition": "not-applicable", "reason_code": "already-rerun", "run_ids": []}
     api("POST", f"/actions/runs/{run_id}/rerun", token)
     return {"disposition": "rerun-requested", "reason_code": "exact-head-run-verified", "run_ids": [run_id]}
 
@@ -271,6 +374,9 @@ def revalidate(event, token):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--postback-complete", action="store_true")
+    args = parser.parse_args()
     token = os.environ.get("GITHUB_TOKEN", "")
     path = os.environ.get("GITHUB_EVENT_PATH", "")
     if not token or not path:
@@ -279,7 +385,7 @@ def main():
     try:
         with open(path, encoding="utf-8") as f:
             event = json.load(f)
-        result = evaluate(event, token)
+        result = evaluate(event, token, postback_complete=args.postback_complete)
     except RevalidationBlocked as exc:
         print(json.dumps({"disposition": "blocked", "reason_code": str(exc), "rerun_count": 0}))
         return 1

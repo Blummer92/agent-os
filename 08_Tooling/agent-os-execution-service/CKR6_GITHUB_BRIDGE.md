@@ -2,6 +2,34 @@
 
 Issue #2851 adds the separately authorized GitHub-hosted Actions ingress in `.github/workflows/agent-os-ckr6.yml`. The comment form is `/agent-os ckr6 <json-object>`; `ckr6_github_bridge.py` strictly validates the bounded issue-start or failed-repair envelope, then delegates materiality to the existing CKR6 `plan_lesson_preflight` owner. A not-needed request reaches zero Lessons Learned provider reads. Only a request the existing CKR6 plan marks retrieval-required enters the step that exposes the existing `NOTION_TOKEN` and the live-verified repository variable `AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID`. The bridge never guesses that source identity, never routes through GCE, and publishes only bounded sanitized CKR6 result evidence. It creates no merge, closure, GitHub-write, Notion-write, or execution authority.
 
+## Read-only CKR11 diagnostic artifact (observability only)
+
+The existing bridge already emits `retrieval_reason_code`,
+`incomplete_reason_code`, and finite retrieval counters to an Actions step
+summary. That summary was unavailable via the GitHub connector during the
+2026-11-15 PR #3988 failure; the run 43736204557 artifact carried only
+`result.json`, whose trusted fields correctly reported `insufficient` and
+`capability-unavailable` but not the underlying provider failure.
+
+The execute phase now additionally writes a `retrieval-diagnostics.json`
+file alongside `result.json`. The existing upload-artifact step uploads both.
+The optional diagnostics file contains only allowlisted finite reason codes
+and bounded integer counters. It contains no provider rows, credentials,
+query filters, cursors, source metadata, or selected lesson identities.
+Unknown fields, unrecognized reasons and malformed counters are refused.
+Writing diagnostics happens after the existing result and any artifact-write
+failure is ignored, so diagnosis can never admit a blocked mutation, change
+the trusted result schema, or make a result more authoritative.
+
+An absent diagnostics file means no valid diagnostic artifact was recorded;
+it is not evidence of a successful Notion read. The existing result remains
+the sole admission and result-comment source of truth. No Notion API method,
+read limit, workflow permission, owner approval, or gate rule is modified.
+
+The initial failure of run 43736204557 cannot be retroactively diagnosed
+from its result.json alone. A subsequent independently authorized read
+must supply this optional file to identify the specific CKR11 failure.
+
 ## Result postback (#2851 result-consumption seam)
 
 The step summary and artifact are not readable through the ChatGPT host's GitHub
@@ -160,6 +188,23 @@ result; nothing in this repository forces the host to do so. The
 opt-in MCP profile (`chatgpt-ckr6-opt-in`) remains optional and is not
 required for this route.
 
+### Named CKR6 relevance hint
+
+For a task genuinely about the CKR6 mutation boundary, send
+`CKR6 mutation boundary` as **one** item in `capability_keywords`.
+For example: `"capability_keywords": ["CKR6 mutation boundary"]`.
+Case and surrounding whitespace are normalized. Separate tags such as
+`ckr6` and `mutation-boundary` are not joined and do not enable this
+named matcher. The same words in `task_reference` also do not enable it.
+
+This hint requests a relevance check; it does not force a lesson ID or
+grant authority. The named matcher still requires the distinctive words
+`ckr6` and `mutation` in the lesson-owned title or guidance, and existing
+eligibility, provenance, and result-consumption checks still apply.
+For an owner-bound PR canary, use a fresh disposable Draft, bind the
+request to its exact full head SHA, and have the repository owner post
+the request personally. A bot-authored comment is not a substitute.
+
 ## Infrastructure-failure postback (#3691)
 
 The postback above lives in the `execute` job, so it cannot report a failure
@@ -315,3 +360,35 @@ may use the anchor-free API form
 `https://api.github.com/repos/Blummer92/agent-os/issues/comments/<id>`, because
 a host write route was observed rewriting `#issuecomment-` anchors in comment
 bodies (comment 6080494403); the `#issuecomment` form remains valid.
+
+
+## Pre-publication bounded request composer (#3690)
+
+The optional `agent_os_execution_service.ckr6_request_composer` CLI is a
+**read-only command composer**, not a GitHub publisher or an authorization gate.
+It calls the canonical `ckr6_github_bridge.parse_envelope` before emitting
+a command and rejects oversized fields rather than truncating task context.
+This would have rejected PR4's 523-character `task_reference` before posting
+(the canonical bound is 512 characters).
+
+Example (from a checkout with the execution-service package importable):
+
+```sh
+python -m agent_os_execution_service.ckr6_request_composer \
+  --input request.json \
+  --pr-number 4092 \
+  --head-sha 65ec5114839655a0484303713cb9857896dfe029
+```
+
+For PR requests, the JSON `issue_number` must equal `--pr-number`, and its
+`task_reference` must contain exactly one matching PR reference and one
+matching 40-hex head SHA. The target repository and PR reference grammar
+must match the canonical GitHub gate. Stdout contains the exact validated
+command bytes, with no added newline, **only** after validation. Any failure
+emits a finite reason to stderr and exits 2 with no command output. No request is automatically shortened or rewritten.
+
+This tool does not independently authenticate the GitHub comment author,
+check the current remote head, establish issue-primary or exact-file route
+authority, select lessons, perform Notion reads, post a request, admit
+mutations, or authorize Ready/merge. A trusted host must still verify the
+canonical GitHub state and follow the existing CKR6 and governance gates.

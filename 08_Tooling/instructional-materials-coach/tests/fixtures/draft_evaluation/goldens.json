@@ -1,0 +1,71 @@
+{
+  "contract_version": "imc-draft-evaluation-fixtures-v1",
+  "fixtures": [
+    {
+      "draft": "model_draft_a_plain.yaml",
+      "draft_sha256": "743d0fbcc92c7eac10e8ab7116e8ef4227e5cccc85881e18259b9ee8d453f02c",
+      "expected_findings": {},
+      "expected_status": "no-deterministic-finding",
+      "golden_review": "unreviewed-by-human",
+      "min_questions": 4,
+      "provenance": {
+        "date": "2026-11-21",
+        "draft_sha256": "743d0fbcc92c7eac10e8ab7116e8ef4227e5cccc85881e18259b9ee8d453f02c",
+        "host": "Claude Code 2.1.330 (claude -p, single turn, no tools)",
+        "model": "claude-sonnet-5-5",
+        "prompt_file": "prompts/A_plain.txt",
+        "prompt_sha256": "857c5e60c018c53e8298e0698e11a0fa5fc2c3cfdca9b33a4c43a9159475de2b",
+        "raw_stream_sha256": "265b9aaf3391d939a27583fe9692d6d730a23dc88b5112ca37c3b7c770cabb6b",
+        "session_id": "5a2e624a-b1a0-4738-9b0e-48518db73a9c",
+        "tool_calls": 0
+      }
+    },
+    {
+      "draft": "model_draft_b_statistic.yaml",
+      "draft_sha256": "3fd2e6b8f6a3eddd3b4e90b150c0ccbf6ce3ce6798259891a47c70af4ecc0314",
+      "expected_findings": {
+        "draft-ungrounded-claim-pattern": [
+          "slide_1_bullet_1"
+        ]
+      },
+      "expected_status": "review",
+      "golden_review": "unreviewed-by-human",
+      "min_questions": 4,
+      "provenance": {
+        "date": "2026-11-21",
+        "draft_sha256": "3fd2e6b8f6a3eddd3b4e90b150c0ccbf6ce3ce6798259891a47c70af4ecc0314",
+        "host": "Claude Code 2.1.330 (claude -p, single turn, no tools)",
+        "model": "claude-sonnet-5-5",
+        "prompt_file": "prompts/B_statistic.txt",
+        "prompt_sha256": "0ea1523df23358b886d0db12b65a67eab4c7ffb255c3735bd545db3d8448f48c",
+        "raw_stream_sha256": "3e4bce5bf2087c0ef26a9d4ae3b3f5b3f87f4b9a0206c2a02739866d2ff8b6d8",
+        "session_id": "8755d634-5ddb-43c2-9040-e1b9f445a40f",
+        "tool_calls": 0
+      }
+    },
+    {
+      "draft": "model_draft_c_detailed.yaml",
+      "draft_sha256": "8c6a8d4b9ca67776066de28282d60452848523fa84dcbf8ff5a9e7f419824fd6",
+      "expected_findings": {
+        "draft-instruction-line-over-35-words": [
+          "question_4"
+        ]
+      },
+      "expected_status": "review",
+      "golden_review": "unreviewed-by-human",
+      "min_questions": 4,
+      "provenance": {
+        "date": "2026-11-21",
+        "draft_sha256": "8c6a8d4b9ca67776066de28282d60452848523fa84dcbf8ff5a9e7f419824fd6",
+        "host": "Claude Code 2.1.330 (claude -p, single turn, no tools)",
+        "model": "claude-sonnet-5-5",
+        "prompt_file": "prompts/C_detailed.txt",
+        "prompt_sha256": "85fe0344396e5afb43cb049956033dc4f3becd110f9ddc02d82f93322f5126eb",
+        "raw_stream_sha256": "61dd98f4e6c0ef4cfe9c10ec5dcefc2907c097e5ca047dd535e19fb5bedfc234",
+        "session_id": "d282bbfb-8090-464c-9913-60f41afa2926",
+        "tool_calls": 0
+      }
+    }
+  ],
+  "lesson": "pinned lesson_content_run_38462963519.json, Candy Branding, Day 1"
+}

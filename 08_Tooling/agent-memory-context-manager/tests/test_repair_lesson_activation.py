@@ -66,7 +66,7 @@ def test_failed_attempt_automatically_reads_and_records_consumed_before_next_mut
 
     def read(query):
         calls.append(query)
-        return {"results": [live_row()]}
+        return {"results": [live_row()], "has_more": False}
 
     result = activate_repair_retry_lessons(request(), failed(), execute_read=read)
     assert len(calls) == 1
@@ -77,8 +77,8 @@ def test_failed_attempt_automatically_reads_and_records_consumed_before_next_mut
 
 
 def test_each_new_failed_attempt_requires_its_own_activation():
-    first = activate_repair_retry_lessons(request(), failed("attempt-1"), execute_read=lambda _: {"results": [live_row()]})
-    second = activate_repair_retry_lessons(request(), failed("attempt-2"), execute_read=lambda _: {"results": [live_row()]})
+    first = activate_repair_retry_lessons(request(), failed("attempt-1"), execute_read=lambda _: {"results": [live_row()], "has_more": False})
+    second = activate_repair_retry_lessons(request(), failed("attempt-2"), execute_read=lambda _: {"results": [live_row()], "has_more": False})
     assert first.attempt.attempt_id != second.attempt.attempt_id
     assert first.attempt.retry_reentry_outcome is RetryReentryOutcome.CONSUMED
     assert second.attempt.retry_reentry_outcome is RetryReentryOutcome.CONSUMED
@@ -126,7 +126,7 @@ def test_activation_is_retry_specific_and_rejects_already_satisfied_attempt():
         RetryReentryOutcome.CONSUMED,
     )
     try:
-        activate_repair_retry_lessons(request(), done, execute_read=lambda _: {"results": []})
+        activate_repair_retry_lessons(request(), done, execute_read=lambda _: {"results": [], "has_more": False})
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "already has" in str(exc)
@@ -136,7 +136,7 @@ def test_no_relevant_lesson_is_distinct_from_capability_failure():
     result = activate_repair_retry_lessons(
         request(specialized_knowledge_required=True),
         failed(),
-        execute_read=lambda _: {"results": []},
+        execute_read=lambda _: {"results": [], "has_more": False},
     )
     assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
     assert result.lesson_disposition is RepairLessonDisposition.NO_RELEVANT_LESSON

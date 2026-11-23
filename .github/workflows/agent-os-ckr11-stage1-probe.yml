@@ -1,0 +1,63 @@
+# Governed CKR11 Learning Observatory: manual owner-only read-only inventory snapshot.
+# The original one-time issue-comment command is intentionally disabled.
+# No schedule, issue_comment trigger, automatic retries or Notion writes.
+# Artifacts contain sanitized counts only and expire after three days.
+name: Agent OS CKR11 Learning Observatory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-ckr11-stage1-probe-${{ github.actor_id }}-${{ github.triggering_actor }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Owner-only bounded CKR11 lesson inventory snapshot
+    if: ${{ github.event_name == 'workflow_dispatch' && github.actor == 'Blummer92' && github.actor_id == 32861845 && github.triggering_actor == 'Blummer92' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Verify reviewed probe.py SHA-256 before any secret or import
+        env:
+          EXPECTED_PROBE_SHA256: d3a5e23a1bd9ec3f9fe297a1a148e8b6b8f51a56ee6c14ec21d7f8d13e68f755
+        run: |
+          set -euo pipefail
+          echo "${EXPECTED_PROBE_SHA256}  scripts/agent_os_ckr11_stage1_probe/probe.py" | sha256sum --check --strict -
+      - name: Offline probe tests (no secrets in this step)
+        env:
+          PYTHONPATH: 08_Tooling/workflow-scheduler/src:.
+        run: python -m unittest tests.agent_os_ckr11_stage1_probe.test_probe
+      - name: Run the bounded read-only probe (at most 14 query POSTs)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID: ${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}
+          PYTHONPATH: 08_Tooling/workflow-scheduler/src:.
+          EXPECTED: e43401c4517d22f2779582520371a3f51459dd2ac867cf6ad9c9c086ed5e36c2
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ckr11-stage1"
+          python -m scripts.agent_os_ckr11_stage1_probe.probe \
+            --output "$RUNNER_TEMP/ckr11-stage1/result.json" \
+            --expected-manifest-sha256 "$EXPECTED"
+      - name: Publish sanitized counts
+        if: ${{ always() }}
+        run: |
+          f="$RUNNER_TEMP/ckr11-stage1/result.json"
+          { echo '## CKR11 Learning Observatory (sanitized counts only; may be public)'; if [ -f "$f" ]; then echo '```json'; cat "$f"; echo '```'; else echo 'No result file.'; fi; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: ckr11-stage1-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/ckr11-stage1/result.json
+          if-no-files-found: warn
+          retention-days: 3

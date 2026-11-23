@@ -139,7 +139,13 @@ def test_reuse_steps_cover_every_named_aggregate_workflow_step():
         if line.startswith("      - name: ")
     }
     synthetic_steps = {"Set up job", "Complete job"}
-    assert set(pub.REUSE_STEP_CONCLUSIONS) == named_steps | synthetic_steps
+    # The previous Ready-reuse step was deliberately removed by #4047.
+    # Its exact historical signature remains fail-closed (pending, never green)
+    # for older provider evidence, but it must not reappear in the live workflow.
+    legacy_reuse = "Reuse valid exact-head aggregate evidence"
+    assert legacy_reuse not in named_steps
+    assert pub.REUSE_STEP_CONCLUSIONS[legacy_reuse] == "success"
+    assert set(pub.REUSE_STEP_CONCLUSIONS) - {legacy_reuse} == named_steps | synthetic_steps
 
 
 def test_ready_reuse_cannot_hide_failed_source_or_required_jobs():

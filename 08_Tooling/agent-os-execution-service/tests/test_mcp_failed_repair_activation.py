@@ -53,7 +53,7 @@ def _call(**overrides):
 
 def test_chatgpt_facade_executes_ckr6_and_returns_mutation_gate():
     calls = []
-    result = _call(execute_read=lambda query: calls.append(query) or {"results": [_lesson()]})
+    result = _call(execute_read=lambda query: calls.append(query) or {"results": [_lesson()], "has_more": False})
     assert len(calls) == 1
     assert result["attempt_id"] == "pr-1987-head-79c77bf-validation-34053652613"
     assert result["retry_reentry_outcome"] == "consumed"
@@ -79,7 +79,7 @@ def _raise_unavailable(_query):
 def test_capability_unavailable_is_distinguishable_from_no_relevant_lesson():
     """#2142: capability outages must not reach #2281 as semantic repair recurrence."""
     capability = _call(specialized_knowledge_required=True, execute_read=_raise_unavailable)
-    semantic = _call(specialized_knowledge_required=True, execute_read=lambda _query: {"results": []})
+    semantic = _call(specialized_knowledge_required=True, execute_read=lambda _query: {"results": [], "has_more": False})
 
     # The coarse retry outcome stays identical for admission compatibility.
     assert capability["retry_reentry_outcome"] == semantic["retry_reentry_outcome"] == "unavailable-or-failed"
@@ -92,13 +92,13 @@ def test_capability_unavailable_is_distinguishable_from_no_relevant_lesson():
 
 
 def test_consumed_disposition_crosses_the_facade_boundary():
-    result = _call(execute_read=lambda _query: {"results": [_lesson()]})
+    result = _call(execute_read=lambda _query: {"results": [_lesson()], "has_more": False})
     assert result["lesson_disposition"] == "consumed"
     assert result["retry_reentry_outcome"] == "consumed"
 
 
 def test_each_new_failed_attempt_requires_its_own_runtime_activation():
-    read = lambda _: {"results": [_lesson()]}
+    read = lambda _: {"results": [_lesson()], "has_more": False}
     first = _call(execute_read=read)
     second = _call(attempt_id="pr-1987-head-next-validation-next", execute_read=read)
     assert first["attempt_id"] != second["attempt_id"]
@@ -109,7 +109,7 @@ def test_each_new_failed_attempt_requires_its_own_runtime_activation():
 
 
 def test_failed_repair_exposes_bounded_read_diagnostics_without_raw_rows():
-    result = _call(execute_read=lambda _query: {"results": [_lesson()]})
+    result = _call(execute_read=lambda _query: {"results": [_lesson()], "has_more": False})
     assert result["candidate_count"] == 1
     assert result["retrieval_diagnostics"]["observed_rows"] == 1
     assert result["retrieval_diagnostics"]["normalized_rows"] == 1
@@ -120,7 +120,7 @@ def test_failed_repair_exposes_bounded_read_diagnostics_without_raw_rows():
 
 
 def test_failed_repair_empty_read_reports_zero_candidates_and_stays_blocked():
-    result = _call(execute_read=lambda _query: {"results": []})
+    result = _call(execute_read=lambda _query: {"results": [], "has_more": False})
     assert result["candidate_count"] == 0
     assert result["retrieval_diagnostics"]["normalized_rows"] == 0
     assert result["lesson_disposition"] == "no-relevant-lesson"

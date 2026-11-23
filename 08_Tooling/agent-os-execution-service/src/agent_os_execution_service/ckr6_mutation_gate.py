@@ -847,13 +847,21 @@ def run_gate(
                 ),
             )
     try:
-        issue_comments = reader.read_issue_comments(repository, issue_number)
-        if pr_number is not None and pr_number != issue_number:
-            pr_comments: Sequence[Mapping[str, object]] = reader.read_issue_comments(
-                repository, pr_number
+        if pr_number is not None and pr_number == issue_number:
+            # A verified exact-file Draft can use its own PR conversation as
+            # the CKR6 request/result thread. The issue number here is the
+            # PR-thread number, NOT an implementation issue. Preserve the
+            # target_kind='pr' trust semantics, without an issue-primary claim.
+            issue_comments = ()
+            pr_comments: Sequence[Mapping[str, object]] = (
+                reader.read_issue_comments(repository, pr_number)
             )
         else:
-            pr_comments = ()
+            issue_comments = reader.read_issue_comments(repository, issue_number)
+            if pr_number is not None:
+                pr_comments = reader.read_issue_comments(repository, pr_number)
+            else:
+                pr_comments = ()
     except GitHubIssueCommentReadUnavailable as exc:
         return GateDecision(False, READ_UNAVAILABLE, detail=exc.reason_code)
     return evaluate_mutation_boundary(

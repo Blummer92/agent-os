@@ -17,7 +17,6 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         "acceptance",
         frozenset(
             {
-                "edit_relevance",
                 "legacy_preflight",
                 "linked_issue",
                 "merged_docs",
@@ -63,6 +62,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         "approval",
         frozenset(
             {
+                "_connector_attribution",
                 "authorization_drift_review",
                 "approval_records",
                 "approved_execution_projection",
@@ -70,6 +70,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "closure_admission_actions",
                 "defect_evidence_mutation_guard",
                 "evidence_compatibility",
+                "exact_file_draft_route",
                 "ready_for_review_compatibility",
                 "issue_operational_state",
                 "lane_post_pr_issue_reconciliation",

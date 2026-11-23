@@ -127,22 +127,26 @@ def test_nonzero_exit_without_junit_is_executed_fail_with_missing_report(monkeyp
 
 def test_unresolvable_command_is_recorded_not_dropped(monkeypatch, tmp_path: Path) -> None:
     def fake_run(argv, cwd, check, env):
+        for arg in argv:
+            if arg.startswith("--junitxml="):
+                Path(arg.split("=", 1)[1]).write_text(_xml(), encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     monkeypatch.setattr(module, "_current_head", lambda: "a" * 40)
     monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not in the bounded CI executor"):
         module.execute_focused(
             _plan(["python -m pytest tests/agent_os_issue_acceptance", "totally-unknown-command"], "a" * 40),
             expected_head_sha="a" * 40,
         )
     receipt = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert receipt["commands"][0]["classification"] == "EXECUTED_PASS"
     assert receipt["commands"][1]["classification"] == "NOT_EXECUTED"
     assert receipt["commands"][1]["exit_code"] is None
 
 def test_review_3762_malformed_xml_keeps_full_command_receipts(monkeypatch, tmp_path: Path) -> None:
-    """An invalid XML report is evidence-invalid, not a receipt-writer crash."""
+    """Invalid XML fails the step only after preserving all command receipts."""
     calls = []
 
     def fake_run(argv, cwd, check, env):
@@ -155,13 +159,16 @@ def test_review_3762_malformed_xml_keeps_full_command_receipts(monkeypatch, tmp_
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     monkeypatch.setattr(module, "_current_head", lambda: "a" * 40)
     monkeypatch.setenv("CI_JUNIT_DIR", str(tmp_path))
-    module.execute_focused(
-        _plan(["python -m pytest tests/agent_os_issue_acceptance",
-               "python -m pytest tests/agent_os_issue_acceptance"], "a" * 40),
-        expected_head_sha="a" * 40,
-    )
+    with pytest.raises(ValueError, match="without fresh, valid, count-consistent JUnit"):
+        module.execute_focused(
+            _plan(["python -m pytest tests/agent_os_issue_acceptance",
+                   "python -m pytest tests/agent_os_issue_acceptance"], "a" * 40),
+            expected_head_sha="a" * 40,
+        )
     receipt = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert len(calls) == 2
     assert receipt["selected_count"] == 2
     assert len(receipt["commands"]) == 2
     assert all(item["junit_counts"] is None for item in receipt["commands"])
+    assert all(item["exit_code"] == 0 for item in receipt["commands"])
+    assert all(item["classification"] == "NOT_EXECUTED_SETUP_FAILURE" for item in receipt["commands"])

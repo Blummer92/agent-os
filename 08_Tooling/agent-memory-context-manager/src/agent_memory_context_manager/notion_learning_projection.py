@@ -57,6 +57,13 @@ class NotionLearningProjectionResult:
     disposition: ProjectionDisposition
     reason_codes: tuple[str, ...]
     record: NotionLearningRecordProposal | None = None
+    # CKR5 future_use_hints preserved here, on the projection RESULT -- not
+    # on the Notion record and not in NotionLearningRecordProposal.to_dict().
+    # They are proposed, non-authoritative applicability hints: they never
+    # become verified applicability evidence, never map to a Notion
+    # property, and never enter catalog_entry_draft properties. The
+    # serialized Notion record shape is byte-identical to before PR-2.
+    proposed_applicability_hints: tuple[str, ...] = ()
     authority_created: bool = field(default=False, init=False)
     side_effects_performed: bool = field(default=False, init=False)
     notion_write_performed: bool = field(default=False, init=False)
@@ -122,7 +129,9 @@ def project_lesson_to_notion(
         proposed_recurrence_count=proposal.proposed_recurrence_count,
         surface_before_work=proposal.surface_before_work,
     )
-    return NotionLearningProjectionResult(disposition, reason_codes, record)
+    return NotionLearningProjectionResult(
+        disposition, reason_codes, record, result.future_use_hints
+    )
 
 
 def plan_historical_backfill(

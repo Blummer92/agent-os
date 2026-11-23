@@ -613,10 +613,12 @@ def test_classify_gate_preserves_owner_command_and_webhook_family():
     assert gate == "if: ${{ github.actor == 'Blummer92' && startsWith(github.event.comment.body, '/agent-os ckr6 ') }}"
     assert "pull_request_review_comment" not in content.split("\npermissions:", 1)[0]
 
-def test_workflow_yaml_parses_and_jobs_are_exactly_the_three_expected():
+def test_workflow_yaml_parses_and_jobs_are_exactly_the_four_expected():
     yaml = pytest.importorskip("yaml")
     document = yaml.safe_load(_workflow_text())
-    assert set(document["jobs"]) == {"classify", "execute", "report-failure"}
+    assert set(document["jobs"]) == {
+        "classify", "execute", "report-failure", "revalidate-after-postback",
+    }
     assert document["permissions"] == {"contents": "read"}
     assert "permissions" not in document["jobs"]["classify"]
     expected_postback_permissions = {
@@ -628,3 +630,15 @@ def test_workflow_yaml_parses_and_jobs_are_exactly_the_three_expected():
     job = document["jobs"]["report-failure"]
     assert job["needs"] == ["classify", "execute"]
     assert job["permissions"] == expected_postback_permissions
+    # The post-result revalidator is separate from the credential-bearing execute
+    # job: it alone may write Actions, and it reads issues and pull requests only.
+    revalidator = document["jobs"]["revalidate-after-postback"]
+    assert revalidator["needs"] == ["classify", "execute"]
+    assert revalidator["permissions"] == {
+        "actions": "write",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+    }
+    assert "NOTION_TOKEN" not in str(revalidator)
+    assert "actions" not in document["jobs"]["execute"]["permissions"]

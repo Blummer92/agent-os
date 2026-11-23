@@ -1,0 +1,42 @@
+# CKR2 #4026 redacted replay signature projection; observed 87 rows, 35 included, 33 tied in bucket 2.
+# Captured CKR6 comment 7040605611; original main 740bb83a9ea140104da77c15a3c3901c7d325b9d.
+# Source archive SHA256 2531aa74fc5d9a902e957d48765ca979b8aa382e4dddf3a3a201b32e9e943b60.
+# data/lessons.json SHA256 944a6baa963d4aa78607e023c78e0fae6b92a821651bf00b408454c5ed8116ae.
+# Contains task-overlap signature terms only (not original full private lesson narratives or Notion page IDs).
+# source flag is only currentness shape, not verification of any underlying lesson claim.
+# fields: ID|Area|Learning Type|Status|source flag|last_edited_time|context overlap terms|Applies To values
+LL-4|Testing|Testing lesson|Applied|src|2026-11-15T00:41:00.000Z|authorized exact head merge|
+LL-6|Testing|Testing lesson|Applied|src|2026-11-15T00:41:00.000Z|exact head tests|
+LL-9|Testing|Testing lesson|Applied|src|2026-11-15T00:41:00.000Z|explicit issue provenance selection|
+LL-10|Testing|Testing lesson|Applied|src|2026-11-15T00:41:00.000Z|only|
+LL-18|Testing|Testing lesson|Applied|src|2026-11-15T00:42:00.000Z|exact explicit pagination positive|
+LL-21|Testing|Testing lesson|Applied|src|2026-11-15T00:47:00.000Z||
+LL-27|Automation|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|issue merge only|
+LL-30|Testing|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|explicit only|
+LL-32|Testing|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|boundary issue|
+LL-33|Testing|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|boundary|
+LL-34|Testing|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|issue only|
+LL-35|Testing|Testing lesson|Applied|src|2026-11-15T00:43:00.000Z|only|
+LL-41|Testing|Testing lesson|Applied|src|2026-08-24T13:52:00.000Z|only|Notion
+LL-43|Testing|Testing lesson|Applied|src|2026-08-24T00:12:00.000Z||
+LL-44|Testing|Testing lesson|Applied|src|2026-08-24T00:12:00.000Z||
+LL-47|Testing|Testing lesson|Applied|src|2026-11-15T00:44:00.000Z|provenance|
+LL-48|Testing|Testing lesson|Applied|src|2026-11-15T00:44:00.000Z|only|
+LL-50|Testing|Testing lesson|New|src|2026-11-15T00:45:00.000Z|authorization exact issue lesson only testing tests|
+LL-51|Testing|Mistake|Needs follow-up|src|2026-11-15T02:52:00.000Z|exact head mutation notion only tests|
+LL-52|Automation|Testing lesson|New|src|2026-11-15T00:45:00.000Z|authorized only|
+LL-53|Testing|Testing lesson|New|src|2026-09-01T14:11:00.000Z|only|
+LL-55|Testing|Testing lesson|Applied|src|2026-11-15T03:00:00.000Z|exact head provenance unrelated|
+LL-56|Automation|Testing lesson|Needs follow-up|src|2026-11-15T02:53:00.000Z|authorization authorized control only write|
+LL-57|Automation|Testing lesson|New|src|2026-11-15T02:53:00.000Z|authorized explicit|
+LL-65|Testing|Testing lesson|Applied|src|2026-11-15T00:46:00.000Z|exact head only tests|Notion
+LL-66|Automation|Testing lesson|Applied|src|2026-11-15T00:46:00.000Z|explicit issue only|
+LL-68|Testing|Testing lesson|Applied|src|2026-11-15T00:46:00.000Z|exact head issue unrelated|
+LL-72|Testing|Testing lesson|New|src|2026-11-15T02:52:00.000Z|control only tests|
+LL-76|Testing|Testing lesson|Applied|src|2026-11-15T00:46:00.000Z|exact head only tests|
+LL-79|Automation|Testing lesson|Applied|src|2026-11-15T00:47:00.000Z|explicit issue only|
+LL-80|Automation|Testing lesson|Applied|src|2026-11-19T22:41:00.000Z|merge only|
+LL-82|Automation|Testing lesson|Applied|src|2026-11-15T00:40:00.000Z|authorization authorized boundary mutation|Dashboard
+LL-84|Testing|Testing lesson|Applied|missing|2026-11-14T22:12:00.000Z|authorized exact head|Deployment
+LL-86|Governance|Testing lesson|New|src|2026-11-15T00:47:00.000Z|explicit head|
+LL-90|Testing|Testing lesson|New|src|2026-11-15T00:47:00.000Z|exact head merge|

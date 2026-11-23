@@ -1,10 +1,8 @@
 name: Agent OS CKR6 Comment Revalidation
 
-# Trusted default-branch-only workflow. Reruns EXISTING PR gate checks; never
-# grants CKR6 admission or publishes a new check/status. Unrelated learning
-# operations and unbound issue-level requests return non-admitting not-applicable.
-# An actual head-bound PR with no verified run still fails closed. Review
-# actions:write scope before merge. Issue comments never execute PR code.
+# Retired legacy issue-comment revalidation. The job is permanently inert.
+# Only the producer's separately privileged postback-complete job may rerun
+# an existing exact-head gate after verifying a trusted result receipt.
 on:
   issue_comment:
     types: [created]
@@ -17,14 +15,9 @@ permissions:
 
 jobs:
   revalidate:
-    if: >-
-      github.repository == 'Blummer92/agent-os' &&
-      (
-        (github.event.comment.user.id == 32861845 &&
-         startsWith(github.event.comment.body, '/agent-os ckr6 ')) ||
-        (github.event.comment.user.id == 41898282 &&
-         startsWith(github.event.comment.body, '<!-- agent-os-ckr6-result:v1 -->'))
-      )
+    # Retired: bot comments are not a reliable GitHub Actions trigger.
+    # This legacy job is deliberately inert; producer postback owns reruns.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     concurrency:
       group: ckr6-comment-revalidate-${{ github.event.issue.number }}
