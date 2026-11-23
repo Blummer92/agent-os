@@ -33,6 +33,8 @@ def _simulated_readback(values: Mapping[str, object]) -> dict[str, object]:
         # Synthetic eligibility inputs are NEVER evidence of actual owner activation.
         "Status": {"type": "select", "select": {"name": "New"}},
         "Surface Before Work?": {"type": "checkbox", "checkbox": True},
+        # Notion returns an empty multi_select property even when no option is set.
+        "Applies To": {"type": "multi_select", "multi_select": []},
     }
     for name, value in values.items():
         kind = WRITABLE_TYPES[name]
