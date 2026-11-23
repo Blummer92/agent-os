@@ -1,6 +1,7 @@
 """Offline fixture tests. The fixture readers are not deployment authorities."""
 import hashlib
 import io
+import struct
 import zipfile
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,25 @@ def archive_for(member, data):
     return stream.getvalue()
 
 
+def with_archive_xml(evidence, xml, *, archive=None):
+    """Bind replacement ZIP and member bytes to both independent digest surfaces."""
+    if archive is None:
+        archive = archive_for(evidence.output.case.member, xml)
+    archive_sha = digest(archive)
+    return replace(
+        evidence, archive=archive,
+        artifact={**evidence.artifact, "digest": "sha256:" + archive_sha},
+        output=replace(evidence.output, archive_sha256=archive_sha,
+                       member_sha256=digest(xml)),
+    )
+
+
+def forbid_reader(message):
+    def unexpected(*_):
+        pytest.fail(message)
+    return unexpected
+
+
 def fixture(*, xml=XML, **case_updates):
     case = replace(FrozenCase(REPO, 42, TASK, 4054, 71, "a" * 40, "b" * 40, 80, 2, 90, 3, 100,
                                "junit.xml", "suite::fixture::named", START, NOW), **case_updates)
@@ -70,8 +90,9 @@ def fixture(*, xml=XML, **case_updates):
     return case, task, record, lesson, policy, evidence, review
 
 
-def evaluate(*, changes=None, evidence_change=None, review_change=None, reviews=None, **kwargs):
-    case, task, record, lesson, policy, evidence, review = fixture()
+def evaluate(*, changes=None, evidence_change=None, review_change=None, reviews=None,
+             scenario=None, **kwargs):
+    case, task, record, lesson, policy, evidence, review = fixture() if scenario is None else scenario
     args = dict(case=case, task=task, record=record, lesson=lesson, policy=policy, as_of=NOW)
     if changes:
         args.update(changes(case, task, record, lesson, policy))
@@ -129,7 +150,8 @@ def test_no_reader_no_acquisition_and_no_static_signal():
     ("reporter_test_id", "", "case-incomplete"),
 ])
 def test_exact_case_binding(field, value, reason):
-    assert_blocked(evaluate(changes=lambda c, *_: {"case": replace(c, **{field: value})}), reason)
+    assert_blocked(evaluate(changes=lambda c, *_: {"case": replace(c, **{field: value})},
+                            read_review=forbid_reader("invalid case reached review")), reason)
 
 
 @pytest.mark.parametrize("changes,reason", [
@@ -149,6 +171,17 @@ def test_provider_bindings(changes, reason):
     assert_blocked(evaluate(evidence_change=lambda e: replace(
         e, **{k: {**getattr(e, k), **v} for k, v in changes.items()},
     )), reason)
+
+
+@pytest.mark.parametrize("pull_requests", [
+    [], [{"number": True}], [{"number": 71.0}], [{"number": "71"}],
+])
+def test_pr_binding_requires_one_strict_integer_before_review(pull_requests):
+    def change(e):
+        return replace(e, run={**e.run, "pull_requests": pull_requests})
+    assert_blocked(evaluate(evidence_change=change,
+                            read_review=forbid_reader("invalid PR binding reached review")),
+                   "pr-binding-missing-or-ambiguous")
 
 
 def test_source_json_and_name_only_artifact_join_do_not_qualify():
@@ -172,11 +205,7 @@ def test_source_json_and_name_only_artifact_join_do_not_qualify():
      "junit-contradiction"),
 ])
 def test_only_executed_consistent_named_junit(xml, reason):
-    def change(e):
-        archive = archive_for(e.output.case.member, xml)
-        return replace(e, archive=archive, artifact={**e.artifact, "digest": "sha256:" + digest(archive)},
-                       output=replace(e.output, archive_sha256=digest(archive), member_sha256=digest(xml)))
-    assert_blocked(evaluate(evidence_change=change), reason)
+    assert_blocked(evaluate(evidence_change=lambda e: with_archive_xml(e, xml)), reason)
 
 
 @pytest.mark.parametrize("field,value,reason", [
@@ -240,22 +269,21 @@ def test_repackaged_artifact_is_not_a_second_execution():
     case, task, record, lesson, policy, evidence, review = fixture()
     newer = replace(case, artifact_id=case.artifact_id + 1)
     output = replace(evidence.output, case=newer)
+    scenario = (case, task, record, lesson, policy, evidence, review)
     duplicate = evaluate(
-        changes=lambda *_: {"case": newer},
+        scenario=scenario, changes=lambda *_: {"case": newer},
         evidence_change=lambda _: replace(
             evidence, output=output, artifact={**evidence.artifact, "id": newer.artifact_id},
         ),
         review_change=lambda _: replace(review, output=output),
     )
-    assert duplicate == evaluate()
+    assert duplicate == evaluate(scenario=scenario)
 
 
 def test_multisuite_report_is_outside_first_slice():
     def change(e):
         xml = b"<testsuites>" + XML + XML.replace(b'name="suite"', b'name="other"') + b"</testsuites>"
-        archive = archive_for(e.output.case.member, xml)
-        return replace(e, archive=archive, artifact={**e.artifact, "digest": "sha256:" + digest(archive)},
-                       output=replace(e.output, archive_sha256=digest(archive), member_sha256=digest(xml)))
+        return with_archive_xml(e, xml)
     assert_blocked(evaluate(evidence_change=change), "junit-contradiction")
 
 
@@ -299,9 +327,7 @@ def test_missing_xml_member_reports_unavailable_before_archive_read():
     TaskEvidence(f"https://github.com/{REPO}/issues/4055", REPO),
 ])
 def test_subject_type_and_exact_task_binding_precede_reader_calls(task):
-    def unexpected(*_):
-        pytest.fail("invalid task accessed a reader")
-
+    unexpected = forbid_reader("invalid task accessed a reader")
     assert_blocked(evaluate(task=task, collect=unexpected, read_review=unexpected),
                    "task-binding-mismatch")
 
@@ -316,6 +342,25 @@ def test_review_reader_requires_verified_output_lesson_and_revision():
 
     assert evaluate(read_review=exact_receipt_reader).status == "qualified"
     assert received == [(evidence.output, "LL-12", REV)]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("lesson_id", "LL-13"), ("source_revision", "2026-11-19T12:00:00.000Z"),
+])
+def test_review_reader_receives_current_frozen_lesson_binding(field, value):
+    case, task, record, lesson, policy, evidence, _ = fixture()
+    record = replace(record, **{field: value})
+    lesson = replace(lesson, **{field: value})
+    received = []
+
+    def reader(output, lesson_id, revision):
+        received.append((output, lesson_id, revision))
+        return ()  # No matching independent review for the new frozen binding.
+
+    result = evaluate_shadow_case(case, task, record, lesson, policy=policy, as_of=NOW,
+                                  collect=lambda _: evidence, read_review=reader)
+    assert_review_blocked(result, "authenticated-attestation-unavailable")
+    assert received == [(evidence.output, record.lesson_id, record.source_revision)]
 
 
 def test_alternate_xml_encoding_does_not_qualify_a_well_formed_report():
@@ -373,17 +418,15 @@ def test_corrupted_compression_fails_closed_before_review_lookup():
         with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(member, XML)
         contents = bytearray(stream.getvalue())
-        # Local file header is 30 bytes before its filename and compressed data.
-        contents[30 + len(member.encode("ascii"))] = 0xFF
-        archive = bytes(contents)
-        return replace(evidence, archive=archive,
-                       artifact={**evidence.artifact, "digest": "sha256:" + digest(archive)},
-                       output=replace(evidence.output, archive_sha256=digest(archive)))
+        # Locate the payload using header metadata, including optional fields.
+        with zipfile.ZipFile(io.BytesIO(contents)) as z:
+            header = z.getinfo(member).header_offset
+        filename_len, extra_len = struct.unpack_from("<HH", contents, header + 26)
+        contents[header + 30 + filename_len + extra_len] = 0xFF
+        return with_archive_xml(evidence, XML, archive=bytes(contents))
 
-    def unexpected(*_):
-        pytest.fail("corrupted evidence was offered for review")
-
-    assert_blocked(evaluate(evidence_change=corrupted, read_review=unexpected),
+    assert_blocked(evaluate(evidence_change=corrupted,
+                            read_review=forbid_reader("corrupted evidence was offered for review")),
                    "execution-evidence-malformed")
 
 
@@ -426,9 +469,7 @@ def test_inclusive_execution_and_review_boundaries(before, cutoff, reviewed_at):
 
 
 def test_noncanonical_utc_and_inverted_windows_fail_before_reading():
-    def unexpected(*_):
-        pytest.fail("invalid timing accessed a reader")
-
+    unexpected = forbid_reader("invalid timing accessed a reader")
     offset = timezone(timedelta(hours=1))
     for clock in (NOW.replace(tzinfo=None), NOW.astimezone(offset)):
         result = evaluate(as_of=clock, collect=unexpected, read_review=unexpected)
@@ -447,9 +488,7 @@ def test_noncanonical_utc_and_inverted_windows_fail_before_reading():
     ("job_id", "90"), ("member", "a" * 509 + ".xml"),
 ])
 def test_malformed_case_identity_and_bounds_stop_before_reading(field, value):
-    def unexpected(*_):
-        pytest.fail("invalid case accessed a reader")
-
+    unexpected = forbid_reader("invalid case accessed a reader")
     assert_blocked(evaluate(collect=unexpected, changes=lambda c, *_: {
         "case": replace(c, **{field: value}),
     }), "case-incomplete")
@@ -460,9 +499,7 @@ def test_first_attempt_and_longest_supported_member_name_succeed():
 
 
 def test_frozen_case_and_reviewed_lesson_require_exact_models():
-    def unexpected(*_):
-        pytest.fail("invalid subject accessed a reader")
-
+    unexpected = forbid_reader("invalid subject accessed a reader")
     assert_blocked(evaluate(collect=unexpected, changes=lambda c, *_: {
         "case": type("DerivedCase", (FrozenCase,), {})(**asdict(c)),
     }), "task-binding-mismatch")
@@ -480,9 +517,7 @@ def test_frozen_case_and_reviewed_lesson_require_exact_models():
     ({"issuer": " "}, "independent-authority-unavailable"),
 ])
 def test_invalid_policy_never_reaches_the_provider(changes, reason):
-    def unexpected(*_):
-        pytest.fail("invalid policy accessed a reader")
-
+    unexpected = forbid_reader("invalid policy accessed a reader")
     assert_blocked(evaluate(collect=unexpected, changes=lambda c, t, r, l, p: {
         "policy": replace(p, **changes),
     }), reason)
@@ -557,11 +592,11 @@ def test_junit_member_size_limit_is_inclusive(size):
         with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as z:
             z.writestr(e.output.case.member, xml)
         archive = stream.getvalue()
-        return replace(e, archive=archive, artifact={**e.artifact, "digest": "sha256:" + digest(archive)},
-                       output=replace(e.output, archive_sha256=digest(archive), member_sha256=digest(xml)))
+        return with_archive_xml(e, xml, archive=archive)
 
+    baseline_review = fixture()[-1]
     result = evaluate(evidence_change=padded, read_review=lambda output, lesson_id, revision: (
-        replace(fixture()[-1], output=output),
+        replace(baseline_review, output=output),
     ))
     if size == 8_000_000:
         assert result.status == "qualified"

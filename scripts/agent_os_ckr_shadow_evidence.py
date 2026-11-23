@@ -116,6 +116,7 @@ class ShadowEvidenceResult:
 
 
 def _time(value: object) -> bool:
+    # Canonical UTC is intentional: equivalent offset tzinfo is not a frozen receipt clock.
     return type(value) is datetime and value.tzinfo is timezone.utc
 
 
@@ -139,6 +140,8 @@ def annotation_digest(record: ApplicabilityRecord) -> str:
 
 def _key(case: FrozenCase) -> str:
     # One execution does not become new evidence when an artifact is repackaged.
+    # Checkout identity may differ from the PR workflow head (e.g. merge checkout).
+    # The trusted source reader must independently authenticate this checkout.
     raw = json.dumps([case.repository_id, case.run_id, case.attempt,
                       case.job_id, case.step_number, case.checkout_sha,
                       case.reporter_test_id], separators=(",", ":"))
@@ -163,8 +166,8 @@ def _execution(case: FrozenCase, evidence: object) -> tuple[str, datetime | None
         # Narrow first slice: provider-bound PR validation only. Workflow-dispatch
         # receipts without a provider PR association need a separately approved join.
         pr_numbers = [p["number"] for p in run["pull_requests"]]
-        if (run["event"] != "pull_request" or pr_numbers != [case.pr_number]
-            or type(pr_numbers[0]) is not int):
+        if (run["event"] != "pull_request" or len(pr_numbers) != 1
+            or type(pr_numbers[0]) is not int or pr_numbers[0] != case.pr_number):
             return "pr-binding-missing-or-ambiguous", None
         if run["run_attempt"] != case.attempt or (
             job["id"], job["run_id"], job["run_attempt"], job["head_sha"]
@@ -181,16 +184,12 @@ def _execution(case: FrozenCase, evidence: object) -> tuple[str, datetime | None
         matching_steps = [step for step in job["steps"] if
                           type(step) is dict and type(step.get("number")) is int
                           and step["number"] == resolved_step]
-        if len(matching_steps) != 1 or (
-            matching_steps[0].get("conclusion") != job["conclusion"]
-        ):
-            return "aggregate-step-mismatch", None
-        # The shared resolver permits number coercion. The exact integer row
-        # must itself be the completed aggregate step, not an unrelated row
-        # occupying the same integer slot as malformed aggregate metadata.
-        if (matching_steps[0].get("name"), matching_steps[0].get("status")) != (
-            AGGREGATE_STEP_NAME, "completed"
-        ):
+        # The shared resolver permits number coercion. Bind the unique exact
+        # integer row, its aggregate name, completion, and job conclusion.
+        if (len(matching_steps) != 1
+            or matching_steps[0].get("name") != AGGREGATE_STEP_NAME
+            or matching_steps[0].get("status") != "completed"
+            or matching_steps[0].get("conclusion") != job["conclusion"]):
             return "aggregate-step-mismatch", None
         finished = datetime.fromisoformat(job["completed_at"])
         if not _time(finished) or not case.not_before <= finished <= case.cutoff:
@@ -321,6 +320,8 @@ def evaluate_shadow_case(
     review = reviews[0]
     if any(r != review for r in reviews[1:]):
         return blocked("conflicting-attestations", execution_id)
+    # Do not simplify to dataclass equality: int/float fields can compare
+    # equal while violating the strict frozen receipt subject model.
     if any(type(r.output) is not VerifiedJobOutput or not _same_case(r.output.case, case)
            for r in reviews):
         return blocked("attestation-subject-mismatch", execution_id)
