@@ -13,14 +13,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from . import ckr6_github_bridge as bridge
+from .ckr6_mutation_gate import _HEAD_REFERENCE_RE, _PR_TARGET_RE
 
 _MAX_INPUT_CHARS = bridge.MAX_COMMENT_BYTES * 4
 _HEAD = re.compile(r"[0-9a-fA-F]{40}\Z")
-_SHA_IN_TEXT = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
-_PR_IN_TEXT = re.compile(
-    r"(?<![a-zA-Z0-9])(?:PR|pull[ -]request)\s*#?\s*([1-9][0-9]*)\b",
-    re.IGNORECASE,
-)
 _BOUNDARY_OPERATIONS = frozenset({"issue-start", "failed-repair"})
 
 
@@ -55,14 +51,17 @@ def compose_request_comment(
             raise ComposeBlocked("pr-number-invalid")
         if type(head_sha) is not str or _HEAD.fullmatch(head_sha) is None:
             raise ComposeBlocked("pr-head-invalid")
+        if envelope.repository != bridge.GITHUB_REPOSITORY:
+            raise ComposeBlocked("pr-repository-mismatch")
         if envelope.issue_number != pr_number:
             raise ComposeBlocked("pr-target-mismatch")
         mentioned_prs = [
-            int(value) for value in _PR_IN_TEXT.findall(envelope.task_reference)
+            int(match.group(1) or match.group(2))
+            for match in _PR_TARGET_RE.finditer(envelope.task_reference)
         ]
         if mentioned_prs != [pr_number]:
             raise ComposeBlocked("pr-reference-unbound-or-ambiguous")
-        mentioned_heads = _SHA_IN_TEXT.findall(envelope.task_reference)
+        mentioned_heads = _HEAD_REFERENCE_RE.findall(envelope.task_reference)
         if len(mentioned_heads) != 1 or mentioned_heads[0].lower() != head_sha.lower():
             raise ComposeBlocked("pr-head-unbound-or-ambiguous")
 
@@ -108,7 +107,7 @@ def _load_payload(path: str) -> dict[str, object]:
             raw, object_pairs_hook=_unique_pairs,
             parse_constant=lambda _: (_ for _ in ()).throw(ComposeBlocked("invalid-json")),
         )
-    except (json.JSONDecodeError, UnicodeError):
+    except (json.JSONDecodeError, UnicodeError, RecursionError):
         raise ComposeBlocked("invalid-json") from None
     if type(obj) is not dict:
         raise ComposeBlocked("envelope-invalid")
@@ -132,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     except ComposeBlocked as exc:
         print(f"CKR6 request blocked: {exc}", file=sys.stderr)
         return 2
-    print(body)
+    sys.stdout.buffer.write(body.encode("utf-8"))
     return 0
 
 

@@ -382,9 +382,10 @@ python -m agent_os_execution_service.ckr6_request_composer \
 
 For PR requests, the JSON `issue_number` must equal `--pr-number`, and its
 `task_reference` must contain exactly one matching PR reference and one
-matching 40-hex head SHA. The command is printed to stdout **only** after
-validation. Any failure emits a finite reason to stderr and exits 2 with
-no command output. No request is automatically shortened or rewritten.
+matching 40-hex head SHA. The target repository and PR reference grammar
+must match the canonical GitHub gate. Stdout contains the exact validated
+command bytes, with no added newline, **only** after validation. Any failure
+emits a finite reason to stderr and exits 2 with no command output. No request is automatically shortened or rewritten.
 
 This tool does not independently authenticate the GitHub comment author,
 check the current remote head, establish issue-primary or exact-file route

@@ -110,7 +110,7 @@ def test_cli_stdin_success_emits_one_command_and_no_other_lines(monkeypatch, cap
     assert result == 0 and out.err == ""
     assert out.out == compose_request_comment(
         payload(), pr_number=PR, head_sha=HEAD,
-    ) + "\n"
+    )
 
 
 @pytest.mark.parametrize("raw,reason", [
@@ -148,7 +148,55 @@ def test_nonboundary_learning_operation_is_not_a_mutation_request():
     request = {
         "operation": "lesson-refinement", "repository": REPO,
         "issue_number": PR, "task_reference": PREFIX + "lesson correction",
-        "revision": {},
+        "refinement": {},
     }
     with pytest.raises(ComposeBlocked, match="^operation-not-boundary$"):
         compose_request_comment(request, pr_number=PR, head_sha=HEAD)
+
+
+def test_pr_reference_matches_gate_grammar():
+    url = f"https://github.com/{REPO}/pull/{PR}"
+    assert compose_request_comment(
+        payload(task_reference=f"{url} exact head {HEAD}"),
+        pr_number=PR, head_sha=HEAD,
+    ).startswith(bridge.COMMAND_PREFIX)
+    for text in (
+        f"PR {PR} exact head {HEAD}",
+        f"{PREFIX} see https://github.com/{REPO}/pull/{PR + 1}",
+    ):
+        with pytest.raises(ComposeBlocked, match="^pr-reference-unbound-or-ambiguous$"):
+            compose_request_comment(
+                payload(task_reference=text), pr_number=PR, head_sha=HEAD,
+            )
+
+
+def test_reject_wrong_repository_for_pr():
+    with pytest.raises(ComposeBlocked, match="^pr-repository-mismatch$"):
+        compose_request_comment(
+            payload(repository="example/unrelated"), pr_number=PR, head_sha=HEAD,
+        )
+
+
+def test_cli_maps_decoder_recursion_to_bounded_error(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("[]"))
+
+    def over_recursion_limit(*args, **kwargs):
+        raise RecursionError
+
+    monkeypatch.setattr(json, "loads", over_recursion_limit)
+    assert main([]) == 2
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == "CKR6 request blocked: invalid-json\n"
+
+
+def test_cli_stdout_is_exact_utf8_even_with_non_utf8_shell(monkeypatch):
+    request = payload(task_reference=PREFIX + "évidence")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request)))
+    raw = io.BytesIO()
+    stdout = io.TextIOWrapper(raw, encoding="ascii")
+    monkeypatch.setattr(sys, "stdout", stdout)
+    assert main(["--pr-number", str(PR), "--head-sha", HEAD]) == 0
+    stdout.flush()
+    assert raw.getvalue() == compose_request_comment(
+        request, pr_number=PR, head_sha=HEAD,
+    ).encode("utf-8")
