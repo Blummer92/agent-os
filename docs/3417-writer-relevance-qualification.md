@@ -75,8 +75,11 @@ The GitHub Actions workflow grants `contents: write` only to the trusted
 owner-admitted job; `GITHUB_TOKEN` is passed only to the secret-bearing execute
 step, not the initial admission step. The GitHub API **create-ref** operation
 must succeed with a matching 201 receipt before the first Notion POST is
-permitted. There is no check-then-create race, GitHub-ref retry, or automatic
-ref deletion. A duplicate (422), authorization/transport failure, or missing
+permitted. The live Notion client additionally requires its own reservation
+flag and **consumes that flag immediately before issuing the POST**, so even
+a repeated direct `LiveLessonsClient.create()` on the same instance cannot
+reuse an acquired claim. There is no check-then-create race, GitHub-ref retry,
+or automatic ref deletion. A duplicate (422), authorization/transport failure, or missing
 receipt fails closed with **zero Notion mutations**. Git ref creation itself
 is an external side effect, not an activation or Notion mutation.
 
