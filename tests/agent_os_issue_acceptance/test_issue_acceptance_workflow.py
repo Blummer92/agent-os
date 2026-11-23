@@ -18,6 +18,7 @@ WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
 VERIFY_REF = "Verify main dispatch"
 CHECKOUT = "Check out trusted report evaluator"
 VERIFY = "Verify trusted evaluator revision"
+ROUTE = "Verify owner-authorized exact-file scope"
 BUILD = "Build local acceptance fixtures from PR data"
 CHECKER = "Run report-only issue acceptance checker"
 SUMMARY = "Publish report summary"
@@ -50,7 +51,7 @@ def steps(workflow):
     report_steps = workflow["jobs"]["report"]["steps"]
     by_name = {step.get("name"): step for step in report_steps}
     assert len(by_name) == len(report_steps) and None not in by_name, report_steps
-    for expected in (VERIFY_REF, CHECKOUT, VERIFY, BUILD, CHECKER, SUMMARY):
+    for expected in (VERIFY_REF, CHECKOUT, VERIFY, ROUTE, BUILD, CHECKER, SUMMARY):
         assert expected in by_name, f"Missing workflow step {expected!r}: {list(by_name)}"
     return by_name
 
@@ -74,6 +75,7 @@ def test_only_trusted_dispatch_revision_supplies_checker(steps):
     checkout = steps[CHECKOUT]
     assert checkout.get("uses", "").startswith("actions/checkout@")
     assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert checkout["with"]["fetch-depth"] == 0
     assert checkout["with"]["persist-credentials"] is False
     assert sum(step.get("uses", "").startswith("actions/checkout@") for step in steps.values()) == 1
     assert steps[VERIFY]["env"]["EXPECTED_EVALUATOR_SHA"] == "${{ github.sha }}"
@@ -81,12 +83,18 @@ def test_only_trusted_dispatch_revision_supplies_checker(steps):
     setup_name = "Set up Python test environment"
     assert setup_name in steps, "Missing shared Python environment setup"
     assert steps[setup_name].get("uses") == "./.github/actions/setup-python-dev"
-    expected = (VERIFY_REF, CHECKOUT, VERIFY, setup_name, BUILD, CHECKER)
+    expected = (VERIFY_REF, CHECKOUT, VERIFY, setup_name, ROUTE, BUILD, CHECKER)
     assert [name for name in steps if name in expected] == list(expected)
     assert "python -m scripts.agent_os_issue_acceptance.cli" in steps[CHECKER]["run"]
     tokens = {name: step["env"]["GH_TOKEN"] for name, step in steps.items()
               if "GH_TOKEN" in step.get("env", {})}
     assert tokens == dict.fromkeys((BUILD, CHECKER), "${{ github.token }}")
+    assert {name for name, step in steps.items() if "GITHUB_TOKEN" in step.get("env", {})} == {ROUTE}
+    assert steps[ROUTE]["env"] == {
+        "GITHUB_TOKEN": "${{ github.token }}",
+        "ROUTE_PR": "${{ inputs.pr_number }}",
+        "ROUTE_HEAD": "${{ inputs.expected_head_sha }}",
+    }
 
 
 def test_no_write_command_or_failure_masking(workflow, workflow_text, steps):
@@ -101,7 +109,10 @@ def test_no_write_command_or_failure_masking(workflow, workflow_text, steps):
     for name, job_or_step in [("report", report), *steps.items()]:
         value = job_or_step.get("continue-on-error", False)
         assert value is False, f"{name!r} must not mask failures: {value!r}"
-    assert {name: step["if"] for name, step in steps.items() if "if" in step} == {SUMMARY: "always()"}
+    primary = "steps.exact_file.outputs.route == 'issue-primary'"
+    assert {name: step["if"] for name, step in steps.items() if "if" in step} == {
+        BUILD: primary, CHECKER: primary, SUMMARY: "always()",
+    }
     assert list(steps)[-1:] == [SUMMARY], "Summary must run after the checker"
     assert "PIPESTATUS" in steps[CHECKER]["run"]
 
@@ -146,6 +157,9 @@ if tool == "git":
     assert args == ["rev-parse", "HEAD"]
     print({EVALUATOR!r})
 elif tool == "python":
+    if args[:2] == ["-m", "scripts.agent_os_issue_acceptance.exact_file_draft_route"]:
+        Path("route-args.json").write_text(json.dumps(args[2:]))
+        sys.exit(int(os.environ["ROUTE_EXIT"]))
     if args[:2] == ["-m", "scripts.agent_os_issue_acceptance.cli"]:
         Path("checker-args.json").write_text(json.dumps(args[2:]))
         if os.environ.get("CHECKER_MODE") == "real":
@@ -194,6 +208,7 @@ else:
         os.environ, PATH=f"{tmp_path}:{os.environ.get('PATH', os.defpath)}",
         PYTHONPATH=os.pathsep.join((str(ROOT), os.environ.get("PYTHONPATH", ""))),
         GH_TOKEN="local-test-only", PR_NUMBER=PR_NUMBER, GITHUB_PR_NUMBER=PR_NUMBER,
+        ROUTE_PR=PR_NUMBER, ROUTE_HEAD=ORIGINAL_HEAD, ROUTE_EXIT="3",
         GITHUB_REPOSITORY="example/project", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
         GITHUB_OUTPUT="output", GITHUB_STEP_SUMMARY="summary", REPORT_DIR=str(tmp_path / FIXTURE_DIR),
     )
@@ -206,7 +221,8 @@ else:
         if name == SUMMARY:
             output = tmp_path / env["GITHUB_OUTPUT"]
             values = dict(line.split("=", 1) for line in output.read_text().splitlines()) if output.exists() else {}
-            active.update(CHECKER_STATE=values.get("checker_state", ""),
+            active.update(ACCEPTANCE_ROUTE=values.get("route", ""),
+                          CHECKER_STATE=values.get("checker_state", ""),
                           CHECKER_EXIT_CODE=values.get("checker_exit_code", ""),
                           CHECKER_OUTCOME=outcome)
         result = subprocess.run(
@@ -231,6 +247,45 @@ def _configure(tmp, *, initial=None, fresh=None, issue=None, diff_failure=False)
 
 def _args(tmp):
     return json.loads((tmp / "checker-args.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("number", "head", "verifier_exit", "route"),
+    [
+        ("4092", ORIGINAL_HEAD, "0", "exact-file"),
+        ("4093", ORIGINAL_HEAD, "0", "exact-file"),
+        (PR_NUMBER, "", "3", "issue-primary"),
+        ("", "", "3", "issue-primary"),
+        ("4092", "", "0", None),
+        ("4093", "a" * 39, "0", None),
+        ("4092", ORIGINAL_HEAD, "1", None),
+        ("4093", ORIGINAL_HEAD, "2", None),
+        ("-4093", ORIGINAL_HEAD, "0", None),
+    ],
+)
+def test_exact_file_route_and_summary_fail_closed(runner, number, head, verifier_exit, route):
+    run, tmp = runner
+    checked = run(ROUTE, ROUTE_PR=number, ROUTE_HEAD=head, ROUTE_EXIT=verifier_exit)
+    assert (checked.returncode == 0) == (route is not None), checked.stderr
+    if number.isdecimal():
+        assert json.loads((tmp / "route-args.json").read_text()) == [
+            "--repository", "example/project", "--pr-number", number, "--expected-head", head,
+        ]
+    else:
+        assert not (tmp / "route-args.json").exists()
+    output = tmp / "output"
+    assert output.exists() == (route is not None)
+    if route is not None:
+        assert output.read_text() == f"route={route}\n"
+    assert run(SUMMARY, ROUTE_HEAD=head).returncode == 0
+    summary = (tmp / "summary").read_text()
+    if route == "exact-file":
+        assert f"exact PR head: `{head}`" in summary
+        assert "does not establish CKR6 admission" in summary
+        assert "issue-primary checker was not run" in summary
+    else:
+        assert "Verified owner grant" not in summary
+        assert "Checker status: NOT_RUN" in summary
 
 
 def _option(args, key):

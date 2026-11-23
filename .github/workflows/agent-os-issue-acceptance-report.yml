@@ -7,6 +7,10 @@ on:
         description: "Pull request number to report on"
         required: false
         type: string
+      expected_head_sha:
+        description: "Exact 40-character PR head (required for an exact-file report)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify trusted evaluator revision
@@ -45,7 +50,33 @@ jobs:
       - name: Set up Python test environment
         uses: ./.github/actions/setup-python-dev
 
+      - name: Verify owner-authorized exact-file scope
+        id: exact_file
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ROUTE_PR: ${{ inputs.pr_number }}
+          ROUTE_HEAD: ${{ inputs.expected_head_sha }}
+        run: |
+          set -euo pipefail
+          route=issue-primary
+          if [ -n "$ROUTE_PR" ]; then
+            [[ "$ROUTE_PR" =~ ^[1-9][0-9]{0,9}$ ]]
+            if python -m scripts.agent_os_issue_acceptance.exact_file_draft_route \
+              --repository "$GITHUB_REPOSITORY" --pr-number "$ROUTE_PR" \
+              --expected-head "$ROUTE_HEAD"; then
+              if ! [[ "$ROUTE_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Exact-file report requires an exact expected head SHA." >&2
+                exit 1
+              fi
+              route=exact-file
+            elif [ "$?" -ne 3 ]; then
+              exit 1
+            fi
+          fi
+          printf 'route=%s\n' "$route" >> "$GITHUB_OUTPUT"
+
       - name: Build local acceptance fixtures from PR data
+        if: steps.exact_file.outputs.route == 'issue-primary'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -139,6 +170,7 @@ jobs:
           fi
 
       - name: Run report-only issue acceptance checker
+        if: steps.exact_file.outputs.route == 'issue-primary'
         id: acceptance
         env:
           GH_TOKEN: ${{ github.token }}
@@ -252,11 +284,22 @@ jobs:
         # Render failures without masking the checker step's conclusion.
         if: always()
         env:
+          ACCEPTANCE_ROUTE: ${{ steps.exact_file.outputs.route }}
+          ROUTE_HEAD: ${{ inputs.expected_head_sha }}
           CHECKER_STATE: ${{ steps.acceptance.outputs.checker_state }}
           CHECKER_EXIT_CODE: ${{ steps.acceptance.outputs.checker_exit_code }}
           CHECKER_OUTCOME: ${{ steps.acceptance.outcome }}
         run: |
           set -euo pipefail
+          if [ "$ACCEPTANCE_ROUTE" = exact-file ]; then
+            {
+              printf '## Exact-file GitHub Change Request (not issue-primary acceptance)\n\n'
+              printf 'Verified owner grant and scope for exact PR head: `%s`\n' "$ROUTE_HEAD"
+              echo 'This report is advisory: the issue-primary checker was not run.'
+              echo 'It does not establish CKR6 admission, hosted validation, Ready, or merge authorization.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ -z "$CHECKER_STATE" ]; then
             case "$CHECKER_OUTCOME" in
               failure|cancelled) CHECKER_STATE=EXECUTION_ERROR ;;

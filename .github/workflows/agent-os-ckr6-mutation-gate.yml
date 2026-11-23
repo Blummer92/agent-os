@@ -47,6 +47,8 @@ jobs:
     steps:
       - name: Check out canonical source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -63,13 +65,47 @@ jobs:
             -e . \
             -e 08_Tooling/agent-os-execution-service
 
+      - name: Verify exact-file source grant
+        id: exact_file
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ROUTE_PR: ${{ github.event.pull_request.number }}
+          ROUTE_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set +e
+          python -m scripts.agent_os_issue_acceptance.exact_file_draft_route \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$ROUTE_PR" \
+            --expected-head "$ROUTE_HEAD" \
+            > "$RUNNER_TEMP/exact-file-route.json"
+          result=$?
+          cat "$RUNNER_TEMP/exact-file-route.json"
+          if [ "$result" -eq 3 ]; then
+            echo "route=issue-primary" >> "$GITHUB_OUTPUT"
+          elif [ "$result" -eq 0 ]; then
+            echo "route=exact-file" >> "$GITHUB_OUTPUT"
+          else
+            exit 1
+          fi
+
       - name: Evaluate CKR6 mutation boundary
         env:
           # The job's already-present repo-scoped token, used only for
           # read-only issue-comment GETs. Never logged; the gate prints a
           # bounded JSON verdict only (no bodies, no token).
           GITHUB_TOKEN: ${{ github.token }}
+          EXACT_FILE_ROUTE: ${{ steps.exact_file.outputs.route }}
+          ROUTE_PR: ${{ github.event.pull_request.number }}
         run: |
+          # No issue-primary substitution. For an authenticated exact-file
+          # Draft, the PR thread is the CKR6 request/result authority. The
+          # existing gate still requires an exact-head owner request and a
+          # valid admitting producer result; missing/blocked remains red.
+          issue_opt=()
+          if [ "$EXACT_FILE_ROUTE" = "exact-file" ]; then
+            issue_opt=(--issue-number "$ROUTE_PR")
+          fi
           python -m agent_os_execution_service.ckr6_mutation_gate \
             --event "$GITHUB_EVENT_PATH" \
-            --repository "${{ github.repository }}"
+            --repository "${{ github.repository }}" \
+            "${issue_opt[@]}"
