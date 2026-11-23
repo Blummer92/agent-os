@@ -16,7 +16,7 @@ are both proven safe. A matching serializer expression alone is not enough.
 
 | Family | Representative owners | Rendering contract | Downstream contract | Classification | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| Issue-acceptance decision JSON | `operating_mode.py`, `executor_route.py` | sorted keys, compact separators, `ensure_ascii=False`, text then UTF-8 | domain-separated SHA-256 decision IDs | representation-equivalent-but-contract-distinct | Preserve owner-local serializers and identity prefixes; regression-test exact non-ASCII bytes and domain separation. |
+| Issue-acceptance decision JSON | `operating_mode.py`, `executor_routing.py` (#918; #907 `executor_route.py` retired) | sorted keys, compact separators, `ensure_ascii=False`, text then UTF-8 | domain-separated SHA-256 decision IDs | representation-equivalent-but-contract-distinct | Preserve owner-local serializers and identity prefixes; regression-test exact non-ASCII bytes and domain separation. |
 | Environment-health JSON | `scripts/agent_os_environment_health.py` | sorted keys, compact separators, `ensure_ascii=True`, UTF-8 bytes | environment-health evidence identity | semantically-distinct | Preserve. Changing `ensure_ascii` changes non-ASCII bytes. |
 | Remote-validation JSON | `selector.py`, `advisory_gate.py`, `baseline_health.py`, related packet serializers | owner-specific canonical bytes/text | request/result/advisory identities and validation contracts | persisted/identity-bound-must-remain | Preserve unless a future owner-specific migration proves final identity equivalence. |
 | Other repository serializers | candidate packets, scheduler handoffs, capture/runtime evidence and other domain packages | package-specific | validators, hashes, persisted or transported envelopes | unclassified by this bounded change | No consolidation without an owner-local equivalence proof and golden fixtures. |
@@ -39,8 +39,7 @@ without an explicit contract migration.
 ## Current reduction decision
 
 This bounded pass intentionally makes no production serializer replacement.
-The strongest proven duplicate pair (`operating_mode.py` and
-`executor_route.py`) renders the same bytes but feeds deliberately different
+The strongest proven duplicate pair (`operating_mode.py` and #907 `executor_route.py`, now retired in favor of #918 `executor_routing.py`) renders the same bytes but feeds deliberately different
 identity domains. A shared helper would reduce only a one-line implementation
 while increasing cross-owner coupling. Preserving those local helpers is the
 value-positive outcome until a larger exact-equivalent owner-local group is
