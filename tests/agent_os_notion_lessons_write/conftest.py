@@ -3,6 +3,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# Centralized collection-time setup for the real CKR2/CKR11 source package.
+MEMORY_SRC = ROOT / "08_Tooling" / "agent-memory-context-manager" / "src"
+if str(MEMORY_SRC) not in sys.path:
+    sys.path.insert(0, str(MEMORY_SRC))
 for source in (ROOT / "src", ROOT / "08_Tooling/workflow-scheduler/src"):
     if str(source) not in sys.path:
         sys.path.insert(0, str(source))
