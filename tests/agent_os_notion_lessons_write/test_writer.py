@@ -598,6 +598,123 @@ class RunnerTests(unittest.TestCase):
 from scripts.agent_os_notion_lessons_write.verify_live_write import verify_persisted_write
 
 
+class LostCreateReceiptRecoveryTests(unittest.TestCase):
+    """An uncertain POST is never replayed; only exact state can be recovered."""
+
+    class ReconciledClient(Client):
+        # A real Notion data-source query can observe the newly created page
+        # after the POST succeeded but its transport response was lost.
+        def find_exact(self, title):
+            if "write" in self.calls:
+                self.rows = [deepcopy(self.page)]
+            return super().find_exact(title)
+
+    def test_lost_response_recovers_exact_page_without_second_post(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertEqual(outcome["reason_code"], "exact-canonical-readback-confirmed")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertTrue(outcome["readback_verified"])
+        self.assertEqual(outcome["page_id"], PAGE_ID)
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls[-3:], ["write", "query", "get"])
+        self.assertNotIn("credential-class", json.dumps(outcome))
+
+        # A second observer checks exact canonical current state, never writes.
+        after = len(client.calls)
+        verified = verify_persisted_write(
+            outcome, lambda _request_id: client, expected_request_id=REQUEST_ID
+        )
+        self.assertEqual(verified["status"], "verified-current-state")
+        self.assertTrue(verified["persisted_state_verified"])
+        self.assertFalse(verified["write_causality_established"])
+        self.assertEqual(client.calls[after:], ["binding", "get"])
+
+        # A fresh owner attempt reconciles, rather than creating another row.
+        client.raise_mutation = False
+        again = execute(AdmittedRequest(101), client)
+        self.assertEqual(again["status"], "unchanged")
+        self.assertEqual(again["write_attempts"], 0)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_lost_response_without_visible_page_stays_uncertain(self):
+        client = Client()
+        client.raise_mutation = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertFalse(outcome["readback_verified"])
+        self.assertIsNone(outcome["page_id"])
+        self.assertNotIn("create_receipt_recovered", outcome)
+        self.assertEqual(client.calls.count("write"), 1)
+        self.assertEqual(client.calls[-2:], ["write", "query"])
+
+    def test_ambiguous_or_incomplete_recovery_never_claims_success(self):
+        for case in ("duplicate", "has_more", "wrong_identity", "query_failure"):
+            class BadRecovery(self.ReconciledClient):
+                def find_exact(self, title):
+                    if "write" in self.calls and case == "query_failure":
+                        self.calls.append("query")
+                        raise TimeoutError("private-notion-query")
+                    reply = super().find_exact(title)
+                    if "write" in self.calls:
+                        if case == "duplicate":
+                            reply["results"].append(deepcopy(reply["results"][0]))
+                        elif case == "has_more":
+                            reply["has_more"] = True
+                        elif case == "wrong_identity":
+                            reply["results"][0]["parent"]["data_source_id"] = PAGE_ID
+                    return reply
+
+            with self.subTest(case=case):
+                client = BadRecovery()
+                client.raise_mutation = True
+                outcome = execute(AdmittedRequest(100), client)
+                self.assertEqual(outcome["status"], "uncertain")
+                self.assertEqual(outcome["write_attempts"], 1)
+                self.assertFalse(outcome["readback_verified"])
+                self.assertNotIn("create_receipt_recovered", outcome)
+                self.assertEqual(client.calls.count("write"), 1)
+                self.assertNotIn("private-notion-query", json.dumps(outcome))
+
+    def test_recovered_page_with_different_content_is_not_persisted(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        client.readback_mismatch = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "canonical-readback-mismatch")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_second_read_failure_after_recovery_is_not_success(self):
+        client = self.ReconciledClient()
+        client.raise_mutation = True
+        client.fail_readback = True
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_malformed_create_receipt_reconciles_only_if_state_matches(self):
+        class MalformedReceipt(self.ReconciledClient):
+            def create(self, intended):
+                self.raise_mutation = False
+                super().create(intended)
+                return {}
+
+        client = MalformedReceipt()
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+
 class IndependentPersistedWriteTests(unittest.TestCase):
     def test_second_canonical_get_confirms_state_after_writer_attempt(self):
         client = Client()
