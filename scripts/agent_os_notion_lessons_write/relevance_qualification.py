@@ -79,9 +79,10 @@ def qualify_reviewed_create(
     if entry["target_lesson_id"] is not None:
         return RelevanceReview(False, ("create-entry-required",), 0, 0, 0, 0)
     if (
-        not positive_requests or not hard_negative_requests
+        # Reject wrong containers before evaluating len() or concatenating.
+        type(positive_requests) is not tuple or type(hard_negative_requests) is not tuple
+        or not positive_requests or not hard_negative_requests
         or len(positive_requests) > 8 or len(hard_negative_requests) > 8
-        or type(positive_requests) is not tuple or type(hard_negative_requests) is not tuple
         or any(type(req) is not CodingKnowledgeRequest for req in positive_requests + hard_negative_requests)
     ):
         return RelevanceReview(False, ("bounded-review-scenarios-required",), 0, 0, 0, 0)
@@ -96,18 +97,39 @@ def qualify_reviewed_create(
     if not candidate.canonical_github_refs:
         return RelevanceReview(False, ("lesson-owned-provenance-required",), 0, 0, 0, 0)
 
-    def selected(req: CodingKnowledgeRequest) -> bool:
+    # These canonical CKR2 reasons carry more context than a generic
+    # classification/keyword overlap. Do not turn a generic match into
+    # semantic verification merely because an isolated selector says SUFFICIENT.
+    context_reasons = frozenset({
+        "verified-ckr6-mutation-context-match",
+        "pr-refresh-reconciliation-text-match",
+        "exact-library-match",
+    })
+
+    def selection(req: CodingKnowledgeRequest) -> tuple[bool, bool]:
         result = select_coding_knowledge(req, (candidate,))
-        return (
+        matched = (
             result.sufficiency_status is SufficiencyStatus.SUFFICIENT
             and result.knowledge_refs == (candidate.knowledge_id,)
         )
+        # Distinguish a successful algorithmic selection from a defensible
+        # contextual selection. Neither proves semantic truth or authorizes a write.
+        contextual = (
+            matched
+            and len(result.selected) == 1
+            and bool(context_reasons.intersection(result.selected[0].reason_codes))
+        )
+        return matched, contextual
 
-    positive_hits = sum(selected(req) for req in positive_requests)
-    false_positives = sum(selected(req) for req in hard_negative_requests)
+    positives = tuple(selection(req) for req in positive_requests)
+    negatives = tuple(selection(req) for req in hard_negative_requests)
+    positive_hits = sum(hit for hit, _ in positives)
+    false_positives = sum(hit for hit, _ in negatives)
     reasons = []
     if positive_hits != len(positive_requests):
         reasons.append("expected-task-not-selected")
+    if positive_hits and not all(contextual for _, contextual in positives):
+        reasons.append("positive-relevance-basis-unverified")
     if false_positives:
         reasons.append("unrelated-task-false-positive")
     return RelevanceReview(
