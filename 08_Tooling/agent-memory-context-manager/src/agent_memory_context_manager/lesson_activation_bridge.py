@@ -481,11 +481,19 @@ class SelectionBasis:
     basis: str
     best_bucket: int
     tied_identities: int
+    # Distinct lesson IDs in the best bucket holding at least one record whose
+    # currentness is UNVERIFIABLE (fail-closed: any unverifiable revision flags
+    # the identity). Observational only: admission still checks currentness on
+    # the retained records; this count only surfaces what the five-ID bound can
+    # hide from admission.
+    unverifiable_identities: int
 
 
 # Recorded when no evaluation completed. Never produced by
 # ``describe_selection_basis`` itself, which always describes a completed one.
-NOT_EVALUATED = SelectionBasis(basis="not-evaluated", best_bucket=0, tied_identities=0)
+NOT_EVALUATED = SelectionBasis(
+    basis="not-evaluated", best_bucket=0, tied_identities=0, unverifiable_identities=0
+)
 
 
 def describe_selection_basis(
@@ -501,10 +509,13 @@ def describe_selection_basis(
     mutate or reorder its inputs, and is never consulted by selection.
     ``tied_identities`` counts DISTINCT lesson IDs in the best bucket over
     the whole pool given (before the five-ID bound), so a duplicate revision
-    counts once.
+    counts once. ``unverifiable_identities`` counts the DISTINCT lesson IDs
+    among them with at least one UNVERIFIABLE record; selection, status
+    mapping and admission never read it.
     """
     best = 0
     tied: set[str] = set()
+    unverifiable: set[str] = set()
     reasons: set[str] = set()
     via_library_name = False
     hints = {_norm(value) for value in request.library_hints}
@@ -513,9 +524,12 @@ def describe_selection_basis(
         if not bucket:
             continue
         if bucket > best:
-            best, tied, reasons, via_library_name = bucket, set(), set(), False
+            best, tied, unverifiable = bucket, set(), set()
+            reasons, via_library_name = set(), False
         if bucket == best:
             tied.add(lesson.lesson_id)
+            if lesson.currentness is KnowledgeCurrentness.UNVERIFIABLE:
+                unverifiable.add(lesson.lesson_id)
             reasons.update(matched)
             if lesson.library_name and _norm(lesson.library_name) in hints:
                 via_library_name = True
@@ -533,7 +547,12 @@ def describe_selection_basis(
         basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
     else:  # pragma: no cover - the matcher has no other reason vocabulary
         basis = "no-relevant-signal"
-    return SelectionBasis(basis=basis, best_bucket=best, tied_identities=len(tied))
+    return SelectionBasis(
+        basis=basis,
+        best_bucket=best,
+        tied_identities=len(tied),
+        unverifiable_identities=len(unverifiable),
+    )
 
 
 def _take_distinct_ids(

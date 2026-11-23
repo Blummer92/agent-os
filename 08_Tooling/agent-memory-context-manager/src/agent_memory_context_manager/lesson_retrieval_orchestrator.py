@@ -529,6 +529,9 @@ def orchestrate_lesson_retrieval(
             # back by selection, status mapping or admission.
             diagnostics["selection_basis"] = basis.basis
             diagnostics["best_bucket_tied_identities"] = basis.tied_identities
+            # Observational: UNVERIFIABLE identities tied in the best bucket,
+            # including any the five-ID bound kept away from admission checks.
+            diagnostics["best_bucket_unverifiable_identities"] = basis.unverifiable_identities
         if incomplete_reason_code is not None:
             diagnostics["incomplete_reason_code"] = incomplete_reason_code
             diagnostics["terminal_query_bucket"] = terminal_query_bucket

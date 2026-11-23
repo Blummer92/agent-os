@@ -345,6 +345,7 @@ def test_c2_fact_is_small_and_within_the_handoff_bounds():
 def test_result_fields_are_closed_and_exclude_the_new_diagnostics():
     assert "selection_basis" not in bridge.RESULT_FIELDS
     assert "best_bucket_tied_identities" not in bridge.RESULT_FIELDS
+    assert "best_bucket_unverifiable_identities" not in bridge.RESULT_FIELDS
 
 
 # --- bridge diagnostics projection (closed vocabulary) ---
@@ -366,6 +367,7 @@ def test_c5_vocabulary_matches_the_producer_and_is_closed():
     assert len(bridge._SELECTION_BASIS_VALUES) == 8
     assert "not-evaluated" in bridge._SELECTION_BASIS_VALUES
     assert "best_bucket_tied_identities" in bridge._RETRIEVAL_COUNTERS
+    assert "best_bucket_unverifiable_identities" in bridge._RETRIEVAL_COUNTERS
 
 
 def test_projection_carries_valid_basis_and_counter():
@@ -389,6 +391,20 @@ def test_projection_without_basis_is_valid_and_counter_defaults_to_zero():
     projected = bridge.retrieval_diagnostics_projection(_raw())
     assert "selection_basis" not in projected
     assert projected["best_bucket_tied_identities"] == 0
+    assert projected["best_bucket_unverifiable_identities"] == 0
+
+
+def test_projection_carries_the_unverifiable_counter_and_bounds_it():
+    projected = bridge.retrieval_diagnostics_projection(
+        _raw("generic-tie-lexical-cut", 34, best_bucket_unverifiable_identities=2)
+    )
+    assert projected["best_bucket_tied_identities"] == 34
+    assert projected["best_bucket_unverifiable_identities"] == 2
+    for hostile in (-1, 10001, True, "2", 2.5):
+        projected = bridge.retrieval_diagnostics_projection(
+            _raw("generic-unique", 3, best_bucket_unverifiable_identities=hostile)
+        )
+        assert projected["best_bucket_unverifiable_identities"] == 0
 
 
 @pytest.mark.parametrize("hostile", [

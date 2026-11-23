@@ -75,15 +75,18 @@ describe = bridge.describe_selection_basis
 
 # --- vocabulary / shape ---
 
-def test_selection_basis_is_a_frozen_value_with_three_fields():
+def test_selection_basis_is_a_frozen_value_with_four_fields():
     result = describe(req(), many(2), identity_route=False)
-    assert (result.basis, result.best_bucket, result.tied_identities) == (
-        "generic-unique", 1, 2,
-    )
+    assert (
+        result.basis,
+        result.best_bucket,
+        result.tied_identities,
+        result.unverifiable_identities,
+    ) == ("generic-unique", 1, 2, 0)
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.basis = "identity-scoped"  # type: ignore[misc]
     assert [f.name for f in dataclasses.fields(result)] == [
-        "basis", "best_bucket", "tied_identities",
+        "basis", "best_bucket", "tied_identities", "unverifiable_identities",
     ]
 
 
@@ -94,7 +97,8 @@ def test_vocabulary_constant_is_exactly_the_eight_closed_values():
 
 def test_not_evaluated_constant_is_inert_and_never_produced_by_the_describer():
     assert (bridge.NOT_EVALUATED.basis, bridge.NOT_EVALUATED.best_bucket,
-            bridge.NOT_EVALUATED.tied_identities) == ("not-evaluated", 0, 0)
+            bridge.NOT_EVALUATED.tied_identities,
+            bridge.NOT_EVALUATED.unverifiable_identities) == ("not-evaluated", 0, 0, 0)
     # describe_selection_basis always describes a COMPLETED evaluation.
     for pool in ([], many(1), many(34)):
         for route in (False, True):
@@ -159,6 +163,57 @@ def test_tied_identities_count_distinct_ids_not_revisions():
     result = describe(req(), pool, identity_route=False)
     assert result.tied_identities == 3
     assert result.basis == "generic-unique"
+
+
+def test_unverifiable_identities_count_distinct_ids_in_the_best_bucket():
+    stale = lesson(40, currentness=KnowledgeCurrentness.UNVERIFIABLE)
+    result = describe(req(), [stale, *many(3)], identity_route=False)
+    assert result.tied_identities == 4
+    assert result.unverifiable_identities == 1
+
+
+def test_unverifiable_identities_count_each_identity_once_across_revisions():
+    stale = lesson(40, currentness=KnowledgeCurrentness.UNVERIFIABLE)
+    older = dataclasses.replace(stale, source_revision="2026-11-05T00:00:00.000Z")
+    result = describe(req(), [stale, older, *many(2)], identity_route=False)
+    assert result.tied_identities == 3
+    assert result.unverifiable_identities == 1
+
+
+def test_unverifiable_identities_flag_an_identity_with_any_unverifiable_revision():
+    current = lesson(40)
+    stale = dataclasses.replace(
+        current,
+        source_revision="2026-11-05T00:00:00.000Z",
+        currentness=KnowledgeCurrentness.UNVERIFIABLE,
+    )
+    result = describe(req(), [current, stale, *many(2)], identity_route=False)
+    assert result.tied_identities == 3
+    assert result.unverifiable_identities == 1
+
+
+def test_unverifiable_identities_are_zero_when_the_best_bucket_is_fully_verified():
+    result = describe(req(), many(4), identity_route=False)
+    assert result.unverifiable_identities == 0
+
+
+def test_unverifiable_identities_ignore_lower_buckets():
+    strong = lesson(20, ecosystem="python")
+    stale_lower = lesson(
+        21, ecosystem="other", currentness=KnowledgeCurrentness.UNVERIFIABLE
+    )
+    request = req(ecosystem_hints=("python",))
+    result = describe(request, [strong, stale_lower], identity_route=False)
+    assert result.best_bucket == 2
+    assert result.tied_identities == 1
+    assert result.unverifiable_identities == 0
+
+
+def test_unverifiable_identities_are_zero_when_nothing_matched():
+    request = req(capability_keywords=("no-such-capability",))
+    result = describe(request, many(3), identity_route=False)
+    assert result.basis == "no-relevant-signal"
+    assert result.unverifiable_identities == 0
 
 
 def test_only_the_best_bucket_is_counted():
@@ -389,6 +444,23 @@ def test_known_reference_that_is_insufficient_falls_through_to_snapshot_basis():
     assert result.retrieval_diagnostics["selection_basis"] != "identity-scoped"
 
 
+def test_orchestrator_reports_unverifiable_identities_tied_in_the_best_bucket():
+    rows = _rows(34)
+    stale = _lesson_row("LL-99")
+    del stale["properties"]["Source Link"]
+    result = orchestrate_lesson_retrieval(req(), execute_read=_reader([*rows, stale]))
+    diag = result.retrieval_diagnostics
+    assert diag["selection_basis"] == "generic-tie-lexical-cut"
+    assert diag["best_bucket_tied_identities"] == 35
+    assert diag["best_bucket_unverifiable_identities"] == 1
+    assert type(diag["best_bucket_unverifiable_identities"]) is int
+
+
+def test_orchestrator_reports_zero_unverifiable_when_the_best_bucket_is_verified():
+    result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(34)))
+    assert result.retrieval_diagnostics["best_bucket_unverifiable_identities"] == 0
+
+
 def test_n2_orchestrator_no_match_is_no_relevant_signal_with_zero_ties():
     request = req(capability_keywords=("no-such-capability",))
     result = orchestrate_lesson_retrieval(request, execute_read=_reader(_rows(8)))
@@ -404,16 +476,24 @@ def test_orchestrator_basis_is_independent_of_task_reference_and_row_order():
     shuffled = list(rows)
     random.Random(5).shuffle(shuffled)
     second = orchestrate_lesson_retrieval(req("b " * 236), execute_read=_reader(shuffled))
-    for key in ("selection_basis", "best_bucket_tied_identities"):
+    for key in (
+        "selection_basis",
+        "best_bucket_tied_identities",
+        "best_bucket_unverifiable_identities",
+    ):
         assert first.retrieval_diagnostics[key] == second.retrieval_diagnostics[key]
     assert first.selected_lesson_ids == second.selected_lesson_ids
 
 
-def test_orchestrator_result_is_unchanged_apart_from_the_two_diagnostics():
+def test_orchestrator_result_is_unchanged_apart_from_the_three_diagnostics():
     result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(34)))
     stripped = {
         k: v for k, v in result.retrieval_diagnostics.items()
-        if k not in ("selection_basis", "best_bucket_tied_identities")
+        if k not in (
+            "selection_basis",
+            "best_bucket_tied_identities",
+            "best_bucket_unverifiable_identities",
+        )
     }
     assert set(stripped) == {
         "read_count", "observed_rows", "normalized_rows", "skipped_rows",
@@ -449,6 +529,7 @@ def test_not_needed_is_skipped_with_no_reads_and_no_basis_diagnostics():
     assert result.selected_lesson_ids == ()
     assert "selection_basis" not in _diag(result)
     assert "best_bucket_tied_identities" not in _diag(result)
+    assert "best_bucket_unverifiable_identities" not in _diag(result)
 
 
 def test_no_read_executor_is_unavailable_with_no_basis_diagnostics():

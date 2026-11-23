@@ -442,6 +442,7 @@ _NOTION_REASON_RE = re.compile(r"^notion-[a-z0-9-]{1,72}$")
 _RETRIEVAL_COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows", "candidate_count",
     "best_bucket_tied_identities",
+    "best_bucket_unverifiable_identities",
 )
 # PR-1 (observational): HOW the CKR2 matcher chose lessons. Mechanism only,
 # never relevance or verification. Closed vocabulary; any other value is
