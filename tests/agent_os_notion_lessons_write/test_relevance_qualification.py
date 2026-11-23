@@ -222,3 +222,20 @@ def test_exact_authority_false_even_when_strong_selection_passes():
     assert outcome.qualified
     assert outcome.publication_authorized is False
     assert outcome.activation_authorized is False
+
+
+def test_specific_positive_cannot_hide_same_generic_keyword_hard_negative():
+    entry = reviewed_entry(learning_type="QA feedback")
+    entry["properties"]["Lesson Learned"] = "CKR6 mutation boundary source check"
+    entry["properties"]["What To Do Next Time"] = "Trace the CKR6 mutation gate evidence."
+    result = check(
+        entry,
+        (request("ckr6 mutation boundary", task="CKR6 mutation CI repair"),),
+        (request("quality-assurance", task="unrelated packaging QA work"),),
+    )
+    assert not result.qualified
+    assert result.reason_codes == ("unrelated-task-false-positive",)
+    assert result.positive_hits == 1
+    assert result.hard_negative_false_positives == 1
+    assert result.publication_authorized is False
+    assert result.activation_authorized is False
