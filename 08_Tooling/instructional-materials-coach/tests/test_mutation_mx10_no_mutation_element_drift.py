@@ -16,3 +16,26 @@ def test_mx10_same_revision_and_marker_with_changed_elements_keeps_fence(monkeyp
         target_revision="r1", target_marker=marker, target_container="doc",
         target_element="marker-element", before_element_ids=frozenset({"img-old"}),
     ) is False
+
+
+def test_mx10_same_count_element_identity_swap_keeps_fence(monkeypatch):
+    """Wave 3 NC10: the no-mutation check compares element identities, not just count.
+
+    An identity swap at constant count (before {"img-old"} -> current
+    {"img-swapped"}, same revision "r1", marker present) must keep the
+    durable fence (return False); a count-only guard would release the
+    retry (hosted false green on disposable PR #3891, head db2a62be,
+    run 42571901317).
+    """
+    binding = VisualPlacementBinding("diagram", "asset", "file", {}, "plan")
+    marker = "{{visual:diagram}}"
+    monkeypatch.setattr(placement, "_revision_id", lambda **_: "r1")
+    monkeypatch.setattr(placement, "_artifact_element_ids", lambda **_: frozenset({"img-swapped"}))
+    monkeypatch.setattr(placement, "discover_docs_markers", lambda **_: [{
+        "marker": marker, "container_id": "doc", "element_id": "marker-element",
+    }])
+    assert placement._no_mutation_observed(
+        artifact_type="docs", service=object(), artifact_id="doc", binding=binding,
+        target_revision="r1", target_marker=marker, target_container="doc",
+        target_element="marker-element", before_element_ids=frozenset({"img-old"}),
+    ) is False
