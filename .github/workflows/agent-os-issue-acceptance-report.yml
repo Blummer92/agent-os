@@ -1,12 +1,14 @@
 name: Agent OS Issue Acceptance Report
 
 on:
-  pull_request:
-    types: [opened, edited, reopened, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
         description: "Pull request number to report on"
+        required: false
+        type: string
+      expected_head_sha:
+        description: "Exact 40-character PR head (required for an exact-file report)"
         required: false
         type: string
 
@@ -16,34 +18,34 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  group: issue-acceptance-${{ inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  relevance:
-    name: Classify acceptance inputs
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.relevance.outputs.should_run }}
-      reason: ${{ steps.relevance.outputs.reason }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Classify pull request event
-        id: relevance
-        run: python -m scripts.agent_os_issue_acceptance.edit_relevance "$GITHUB_EVENT_PATH" >> "$GITHUB_OUTPUT"
-
   report:
     name: Run issue acceptance report
-    needs: relevance
-    if: needs.relevance.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      REPORT_DIR: ${{ github.workspace }}/tmp/agent_os_issue_acceptance_report
     steps:
-      - name: Check out repository
+      - name: Verify main dispatch
+        env:
+          EXPECTED_DISPATCH_REF: ${{ github.ref }}
+        run: test "$EXPECTED_DISPATCH_REF" = "refs/heads/main"
+      # The target PR is data, never the executable evaluator.
+      - name: Check out trusted report evaluator
         uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted evaluator revision
+        env:
+          EXPECTED_EVALUATOR_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_EVALUATOR_SHA"
 
       - name: Set up Python test environment
         uses: ./.github/actions/setup-python-dev
@@ -52,57 +54,42 @@ jobs:
         id: exact_file
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          ROUTE_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
-          ROUTE_HEAD: ${{ github.event.pull_request.head.sha || '' }}
-        run: |
-          set +e
-          if [ -z "$ROUTE_PR" ]; then
-            echo "route=issue-primary" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          python -m scripts.agent_os_issue_acceptance.exact_file_draft_route \
-            --repository "$GITHUB_REPOSITORY" \
-            --pr-number "$ROUTE_PR" \
-            --expected-head "$ROUTE_HEAD" \
-            > "$RUNNER_TEMP/exact-file-route.json"
-          result=$?
-          cat "$RUNNER_TEMP/exact-file-route.json"
-          if [ "$result" -eq 3 ]; then
-            echo "route=issue-primary" >> "$GITHUB_OUTPUT"
-          elif [ "$result" -eq 0 ]; then
-            echo "route=exact-file" >> "$GITHUB_OUTPUT"
-          else
-            exit 1
-          fi
-
-      - name: Record exact-file route receipt
-        if: steps.exact_file.outputs.route == 'exact-file'
-        run: |
-          {
-            echo '## Exact-file GitHub Change Request (not issue-primary acceptance)'
-            echo 'Verified authenticated, unedited owner grant; exact cumulative'
-            echo 'patch digest, source base, changed path set, and current PR head.'
-            echo 'This report does not constitute CKR6 admission, hosted test'
-            echo 'execution, Ready, or merge authorization.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build local acceptance fixtures from PR data
-        if: steps.exact_file.outputs.route != 'exact-file'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          ROUTE_PR: ${{ inputs.pr_number }}
+          ROUTE_HEAD: ${{ inputs.expected_head_sha }}
         run: |
           set -euo pipefail
-          out="tmp/agent_os_issue_acceptance_report"
+          route=issue-primary
+          if [ -n "$ROUTE_PR" ]; then
+            [[ "$ROUTE_PR" =~ ^[1-9][0-9]{0,9}$ ]]
+            if python -m scripts.agent_os_issue_acceptance.exact_file_draft_route \
+              --repository "$GITHUB_REPOSITORY" --pr-number "$ROUTE_PR" \
+              --expected-head "$ROUTE_HEAD"; then
+              if ! [[ "$ROUTE_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Exact-file report requires an exact expected head SHA." >&2
+                exit 1
+              fi
+              route=exact-file
+            elif [ "$?" -ne 3 ]; then
+              exit 1
+            fi
+          fi
+          printf 'route=%s\n' "$route" >> "$GITHUB_OUTPUT"
+
+      - name: Build local acceptance fixtures from PR data
+        if: steps.exact_file.outputs.route == 'issue-primary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          out="$REPORT_DIR"
           mkdir -p "$out"
-          : > "$out/issue.md"
-          : > "$out/pr_body.md"
-          : > "$out/pr_title.txt"
-          : > "$out/changed_files.txt"
-          : > "$out/diff.patch"
-          printf '%s\n' false > "$out/issue_body_retrieval_failed.txt"
-          printf '%s\n' false > "$out/changed_files_incomplete.txt"
-          printf '%s\n' false > "$out/diff_retrieval_failed.txt"
+          for file in issue.md pr_body.md pr_title.txt linked_issue.txt pr_head.txt pr_base.txt changed_files.txt diff.patch; do
+            : > "$out/$file"
+          done
+          for flag in issue_body_retrieval_failed changed_files_incomplete diff_retrieval_failed; do
+            printf '%s\n' false > "$out/$flag.txt"
+          done
 
           if [ -z "${PR_NUMBER:-}" ]; then
             cat > "$out/pr_body.md" <<'MD'
@@ -113,120 +100,138 @@ jobs:
             exit 0
           fi
 
-          gh pr view "$PR_NUMBER" --json title --jq '.title // ""' > "$out/pr_title.txt"
-          gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > "$out/pr_body.md"
-          authoritative_changed_files="$(gh pr view "$PR_NUMBER" --json changedFiles --jq '.changedFiles')"
-          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$out/changed_files.txt"
-          retrieved_changed_files="$(wc -l < "$out/changed_files.txt" | tr -d '[:space:]')"
-          if [ "$retrieved_changed_files" != "$authoritative_changed_files" ]; then
-            printf '%s\n' true > "$out/changed_files_incomplete.txt"
-          fi
-          # Scan the final PR net diff, not a per-commit patch series: a secret
-          # added and then removed in the same PR is absent from the delivered
-          # tree, while a newly introduced secret remains visible and rejected.
-          # Explicitly disable terminal color so scanning receives literal diff text.
-          if ! gh pr diff "$PR_NUMBER" --color=never > "$out/diff.patch"; then
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]{0,9}$ ]]
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,changedFiles,files,headRefOid,baseRefOid > "$out/pr.json"
+          python - "$PR_NUMBER" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          from scripts.agent_os_issue_acceptance.parse_pr import (
+              parse_linked_issue_result,
+              report_only_issue_number,
+          )
+
+          def valid_line(value):
+              return isinstance(value, str) and not re.search(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", value)
+
+          out = Path(os.environ["REPORT_DIR"])
+          try:
+              pr = json.loads((out / "pr.json").read_bytes())
+              number, title, body, total, files, head, base = (
+                  pr[k] for k in ("number", "title", "body", "changedFiles", "files", "headRefOid", "baseRefOid")
+              )
+              if (
+                  type(number) is not int or str(number) != sys.argv[1]
+                  or not valid_line(title) or not title.strip() or len(title.encode("utf-8")) > 4096
+                  or not isinstance(body, str)
+                  or type(total) is not int or total < 0 or not isinstance(files, list)
+                  or not all(isinstance(item, dict) for item in files)
+                  or not all(isinstance(sha, str) and re.fullmatch("[0-9a-f]{40}", sha) for sha in (head, base))
+              ):
+                  raise ValueError
+              paths = [item["path"] for item in files]
+              if any(not valid_line(path) or not path or path != path.strip() for path in paths):
+                  raise ValueError
+              if len(set(paths)) != len(paths) or len(paths) > total:
+                  raise ValueError
+              body.encode("utf-8")
+              for path in paths:
+                  path.encode("utf-8")
+          except (KeyError, TypeError, ValueError):
+              raise SystemExit("Invalid or incomplete pull request metadata") from None
+
+          (out / "pr_title.txt").write_text(title, encoding="utf-8")
+          (out / "pr_body.md").write_text(body, encoding="utf-8")
+          (out / "pr_head.txt").write_text(head, encoding="utf-8")
+          (out / "pr_base.txt").write_text(base, encoding="utf-8")
+          (out / "changed_files.txt").write_text("".join(p + "\n" for p in paths), encoding="utf-8")
+          if len(paths) != total:
+              (out / "changed_files_incomplete.txt").write_text("true\n", encoding="utf-8")
+          linked_issue = report_only_issue_number(parse_linked_issue_result(body, title))
+          (out / "linked_issue.txt").write_text(str(linked_issue or ""), encoding="utf-8")
+          PY
+          # Scan the literal net diff, not the per-commit patch series.
+          if ! gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --color=never > "$out/diff.patch"; then
             : > "$out/diff.patch"
             printf '%s\n' true > "$out/diff_retrieval_failed.txt"
           fi
 
-          linked_issue="$(
-            python - <<'PY'
-          from pathlib import Path
-
-          from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus
-          from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue_result
-
-          out = Path("tmp/agent_os_issue_acceptance_report")
-          result = parse_linked_issue_result(
-              (out / "pr_body.md").read_text(encoding="utf-8"),
-              (out / "pr_title.txt").read_text(encoding="utf-8"),
-          )
-          from scripts.agent_os_issue_acceptance.parse_pr import report_only_issue_number
-          number = report_only_issue_number(result)
-          print(number or "")
-          PY
-          )"
-          printf '%s\n' "$linked_issue" > "$out/linked_issue.txt"
-
+          linked_issue="$(cat "$out/linked_issue.txt")"
           if [ -n "$linked_issue" ]; then
-            if ! gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md"; then
+            if ! gh issue view "$linked_issue" --repo "$GITHUB_REPOSITORY" --json number,body \
+              | jq -serj --arg n "$linked_issue" 'select(length == 1) | .[0] | select((.number | type) == "number" and (.number | tostring) == $n and (.body | type) == "string") | .body' > "$out/issue.md" 2>/dev/null; then
               : > "$out/issue.md"
               printf '%s\n' true > "$out/issue_body_retrieval_failed.txt"
             fi
           fi
 
       - name: Run report-only issue acceptance checker
-        if: steps.exact_file.outputs.route != 'exact-file'
+        if: steps.exact_file.outputs.route == 'issue-primary'
         id: acceptance
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          GITHUB_PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          set +e
-          captured_issue_body_file="tmp/agent_os_issue_acceptance_report/issue.md"
-          captured_pr_head_sha=""
-          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
-            captured_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"
-          fi
+          set -euo pipefail
+          out="$REPORT_DIR"
+          captured_pr_head_sha="$(cat "$out/pr_head.txt")"
+          captured_pr_base_sha="$(cat "$out/pr_base.txt")"
           evaluator_sha="$(git rev-parse HEAD)"
-          observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          linked_issue="$(cat "$out/linked_issue.txt")"
+          pr_title="$(cat "$out/pr_title.txt")"
 
-          issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"
-          changed_files_incomplete="$(cat tmp/agent_os_issue_acceptance_report/changed_files_incomplete.txt)"
-          diff_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/diff_retrieval_failed.txt)"
+          issue_body_retrieval_failed="$(cat "$out/issue_body_retrieval_failed.txt")"
+          changed_files_incomplete="$(cat "$out/changed_files_incomplete.txt")"
+          diff_retrieval_failed="$(cat "$out/diff_retrieval_failed.txt")"
           fresh_issue_body_file=""
-          fresh_issue_body_available=false
           fresh_pr_head_sha=""
-          fresh_pr_head_sha_available=false
-          linked_issue="$(cat tmp/agent_os_issue_acceptance_report/linked_issue.txt 2>/dev/null || true)"
-          if [ -n "$linked_issue" ]; then
-            if gh issue view "$linked_issue" --json body --jq '.body // ""' > tmp/agent_os_issue_acceptance_report/issue_recheck.md; then
-              fresh_issue_body_available=true
-              fresh_issue_body_file="tmp/agent_os_issue_acceptance_report/issue_recheck.md"
-            else
-              issue_body_retrieval_failed=true
-              : > tmp/agent_os_issue_acceptance_report/issue_recheck.md
-            fi
-          fi
-          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
-            if fresh_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"; then
-              if [ -n "$fresh_pr_head_sha" ]; then
-                fresh_pr_head_sha_available=true
-              fi
-            else
-              fresh_pr_head_sha=""
-            fi
-          fi
 
-          # Cumulative merged-docs evidence (#3719, read-only): discover
-          # merged PRs for the same issue from the issue timeline, verify
-          # merged state and merge-commit ancestry of the evaluated base,
-          # and write a JSON record list (or [] on any failure). The
-          # checker re-validates every record; this step never passes a
-          # check on its own.
-          captured_pr_base_sha=""
-          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
-            captured_pr_base_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json baseRefOid --jq '.baseRefOid // ""')"
-          fi
+          # Optional merged-doc evidence is read-only and independently verified.
           if [ -n "$linked_issue" ] && [ -n "$captured_pr_base_sha" ]; then
             python -m scripts.agent_os_issue_acceptance.build_merged_doc_evidence \
               --repository "$GITHUB_REPOSITORY" \
               --issue-number "$linked_issue" \
               --current-pr-number "$GITHUB_PR_NUMBER" \
               --base-sha "$captured_pr_base_sha" \
-              --issue-body-file tmp/agent_os_issue_acceptance_report/issue.md \
-              --output tmp/agent_os_issue_acceptance_report/merged_docs.json
+              --issue-body-file "$out/issue.md" \
+              --output "$out/merged_docs.json"
           else
-            printf '%s\n' '[]' > tmp/agent_os_issue_acceptance_report/merged_docs.json
+            printf '%s\n' '[]' > "$out/merged_docs.json"
           fi
+
+          # These are new observations after fixture and optional evidence collection.
+          if [ -n "$linked_issue" ]; then
+            if gh issue view "$linked_issue" --repo "$GITHUB_REPOSITORY" --json number,body \
+              | jq -serj --arg n "$linked_issue" 'select(length == 1) | .[0] | select((.number | type) == "number" and (.number | tostring) == $n and (.body | type) == "string") | .body' > "$out/issue_recheck.md" 2>/dev/null; then
+              fresh_issue_body_file="$out/issue_recheck.md"
+            else
+              issue_body_retrieval_failed=true
+            fi
+          fi
+          if [ -n "$GITHUB_PR_NUMBER" ]; then
+            gh pr view "$GITHUB_PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json number,title,body,changedFiles,files,headRefOid,baseRefOid > "$out/pr_recheck.json"
+            if ! fresh_pr_head_sha="$(jq -ers '
+                select(length == 2 and all(.[]; type == "object") and
+                  (.[0] | del(.headRefOid)) == (.[1] | del(.headRefOid))) |
+                .[1].headRefOid | strings | select(test("^[0-9a-f]{40}$"))
+              ' "$out/pr.json" "$out/pr_recheck.json" 2>/dev/null)"; then
+              echo "Pull request metadata changed or could not be verified." >&2
+              exit 1
+            fi
+          fi
+          observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           transport_args=(
             --transport-repository "$GITHUB_REPOSITORY"
-            --transport-issue-body-file "$captured_issue_body_file"
+            --transport-issue-body-file "$out/issue.md"
             --transport-pr-head-sha "$captured_pr_head_sha"
             --transport-evaluator-sha "$evaluator_sha"
             --transport-workflow-run-id "$GITHUB_RUN_ID"
@@ -234,68 +239,82 @@ jobs:
             --transport-observed-at "$observed_at"
           )
           evidence_args=()
-          if [ "$changed_files_incomplete" = true ]; then
-            evidence_args+=(--changed-files-incomplete)
-          fi
-          if [ "$diff_retrieval_failed" = true ]; then
-            evidence_args+=(--diff-retrieval-failed)
-          fi
-          if [ -n "$linked_issue" ]; then
-            transport_args+=(--transport-issue-number "$linked_issue")
-          fi
-          if [ "$issue_body_retrieval_failed" = true ]; then
-            transport_args+=(--transport-issue-body-retrieval-failed)
-          fi
-          if [ "$fresh_issue_body_available" = true ]; then
-            transport_args+=(--transport-fresh-issue-body-file "$fresh_issue_body_file")
-          fi
-          if [ "$fresh_pr_head_sha_available" = true ]; then
-            transport_args+=(--transport-fresh-pr-head-sha "$fresh_pr_head_sha")
-          fi
-          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
-            transport_args+=(--transport-pr-number "$GITHUB_PR_NUMBER")
-          fi
+          [ "$changed_files_incomplete" = true ] && evidence_args+=(--changed-files-incomplete)
+          [ "$diff_retrieval_failed" = true ] && evidence_args+=(--diff-retrieval-failed)
+          [ -n "$linked_issue" ] && transport_args+=(--transport-issue-number "$linked_issue")
+          [ "$issue_body_retrieval_failed" = true ] && transport_args+=(--transport-issue-body-retrieval-failed)
+          [ -n "$fresh_issue_body_file" ] && transport_args+=(--transport-fresh-issue-body-file "$fresh_issue_body_file")
+          [ -n "$fresh_pr_head_sha" ] && transport_args+=(--transport-fresh-pr-head-sha "$fresh_pr_head_sha")
+          [ -n "${GITHUB_PR_NUMBER:-}" ] && transport_args+=(--transport-pr-number "$GITHUB_PR_NUMBER")
 
+          # Suspend errexit only for this pipeline so both statuses survive.
+          set +e
           python -m scripts.agent_os_issue_acceptance.cli \
-            --issue tmp/agent_os_issue_acceptance_report/issue.md \
-            --pr-body tmp/agent_os_issue_acceptance_report/pr_body.md \
-            --changed-files tmp/agent_os_issue_acceptance_report/changed_files.txt \
-            --diff tmp/agent_os_issue_acceptance_report/diff.patch \
-            --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
+            --issue "$out/issue.md" \
+            --pr-body "$out/pr_body.md" \
+            --changed-files "$out/changed_files.txt" \
+            --diff "$out/diff.patch" \
+            --pr-title="$pr_title" \
             --documentation-advisory \
-            --merged-docs-evidence tmp/agent_os_issue_acceptance_report/merged_docs.json \
+            --merged-docs-evidence "$out/merged_docs.json" \
             "${evidence_args[@]}" \
             "${transport_args[@]}" \
-            | tee tmp/agent_os_issue_acceptance_report/report.txt
-          checker_exit_code=${PIPESTATUS[0]}
-          echo "checker_exit_code=${checker_exit_code}" >> "$GITHUB_OUTPUT"
-          # E3 (#3506): the check must represent the child result. A `fail`
-          # report (checker exit 1) fails this non-required check instead of
-          # masquerading as green. Manual-review (exit 0 by checker design)
-          # remains green, exactly as the checker contract defines it.
+            | tee "$out/report.txt"
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          checker_exit_code=${pipeline_status[0]}
+          report_exit_code=${pipeline_status[1]}
+          checker_state=EXECUTION_ERROR
+          if [ "$report_exit_code" -eq 0 ]; then
+            verdict="$(head -n 4 "$out/report.txt" | tail -n 1)"
+            case "$checker_exit_code:$verdict" in
+              '0:Overall result: pass'|'0:Overall result: warn') checker_state=COMPLETE ;;
+              '0:Overall result: manual-review') checker_state=MANUAL_REVIEW ;;
+              '1:Overall result: fail') checker_state=CHECKER_FAIL ;;
+            esac
+          fi
+          printf 'checker_exit_code=%s\nchecker_state=%s\n' \
+            "$checker_exit_code" "$checker_state" >> "$GITHUB_OUTPUT"
+          if [ "$checker_state" = EXECUTION_ERROR ] && [ "$checker_exit_code" -eq 0 ]; then
+            exit 1
+          fi
           exit "$checker_exit_code"
 
       - name: Publish report summary
-        # NB-2 (#3506): render the summary even when the checker step
-        # failed (E3 makes that failure visible as a red non-required
-        # check). This does not mask the failure: the checker step's
-        # non-zero exit still determines the job/check result.
-        if: always() && steps.exact_file.outputs.route != 'exact-file'
+        # Render failures without masking the checker step's conclusion.
+        if: always()
+        env:
+          ACCEPTANCE_ROUTE: ${{ steps.exact_file.outputs.route }}
+          ROUTE_HEAD: ${{ inputs.expected_head_sha }}
+          CHECKER_STATE: ${{ steps.acceptance.outputs.checker_state }}
+          CHECKER_EXIT_CODE: ${{ steps.acceptance.outputs.checker_exit_code }}
+          CHECKER_OUTCOME: ${{ steps.acceptance.outcome }}
         run: |
+          set -euo pipefail
+          if [ "$ACCEPTANCE_ROUTE" = exact-file ]; then
+            {
+              printf '## Exact-file GitHub Change Request (not issue-primary acceptance)\n\n'
+              printf 'Verified owner grant and scope for exact PR head: `%s`\n' "$ROUTE_HEAD"
+              echo 'This report is advisory: the issue-primary checker was not run.'
+              echo 'It does not establish CKR6 admission, hosted validation, Ready, or merge authorization.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$CHECKER_STATE" ]; then
+            case "$CHECKER_OUTCOME" in
+              failure|cancelled) CHECKER_STATE=EXECUTION_ERROR ;;
+              *) CHECKER_STATE=NOT_RUN ;;
+            esac
+          fi
           {
-            echo "## Agent OS Issue Acceptance Report"
-            echo
-            # The report file can be absent when an earlier step failed
-            # before the checker ran; degrade to an explicit notice
-            # instead of failing this step and truncating the summary.
-            # A partial report is rendered as-is.
-            if [ -f tmp/agent_os_issue_acceptance_report/report.txt ]; then
-              cat tmp/agent_os_issue_acceptance_report/report.txt
+            printf '## Agent OS Issue Acceptance Report\n\n'
+            if [ -f "$REPORT_DIR/report.txt" ]; then
+              cat "$REPORT_DIR/report.txt"
             else
               echo "Report output unavailable: the checker did not produce a report file."
             fi
-            echo
-            echo "Checker exit code: ${{ steps.acceptance.outputs.checker_exit_code }}"
-            echo
+            printf '\nChecker status: %s\n' "$CHECKER_STATE"
+            printf 'Checker exit code: %s\n\n' "${CHECKER_EXIT_CODE:-unavailable}"
             echo "Report-only boundary: this workflow does not approve, merge, label, close, or mutate issues or pull requests."
+            echo "Checker completion is not authoritative aggregate validation or merge admission."
           } >> "$GITHUB_STEP_SUMMARY"

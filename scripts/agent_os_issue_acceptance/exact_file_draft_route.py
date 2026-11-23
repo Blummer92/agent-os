@@ -22,6 +22,12 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
+from .parse_pr import (
+    _mask_non_authoritative_markdown,
+    detect_github_effective_closing_references,
+    parse_linked_issue_result,
+)
+
 REPO = "Blummer92/agent-os"
 OWNER_ID = 32861845
 OWNER_LOGIN = "Blummer92"
@@ -36,15 +42,19 @@ COMMENT_API = (
     "https://api.github.com/repos/Blummer92/agent-os"
     "/issues/comments/7085658027"
 )
+MAIN_API = f"https://api.github.com/repos/{REPO}/branches/main"
 HASH_RE = re.compile(r"^[0-9a-f]{40}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GRANT_LINK_RE = re.compile(
     r"https://github\.com/Blummer92/agent-os/issues/\d+"
     r"#issuecomment-\d+"
 )
-CLOSING_KEYWORD_RE = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+"
-    r"(?:#\d+|(?:Blummer92/agent-os)?#\d+)", re.I
+# CKR6 treats standalone Part of as an implementation-thread selection.
+# An exact-file route must not silently ignore such a claim.
+PRIMARY_LINK_RE = re.compile(
+    r"^[ \t]*(?:[-*][ \t]+)?Part[ \t]+of(?:[ \t]*:[ \t]*|[ \t]+)"
+    r"(?:https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/"
+    r"|(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#)\d+\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 REPORT_HEADINGS = (
     "Linked issue", "Summary", "Files changed", "Tests run", "Docs updated",
@@ -145,11 +155,12 @@ def inspect_pr(pr: Mapping[str, object], work: Workstream, *, expected_head: str
     base, head = pr.get("base"), pr.get("head")
     _require(isinstance(base, Mapping) and isinstance(head, Mapping),
              "pr-refs-missing")
-    _require((base.get("repo") or {}).get("full_name") == REPO,
+    base_repo, head_repo = base.get("repo"), head.get("repo")
+    _require(isinstance(base_repo, Mapping) and base_repo.get("full_name") == REPO,
              "pr-repository-mismatch")
-    _require((head.get("repo") or {}).get("full_name") == REPO and
-             head.get("ref") == work.branch,
-             "pr-head-branch-mismatch")
+    _require(base.get("ref") == "main", "pr-base-branch-mismatch")
+    _require(isinstance(head_repo, Mapping) and head_repo.get("full_name") == REPO and
+             head.get("ref") == work.branch, "pr-head-branch-mismatch")
     base_sha, head_sha = base.get("sha"), head.get("sha")
     _require(type(base_sha) is str and HASH_RE.fullmatch(base_sha) is not None,
              "pr-base-invalid")
@@ -162,7 +173,16 @@ def inspect_pr(pr: Mapping[str, object], work: Workstream, *, expected_head: str
     _require(links == [GRANT_URL], "grant-link-ambiguous-or-missing")
     _require("exact-file GitHub Change Request" in body,
              "exact-file-route-not-declared")
-    _require(not CLOSING_KEYWORD_RE.search(body), "pr-closing-keyword-present")
+    title = pr.get("title")
+    _require(type(title) is str and bool(title), "pr-title-invalid")
+    _require(not detect_github_effective_closing_references(body, title),
+             "pr-closing-keyword-present")
+    linkage = parse_linked_issue_result(body, title)
+    _require(not linkage.explicit_candidates and
+             not any(candidate.keyword for candidate in linkage.bare_references) and
+             not PRIMARY_LINK_RE.search(_mask_non_authoritative_markdown(body)) and
+             not PRIMARY_LINK_RE.search(_mask_non_authoritative_markdown(title)),
+             "pr-conflicting-primary-linkage")
     for label in REPORT_HEADINGS:
         _require(re.search(rf"(?im)^##[ \t]+{re.escape(label)}[ \t]*$", body)
                  is not None, "pr-report-headings-missing")
@@ -170,8 +190,18 @@ def inspect_pr(pr: Mapping[str, object], work: Workstream, *, expected_head: str
     return head_sha
 
 
+def inspect_main(record: object) -> str:
+    _require(isinstance(record, Mapping), "main-ref-invalid")
+    commit = record.get("commit")
+    _require(record.get("name") == "main" and isinstance(commit, Mapping),
+             "main-ref-invalid")
+    sha = _exact_str(commit.get("sha"))
+    _require(HASH_RE.fullmatch(sha) is not None, "main-ref-invalid")
+    return sha
+
+
 def inspect_git(
-    work: Workstream, pr: Mapping[str, object], *,
+    work: Workstream, pr: Mapping[str, object], *, current_main: str,
     run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
 ) -> None:
     """Verify source preimage, exact path set and cumulative net patch digest.
@@ -180,7 +210,6 @@ def inspect_git(
     descends from that snapshot and has not changed one of the authorized
     paths. No commit is trusted solely because its branch exists.
     """
-    base_sha = pr["base"]["sha"]
     head_sha = pr["head"]["sha"]
 
     def git(*args: str, ok: bool = True) -> subprocess.CompletedProcess[bytes]:
@@ -189,11 +218,13 @@ def inspect_git(
             _require(p.returncode == 0, "git-evidence-unavailable")
         return p
 
-    _require(git("merge-base", "--is-ancestor", BASE, base_sha, ok=False).returncode == 0,
+    _require(git("merge-base", "--is-ancestor", BASE, current_main, ok=False).returncode == 0,
              "approved-base-not-ancestor")
+    _require(git("merge-base", "--is-ancestor", pr["base"]["sha"], current_main,
+                 ok=False).returncode == 0, "pr-base-not-on-main")
     _require(git("merge-base", "--is-ancestor", BASE, head_sha, ok=False).returncode == 0,
              "pr-head-not-from-approved-base")
-    current_change = _path_set(git("diff", "--name-only", "-z", BASE, base_sha,
+    current_change = _path_set(git("diff", "--name-only", "-z", BASE, current_main,
                                   "--", *work.paths).stdout)
     _require(not current_change, "base-scope-advanced")
     for p in work.paths:
@@ -227,24 +258,26 @@ def verify(
     owner = get_json(COMMENT_API)
     _require(isinstance(owner, Mapping), "grant-read-invalid")
     inspect_grant(owner, work)
+    current_main = inspect_main(get_json(MAIN_API))
     if check_git:
-        inspect_git(work, pr, run=run)
+        inspect_git(work, pr, current_main=current_main, run=run)
     # Readback is separate from the first observation: a mutable PR head or
     # edited owner comment must not reuse a previously qualified snapshot.
     reread_pr = get_json(f"https://api.github.com/repos/{REPO}/pulls/{pr_number}")
     _require(isinstance(reread_pr, Mapping), "pr-readback-unavailable")
     inspect_pr(reread_pr, work, expected_head=head)
-    _require(reread_pr.get("base") == pr.get("base") and
-             reread_pr.get("body") == pr.get("body"), "pr-observation-changed")
+    _require(all(reread_pr.get(field) == pr.get(field)
+                 for field in ("base", "title", "body")), "pr-observation-changed")
     reread_owner = get_json(COMMENT_API)
     _require(isinstance(reread_owner, Mapping), "grant-readback-unavailable")
     inspect_grant(reread_owner, work)
     _require(reread_owner.get("body") == owner.get("body") and
              reread_owner.get("updated_at") == owner.get("updated_at"),
              "grant-observation-changed")
+    _require(inspect_main(get_json(MAIN_API)) == current_main, "main-observation-changed")
     return {
         "route": "exact-file", "verified": True, "pr_number": pr_number,
-        "head_sha": head, "source_base": BASE,
+        "head_sha": head, "source_base": BASE, "current_main": current_main,
         "patch_sha256": work.expected_patch_sha,
         "changed_files": len(work.paths),
         "authority": "owner-grant-verified-not-ckr6-admission",

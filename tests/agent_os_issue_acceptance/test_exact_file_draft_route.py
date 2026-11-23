@@ -13,6 +13,11 @@ from scripts.agent_os_issue_acceptance import exact_file_draft_route as route
 
 BASE = "a" * 40
 HEAD = "b" * 40
+CURRENT_MAIN = "d" * 40
+
+
+def main_record(sha=CURRENT_MAIN):
+    return {"name": "main", "commit": {"sha": sha}}
 
 
 def owner_record(work: route.Workstream):
@@ -39,7 +44,8 @@ def pull_record(work: route.Workstream):
     headings = "\n".join(f"## {s}\nEvidence" for s in route.REPORT_HEADINGS)
     return {
         "number": work.pr_number, "state": "open", "draft": True,
-        "base": {"sha": BASE, "repo": {"full_name": route.REPO}},
+        "title": "Offline test fixture",
+        "base": {"sha": BASE, "ref": "main", "repo": {"full_name": route.REPO}},
         "head": {"sha": HEAD, "ref": work.branch,
                  "repo": {"full_name": route.REPO}},
         "body": (
@@ -90,6 +96,16 @@ def test_rejects_grant_with_extra_path():
 @pytest.mark.parametrize("mutator,code", [
     (lambda p: p.update(draft=False), "pr-must-be-open-draft"),
     (lambda p: p["head"].update(ref="unapproved"), "pr-head-branch-mismatch"),
+    (lambda p: p["base"].update(ref="other"), "pr-base-branch-mismatch"),
+    (lambda p: p.update(title="Fixes: other-owner/other-repo#1"), "pr-closing-keyword-present"),
+    (lambda p: p.update(body=p["body"] + "\n- Part of #4054\n"),
+     "pr-conflicting-primary-linkage"),
+    (lambda p: p.update(body=p["body"] + "\nAddresses #4054\n"),
+     "pr-conflicting-primary-linkage"),
+    (lambda p: p.update(body=p["body"] + "\nPart of #4054\n"),
+     "pr-conflicting-primary-linkage"),
+    (lambda p: p.update(body=p["body"] + "\nPart of: https://github.com/Blummer92/agent-os/issues/3690\n"),
+     "pr-conflicting-primary-linkage"),
     (lambda p: p.update(body=p["body"].replace(route.GRANT_URL, "")), "grant-link-ambiguous-or-missing"),
     (lambda p: p.update(body=p["body"] + "\nCloses #4054\n"), "pr-closing-keyword-present"),
     (lambda p: p.update(body=p["body"].replace("## Tests run", "## Other")), "pr-report-headings-missing"),
@@ -116,6 +132,7 @@ def make_runner(work, *, changed=None, patch=b"expected patch", base_overlap=Fal
         if argv[1] == "cat-file": return subprocess.CompletedProcess(argv, 1, b"")
         if argv[1:3] == ["diff", "--name-only"]:
             if "--" in argv:
+                assert argv[5] == CURRENT_MAIN  # independent canonical main, not PR base
                 return subprocess.CompletedProcess(argv, 0, b"x\0" if base_overlap else b"")
             return subprocess.CompletedProcess(argv, 0, b"".join(v.encode()+b"\0" for v in changed))
         if argv[1:3] == ["diff", "--name-status"]:
@@ -128,7 +145,7 @@ def make_runner(work, *, changed=None, patch=b"expected patch", base_overlap=Fal
 def test_git_exact_patch_and_scope_pass():
     raw = b"exact canonical patch\n"
     w = dataclasses.replace(route.WORKSTREAMS[4092], expected_patch_sha=hashlib.sha256(raw).hexdigest())
-    route.inspect_git(w, pull_record(w), run=make_runner(w, patch=raw))
+    route.inspect_git(w, pull_record(w), current_main=CURRENT_MAIN, run=make_runner(w, patch=raw))
 
 
 def test_git_rejects_digest_mismatch_extra_paths_and_base_overlap():
@@ -139,7 +156,7 @@ def test_git_rejects_digest_mismatch_extra_paths_and_base_overlap():
         (make_runner(w, base_overlap=True), "base-scope-advanced"),
     ]:
         with pytest.raises(route.VerificationFailure, match=reason):
-            route.inspect_git(w, pull_record(w), run=runner)
+            route.inspect_git(w, pull_record(w), current_main=CURRENT_MAIN, run=runner)
 
 
 def test_live_pr_and_grant_are_used_not_untrusted_pr_body_as_grant():
@@ -148,11 +165,16 @@ def test_live_pr_and_grant_are_used_not_untrusted_pr_body_as_grant():
     hits = []
     def get(url):
         hits.append(url)
+        if url == route.MAIN_API:
+            return main_record()
         return o if url == route.COMMENT_API else p
     result = route.verify(4092, get, expected_head=HEAD, check_git=False)
     assert result["verified"] is True
     assert result["authority"] == "owner-grant-verified-not-ckr6-admission"
-    assert hits == [f"https://api.github.com/repos/{route.REPO}/pulls/4092", route.COMMENT_API]*2
+    assert result["current_main"] == CURRENT_MAIN
+    assert hits == [
+        f"https://api.github.com/repos/{route.REPO}/pulls/4092", route.COMMENT_API, route.MAIN_API
+    ] * 2
 
 
 def test_unlisted_pr_fails_closed():
@@ -172,3 +194,41 @@ def test_no_token_leak_and_closed_verdict(capsys, monkeypatch):
 def test_other_pr_uses_existing_issue_primary_path(capsys):
     assert route.main(["--repository", route.REPO, "--pr-number", "4100"]) == 3
     assert json.loads(capsys.readouterr().out)["route"] == "issue-primary"
+
+
+def test_plain_coordination_reference_is_not_primary():
+    w = route.WORKSTREAMS[4092]
+    pr = pull_record(w)
+    pr["body"] += "\nCoordination reference only: #4054.\n"
+    assert route.inspect_pr(pr, w, expected_head=HEAD) == HEAD
+
+
+@pytest.mark.parametrize("observation", ["main-moved", "main-malformed", "title-changed"])
+def test_mutable_snapshot_must_remain_current(observation):
+    w = route.WORKSTREAMS[4092]
+    p, o = pull_record(w), owner_record(w)
+    main_reads = pr_reads = 0
+
+    def get(url):
+        nonlocal main_reads, pr_reads
+        if url == route.MAIN_API:
+            main_reads += 1
+            if observation == "main-malformed":
+                return {}
+            if observation == "main-moved" and main_reads == 2:
+                return main_record("e" * 40)
+            return main_record()
+        if url == route.COMMENT_API:
+            return o
+        pr_reads += 1
+        if observation == "title-changed" and pr_reads == 2:
+            return p | {"title": "Updated neutral title"}
+        return p
+
+    failure = {
+        "main-moved": "main-observation-changed",
+        "main-malformed": "main-ref-invalid",
+        "title-changed": "pr-observation-changed",
+    }[observation]
+    with pytest.raises(route.VerificationFailure, match=failure):
+        route.verify(4092, get, expected_head=HEAD, check_git=False)
