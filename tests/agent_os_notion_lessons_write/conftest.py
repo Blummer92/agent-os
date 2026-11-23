@@ -14,8 +14,9 @@ SOURCE_PATHS = (
 for source in reversed(SOURCE_PATHS):
     if source.is_dir():
         entry = str(source)
-        # Also reposition an already-present PYTHONPATH entry, so priority
-        # does not depend on the launch environment or previous imports.
+        # Reposition existing PYTHONPATH entries for imports made AFTER
+        # conftest loading. Already-imported sys.modules entries retain their
+        # original origin; path reordering cannot retroactively replace them.
         sys.path[:] = [existing for existing in sys.path if existing != entry]
         sys.path.insert(0, entry)
 
