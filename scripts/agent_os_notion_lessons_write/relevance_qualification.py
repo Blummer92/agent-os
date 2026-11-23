@@ -103,7 +103,10 @@ def qualify_reviewed_create(
     context_reasons = frozenset({
         "verified-ckr6-mutation-context-match",
         "pr-refresh-reconciliation-text-match",
-        "exact-library-match",
+        # A writer lesson has no independent library_name. CKR2's
+        # "exact-library-match" here can be obtained by repeating the
+        # lesson title as a library hint; it is a title echo, not evidence
+        # that a real library-specific task requires the lesson.
     })
 
     def selection(req: CodingKnowledgeRequest) -> tuple[bool, bool]:
