@@ -34,6 +34,9 @@ class LiveTests(unittest.TestCase):
     def client(self):
         client = object.__new__(LiveLessonsClient)
         client.request_id = REQUEST_ID
+        # This fixture bypasses __init__ to inspect low-level HTTP shapes;
+        # a production client defaults to False until its atomic ref is won.
+        client._create_reserved = True
         client.source_id = SOURCE_ID
         client._token = "test-only-not-a-real-credential"
         from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
@@ -66,8 +69,46 @@ class LiveTests(unittest.TestCase):
         for key, value in (("Approval", {"checkbox": True}), ("schema", {}), ("What Happened", {"rich_text": [{"text": {"content": "private student details"}}]})):
             intended = properties()
             intended[key] = value
+            client._create_reserved = True  # isolate each invalid HTTP body
             with self.subTest(key=key), self.assertRaisesRegex(WriteBlocked, "reviewed-narrative"):
                 client.create(intended)
+
+    def test_direct_create_requires_reservation_and_consumes_it_before_post(self):
+        class Response(io.BytesIO):
+            status = 201
+        class Opener:
+            def __init__(self):
+                self.requests = []
+            def open(self, request, timeout):
+                self.requests.append(request)
+                return Response(json.dumps({"id": PAGE_ID}).encode())
+        client = self.client()
+        client._create_reserved = False
+        client._opener = Opener()
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-required"):
+            client.create(properties())
+        self.assertEqual(client._opener.requests, [])
+        with patch(
+            "scripts.agent_os_notion_lessons_write.create_reservation.reserve_once"
+        ) as reserve:
+            client.reserve_create(REQUEST_ID)
+            reserve.assert_called_once_with(REQUEST_ID)
+        self.assertTrue(client._create_reserved)
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-already-consumed"):
+            client.reserve_create(REQUEST_ID)
+        self.assertEqual(client.create(properties()), {"id": PAGE_ID})
+        self.assertFalse(client._create_reserved)
+        self.assertEqual(len(client._opener.requests), 1)
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-required"):
+            client.create(properties())
+        self.assertEqual(len(client._opener.requests), 1)
+
+    def test_live_reservation_is_bound_to_registered_reviewed_request(self):
+        client = self.client()
+        client._create_reserved = False
+        with self.assertRaisesRegex(WriteBlocked, "create-reservation-request-mismatch"):
+            client.reserve_create("foreign-request")
+        self.assertFalse(client._create_reserved)
 
     def test_lesson_id_query_is_bounded_to_reviewed_target(self):
         from scripts.agent_os_notion_lessons_write.catalog import LL93_METADATA_REQUEST_ID
