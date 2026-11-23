@@ -34,6 +34,9 @@ def test_unittest_subtests_emit_distinct_case_evidence(tmp_path: Path, failing: 
     assertion = "self.assertLess(value, 2)" if failing else "self.assertLess(value, 3)"
     (tmp_path / "test_nested.py").write_text(
         "import unittest\n"
+        "import conftest\n"
+        "assert conftest.SubtestReport is not None, ("
+        "'No supported pytest native/plugin SubtestReport; JUnit evidence unavailable')\n"
         "class Nested(unittest.TestCase):\n"
         "    def test_all_branches(self):\n"
         "        for value in range(3):\n"
@@ -126,17 +129,21 @@ def test_subtest_report_hook_only_changes_call_phase(tmp_path: Path) -> None:
         "def test_subtest_phase_identity():\n"
         "    if conftest.SubtestReport is None:\n"
         "        pytest.skip('subtest report implementation unavailable')\n"
-        "    report = object.__new__(conftest.SubtestReport)\n"
-        "    report.nodeid = 'phase-test::case'\n"
-        "    report.when = 'setup'\n"
-        "    conftest.pytest_runtest_logreport(report)\n"
-        "    assert report.nodeid == 'phase-test::case'\n"
-        "    report.when = 'teardown'\n"
-        "    conftest.pytest_runtest_logreport(report)\n"
-        "    assert report.nodeid == 'phase-test::case'\n"
-        "    report.when = 'call'\n"
-        "    conftest.pytest_runtest_logreport(report)\n"
-        "    assert report.nodeid == 'phase-test::case::subtest[1]'\n",
+        "    conftest._SUBTEST_SEQUENCE.clear()\n"
+        "    try:\n"
+        "        report = object.__new__(conftest.SubtestReport)\n"
+        "        report.nodeid = 'phase-test::case'\n"
+        "        report.when = 'setup'\n"
+        "        conftest.pytest_runtest_logreport(report)\n"
+        "        assert report.nodeid == 'phase-test::case'\n"
+        "        report.when = 'teardown'\n"
+        "        conftest.pytest_runtest_logreport(report)\n"
+        "        assert report.nodeid == 'phase-test::case'\n"
+        "        report.when = 'call'\n"
+        "        conftest.pytest_runtest_logreport(report)\n"
+        "        assert report.nodeid == 'phase-test::case::subtest[1]'\n"
+        "    finally:\n"
+        "        conftest._SUBTEST_SEQUENCE.clear()\n",
         encoding="utf-8",
     )
     env = os.environ.copy()
