@@ -54,12 +54,13 @@ class LiveTests(unittest.TestCase):
                 return Response(json.dumps({"id": PAGE_ID}).encode())
         client = self.client()
         client._opener = Opener()
-        client.create(properties())
-        client.update(PAGE_ID, properties())
+        intended = properties()
+        client.create(intended)
+        client.update(PAGE_ID, intended)
         create, update = client._opener.requests
         self.assertEqual(create.full_url, "https://api.notion.com/v1/pages")
         self.assertEqual(create.method, "POST")
-        self.assertEqual(json.loads(create.data), {"parent": {"type": "data_source_id", "data_source_id": SOURCE_ID}, "properties": properties()})
+        self.assertEqual(json.loads(create.data), {"parent": {"type": "data_source_id", "data_source_id": SOURCE_ID}, "properties": intended})
         self.assertEqual(update.full_url, "https://api.notion.com/v1/pages/" + PAGE_ID)
         self.assertEqual(update.method, "PATCH")
         self.assertEqual(set(json.loads(update.data)), {"properties"})
@@ -152,8 +153,10 @@ class LiveTests(unittest.TestCase):
 
     def test_ckr6_composition_constructs_read_tasks_only(self):
         import runpy
-        # Exercise the immutable canonical module directly: the partial local
-        # source mirror need not initialize the unrelated execution-service API.
+        # Intentionally execute the standalone leaf source, not its package
+        # initializer: that package's unrelated API dependencies are not
+        # available in this focused test surface. Relative imports added to
+        # the leaf would require changing this explicit isolation contract.
         resolve_lesson_read_route = runpy.run_path(str(ROOT / "08_Tooling/agent-os-execution-service/src/agent_os_execution_service/lesson_reader_composition.py"))["resolve_lesson_read_route"]
         from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
         class Reader(NotionReadOnlyAdapter):
@@ -180,8 +183,8 @@ class CurrentnessTests(unittest.TestCase):
                     "scripts.agent_os_notion_lessons_write.admission._get",
                     side_effect=[e["issue"], self.comment(e, number)]) as get:
                 verify_current_request(e, request, context=CONTEXT)
-            self.assertEqual([call.args[0] for call in get.call_args_list],
-                             [f"/issues/{number}", "/issues/comments/100"])
+                self.assertEqual([call.args[0] for call in get.call_args_list],
+                                 [f"/issues/{number}", "/issues/comments/100"])
 
     def test_edited_moved_or_pr_current_comment_refuses(self):
         e = event()
@@ -194,9 +197,16 @@ class CurrentnessTests(unittest.TestCase):
                 value["issue_url"] = f"https://api.github.com/repos/{REPOSITORY}/issues/3305"
             else:
                 issue["pull_request"] = {}
+            expected_reason = {
+                "edited": "edited-comment-refused",
+                "moved": "canonical-comment-target-mismatch",
+                "pull_request": "ordinary-issue-request-required",
+            }[kind]
             with self.subTest(kind=kind), patch(
                     "scripts.agent_os_notion_lessons_write.admission._get",
-                    side_effect=[issue, value]), self.assertRaises(WriteBlocked):
+                    side_effect=[issue, value]), self.assertRaisesRegex(
+                        WriteBlocked, f"^{expected_reason}$"
+                    ):
                 verify_current_request(e, request, context=CONTEXT)
 
 
@@ -215,7 +225,14 @@ class WorkflowTests(unittest.TestCase):
         steps = value["jobs"]["lessons_write"]["steps"]
         secrets = [step for step in steps if "NOTION_TOKEN" in step.get("env", {})]
         self.assertEqual(len(secrets), 1)
-        self.assertGreater(steps.index(secrets[0]), 2)
+        names = [step.get("name") for step in steps]
+        self.assertLess(
+            names.index("Admit exact owner request without credentials"),
+            names.index("Execute one bounded write and two canonical readbacks"),
+        )
+        self.assertEqual(
+            secrets[0].get("name"), "Execute one bounded write and two canonical readbacks"
+        )
         self.assertEqual(secrets[0]["env"]["NOTION_TOKEN"], "${{ secrets.NOTION_TOKEN }}")
         self.assertEqual(secrets[0]["env"]["GITHUB_TOKEN"], "${{ github.token }}")
         for step in steps:
@@ -223,7 +240,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn("GITHUB_TOKEN", step.get("env", {}))
                 self.assertNotIn("NOTION_TOKEN", step.get("env", {}))
         self.assertEqual(secrets[0]["env"]["AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID"], "${{ vars.AGENT_OS_LESSONS_LEARNED_DATA_SOURCE_ID }}")
-        self.assertNotIn("continue-on-error", str(steps))
+        self.assertTrue(all("continue-on-error" not in step for step in steps))
 
     def test_workflow_is_not_bound_to_one_implementation_issue(self):
         import yaml
