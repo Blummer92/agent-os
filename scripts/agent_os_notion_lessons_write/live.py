@@ -109,6 +109,13 @@ class LiveLessonsClient:
         except Exception:
             raise WriteBlocked("notion-write-outcome-unconfirmed") from None
 
+    def reserve_create(self, request_id: str) -> None:
+        """Create a permanent GitHub reservation before ANY Notion POST."""
+        if request_id != self.request_id:
+            raise WriteBlocked("create-reservation-request-mismatch")
+        from .create_reservation import reserve_once
+        reserve_once(request_id)
+
     def create(self, properties: Mapping) -> Mapping:
         return self._mutate(page_id=None, intended=properties)
 
