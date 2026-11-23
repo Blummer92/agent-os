@@ -1,0 +1,349 @@
+"""Report grouped repair evidence from a *merged*, exact-sha GitHub PR.
+
+This is a deterministic, read-only producer for review, not a lesson writer.
+Commit labels are hints, never evidence that a reusable rule was proven.
+CKR5 remains the sole learning-quality evaluator; Notion publication and
+all merge, issue, and approval decisions are explicitly out of scope.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+from agent_memory_context_manager.ci_review_learning import (
+    LearningSignal,
+    ProducerDisposition,
+    StructuredLearningOutcome,
+    normalize_learning_outcome,
+)
+
+SHA = re.compile(r"^[0-9a-f]{40}$")
+REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SUBJECT = re.compile(r"^(feat|fix|test|docs|refactor|chore)(?:\(([a-zA-Z0-9_.-]{1,40})\))?!?:\s+(.{1,200})$")
+MAX_COMMITS = 250
+MAX_REFS_PER_GROUP = 20
+MAX_GROUPS = 25
+MAX_DISCUSSION_ITEMS = 200
+MAX_CHECKS_PER_COMMIT = 100
+MAX_FAILED_CHECK_REFS = 30
+
+
+class EvidenceError(Exception):
+    """Missing or inconsistent GitHub proof: never turn into a lesson."""
+
+
+def _sha(value: Any) -> str:
+    if not isinstance(value, str) or not SHA.fullmatch(value):
+        raise EvidenceError("invalid-sha")
+    return value
+
+
+def _repo(value: str) -> str:
+    if not REPOSITORY.fullmatch(value) or ".." in value:
+        raise EvidenceError("invalid-repository")
+    return value
+
+
+class GitHubReader:
+    """Narrow GET-only GitHub reader; does not expose response bodies in errors."""
+
+    def __init__(self, repository: str, token: str):
+        self.repository = _repo(repository)
+        if not token:
+            raise EvidenceError("github-read-token-missing")
+        self.token = token
+
+    def get(self, path: str) -> Any:
+        if not path.startswith("/") or ".." in path:
+            raise EvidenceError("invalid-read-path")
+        request = urllib.request.Request(
+            "https://api.github.com/repos/" + self.repository + path,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer " + self.token,
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "agent-os-post-merge-learning",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                return json.loads(response.read(2_000_001))
+        except (urllib.error.URLError, ValueError, OSError):
+            raise EvidenceError("github-read-unavailable") from None
+
+
+def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str, Any]]:
+    if not isinstance(declared, int) or isinstance(declared, bool) or not (0 < declared <= MAX_COMMITS):
+        raise EvidenceError("commit-count-out-of-bounds")
+    collected: list[dict[str, Any]] = []
+    for page in range(1, 5):
+        rows = reader.get(f"/pulls/{number}/commits?per_page=100&page={page}")
+        if not isinstance(rows, list):
+            raise EvidenceError("commit-list-malformed")
+        collected.extend(rows)
+        if len(collected) > MAX_COMMITS:
+            raise EvidenceError("commit-list-out-of-bounds")
+        if len(rows) < 100:
+            break
+    if len(collected) != declared:
+        raise EvidenceError("commit-history-incomplete")
+    ids = [_sha(row.get("sha")) for row in collected if isinstance(row, dict)]
+    if len(ids) != declared or len(set(ids)) != declared:
+        raise EvidenceError("commit-history-identity-invalid")
+    return collected
+
+
+def _paged_discussion(reader: GitHubReader, path: str) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        records = reader.get(f"{path}?per_page=100&page={page}")
+        if not isinstance(records, list) or any(not isinstance(x, dict) for x in records):
+            raise EvidenceError("discussion-evidence-malformed")
+        values.extend(records)
+        if len(values) > MAX_DISCUSSION_ITEMS:
+            raise EvidenceError("discussion-evidence-out-of-bounds")
+        if len(records) < 100:
+            break
+    return values
+
+
+def _review_and_ci_evidence(reader: GitHubReader, number: int, commits: list[dict[str, Any]]) -> dict[str, Any]:
+    """Preserve review and per-commit check refs, never interpret prose as proof."""
+    reviews = _paged_discussion(reader, f"/pulls/{number}/reviews")
+    comments = _paged_discussion(reader, f"/issues/{number}/comments")
+    review_changes_requested = []
+    for item in reviews:
+        if item.get("state") == "CHANGES_REQUESTED" and isinstance(item.get("html_url"), str):
+            review_changes_requested.append(item["html_url"])
+    check_totals = {"success": 0, "failure": 0, "other": 0, "missing": 0}
+    failed_checks = []
+    for entry in commits:
+        sha = entry["sha"]
+        result = reader.get(f"/commits/{sha}/check-runs?per_page=100")
+        if not isinstance(result, dict) or type(result.get("total_count")) is not int:
+            raise EvidenceError("check-run-evidence-malformed")
+        checks = result.get("check_runs")
+        if not isinstance(checks, list) or result["total_count"] != len(checks) or len(checks) > MAX_CHECKS_PER_COMMIT:
+            raise EvidenceError("check-run-evidence-incomplete")
+        if not checks:
+            check_totals["missing"] += 1
+        for check in checks:
+            if not isinstance(check, dict):
+                raise EvidenceError("check-run-evidence-malformed")
+            outcome = check.get("conclusion")
+            if outcome == "success":
+                check_totals["success"] += 1
+            elif outcome == "failure":
+                check_totals["failure"] += 1
+                if len(failed_checks) < MAX_FAILED_CHECK_REFS:
+                    url = check.get("html_url")
+                    if isinstance(url, str) and url.startswith(f"https://github.com/{reader.repository}/"):
+                        failed_checks.append({"commit_sha": sha, "check_url": url})
+            else:
+                check_totals["other"] += 1
+    return {"review_count": len(reviews), "issue_comment_count": len(comments),
+            "change_request_refs": review_changes_requested[:MAX_DISCUSSION_ITEMS],
+            "check_run_counts": check_totals, "failed_check_refs": failed_checks,
+            "failed_check_refs_truncated": check_totals["failure"] > len(failed_checks),
+            "independent_review_verified": False}
+
+
+def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> dict[str, Any] | None:
+    if explicit_number is not None:
+        if not isinstance(explicit_number, int) or not (0 < explicit_number <= 2_147_483_647):
+            raise EvidenceError("pr-number-invalid")
+        return reader.get(f"/pulls/{explicit_number}")
+    prs = reader.get(f"/commits/{sha}/pulls?per_page=100")
+    if not isinstance(prs, list):
+        raise EvidenceError("associated-prs-malformed")
+    candidates = [p for p in prs if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha]
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise EvidenceError("associated-pr-ambiguous")
+    return candidates[0]
+
+
+def _validate_pr(pr: dict[str, Any], repo: str, sha: str) -> tuple[int, int]:
+    if not isinstance(pr, dict) or not pr.get("merged_at") or pr.get("merged") is False:
+        raise EvidenceError("pr-not-merged")
+    if pr.get("merge_commit_sha") != sha:
+        raise EvidenceError("merge-sha-mismatch")
+    if pr.get("base", {}).get("ref") != "main":
+        raise EvidenceError("base-not-main")
+    if pr.get("base", {}).get("repo", {}).get("full_name") != repo:
+        raise EvidenceError("base-repository-mismatch")
+    number, count = pr.get("number"), pr.get("commits")
+    if type(number) is not int or number < 1 or type(count) is not int:
+        raise EvidenceError("pr-metadata-invalid")
+    return number, count
+
+
+def _validate_run(run: dict[str, Any] | None, sha: str) -> dict[str, Any]:
+    if run is None:
+        return {"state": "not-observed", "run_url": None}
+    if not isinstance(run, dict) or run.get("head_sha") != sha or run.get("name") != "Agent OS Validation Gate" or run.get("event") != "push" or run.get("head_branch") != "main":
+        raise EvidenceError("validation-run-identity-mismatch")
+    state = run.get("conclusion") if run.get("status") == "completed" else "pending"
+    if state not in ("success", "failure", "cancelled", "skipped", "timed_out", "pending"):
+        raise EvidenceError("validation-run-status-invalid")
+    return {"state": state, "run_url": run.get("html_url")}
+
+
+def _subject(entry: dict[str, Any]) -> tuple[str, str] | None:
+    commit = entry.get("commit")
+    if not isinstance(commit, dict) or not isinstance(commit.get("message"), str):
+        raise EvidenceError("commit-message-invalid")
+    line = commit["message"].split("\n", 1)[0]
+    match = SUBJECT.fullmatch(line)
+    if match is None:
+        return None
+    kind, scope, _description = match.groups()
+    return kind, (scope or "unscoped").casefold()
+
+
+def _group_history(commits: list[dict[str, Any]], repository: str, number: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    groups: dict[str, dict[str, Any]] = {}
+    kinds: dict[str, int] = {k: 0 for k in ("feat", "fix", "test", "docs", "refactor", "chore", "unclassified")}
+    for entry in commits:
+        parsed = _subject(entry)
+        if parsed is None:
+            kinds["unclassified"] += 1
+            continue
+        kind, scope = parsed
+        kinds[kind] += 1
+        if kind not in ("fix", "test"):
+            continue
+        group = groups.setdefault(scope, {"scope": scope, "fix_shas": [], "test_shas": []})
+        group[f"{kind}_shas"].append(entry["sha"])
+    if len(groups) > MAX_GROUPS:
+        raise EvidenceError("learning-group-budget-exceeded")
+    results = []
+    for scope, group in sorted(groups.items()):
+        if not group["fix_shas"]:
+            continue
+        fix_shas = group["fix_shas"]
+        test_shas = group["test_shas"]
+        evidence_shas = fix_shas + test_shas
+        truncated = len(evidence_shas) > MAX_REFS_PER_GROUP
+        evidence_shas = evidence_shas[:MAX_REFS_PER_GROUP]
+        refs = [f"https://github.com/{repository}/commit/{sha}" for sha in evidence_shas]
+        # The CKR5 proof bit is FALSE: commit labels cannot prove a reusable
+        # guardrail or lesson novelty. Reviewers must supply independent proof.
+        outcome = StructuredLearningOutcome(
+            source_reference=f"https://github.com/{repository}/pull/{number}",
+            signal=LearningSignal.REPEATED_REPAIR if len(fix_shas) > 1 else LearningSignal.SUBSTANTIVE_REVIEW_FINDING,
+            failure_signature=f"postmerge-unverified-scope:{scope}",
+            ecosystem="agent-os",
+            capability_kind="post-merge-learning-triage",
+            lesson_summary=f"Review repair evidence for {scope}",
+            what_happened=f"Commit history has {len(fix_shas)} fix and {len(test_shas)} test commits under {scope}; lesson validity is unverified.",
+            severity="Medium", owner_agent="github-service-agent",
+            canonical_github_refs=(f"https://github.com/{repository}/pull/{number}",),
+            evidence_refs=tuple(refs),
+            reusable_rule_proven=False,
+        )
+        ckr5 = normalize_learning_outcome(outcome)
+        if ckr5.disposition is not ProducerDisposition.NOT_REUSABLE or ckr5.observation is not None:
+            raise EvidenceError("unverified-ckr5-candidate-not-blocked")
+        results.append({
+            "scope": scope, "fix_count": len(fix_shas), "test_count": len(test_shas),
+            "evidence_refs": refs, "evidence_truncated": truncated,
+            "status": "review-needed", "ckr5_disposition": ckr5.disposition.value,
+            "ckr5_reason_codes": list(ckr5.reason_codes),
+            "reusable_rule_proven": False, "lesson_proposal": None,
+        })
+    return results, kinds
+
+
+def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validation_run_id: int | None) -> dict[str, Any]:
+    sha = _sha(sha)
+    repo = reader.repository
+    pr = _resolve_pr(reader, sha, pr_number)
+    if pr is None:
+        return {"status": "not-applicable", "reason_code": "push-without-merged-pr", "merge_sha": sha, "authority_created": False}
+    number, expected_count = _validate_pr(pr, repo, sha)
+    if pr_number is not None and pr_number != number:
+        raise EvidenceError("requested-pr-identity-mismatch")
+    commits = _commits(reader, number, expected_count)
+    run = reader.get(f"/actions/runs/{validation_run_id}") if validation_run_id is not None else None
+    validation = _validate_run(run, sha)
+    groups, kinds = _group_history(commits, repo, number)
+    supporting = _review_and_ci_evidence(reader, number, commits)
+    return {
+        "schema_version": 1, "repository": repo, "pr_number": number,
+        "merge_sha": sha, "pr_url": f"https://github.com/{repo}/pull/{number}",
+        "history_complete": True, "commit_count": expected_count,
+        "all_commit_shas": [entry["sha"] for entry in commits],
+        "commit_kind_counts": kinds, "validation": validation,
+        "supporting_evidence": supporting,
+        "review_leads": groups, "status": ("review-needed" if (groups or validation["state"] != "success"
+            or supporting["check_run_counts"]["failure"] or supporting["change_request_refs"])
+            else "no-repair-leads-observed"),
+        "lesson_proposal": None, "existing_lesson_duplicate_review": "not-run",
+        "notion_write_performed": False, "github_write_performed": False,
+        "publication_authorized": False, "merge_authorized": False,
+        "closure_authorized": False, "authority_created": False,
+    }
+
+
+def render_summary(report: dict[str, Any]) -> str:
+    if report["status"] == "not-applicable":
+        return "## Post-merge learning\nNo uniquely linked merged PR was found for this push. No lesson created.\n"
+    lines = ["## Read-only post-merge learning analysis", "",
+             f"- PR: {report['pr_url']}", f"- Merge SHA: {report['merge_sha']}",
+             f"- Complete PR commit list: **{report['commit_count']}**",
+             f"- Exact merge validation: **{report['validation']['state']}**",
+             f"- Repair review leads: **{len(report['review_leads'])}**",
+             f"- Historical failed CI checks: **{report['supporting_evidence']['check_run_counts']['failure']}** (review-only)",
+             f"- Prior change-request reviews: **{len(report['supporting_evidence']['change_request_refs'])}** (review-only)", "",
+             "| Commit scope | Fix commits | Test commits | Disposition |",
+             "| --- | ---: | ---: | --- |"]
+    for lead in report["review_leads"]:
+        lines.append(f"| {lead['scope']} | {lead['fix_count']} | {lead['test_count']} | Review needed (CKR5: not proven) |")
+    lines.extend(["", "**No lesson candidate, Notion write, activation, merge authority, or closure authority was produced.**",
+                  "Commit message patterns only identify possible review leads. They do not prove the fix's semantics, test success, existing lesson novelty, or reusable rule.", ""])
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--merge-sha", required=True)
+    parser.add_argument("--pr-number", type=int)
+    parser.add_argument("--validation-run-id", type=int)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    try:
+        reader = GitHubReader(args.repository, os.getenv("GITHUB_TOKEN", ""))
+        result = build_report(reader, args.merge_sha, args.pr_number, args.validation_run_id)
+    except EvidenceError as exc:
+        result = {"status": "manual-review", "reason_code": str(exc), "merge_sha": args.merge_sha,
+                  "authority_created": False, "publication_authorized": False,
+                  "notion_write_performed": False, "github_write_performed": False}
+    path = Path(args.output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    summary = render_summary(result) if result["status"] != "manual-review" else (
+        "## Post-merge learning: manual review required\nEvidence is incomplete or invalid: " + result["reason_code"] + ". No lesson created.\n"
+    )
+    summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as fh:
+            fh.write(summary)
+    else:
+        print(summary)
+    return 0 if result["status"] != "manual-review" else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
