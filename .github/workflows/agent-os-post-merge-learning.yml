@@ -1,0 +1,75 @@
+name: Agent OS Post-Merge Learning Review
+
+on:
+  workflow_run:
+    workflows: ["Agent OS Validation Gate"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      expected_merge_sha:
+        required: true
+        type: string
+      validation_run_id:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+
+jobs:
+  review:
+    name: Post-merge learning evidence (read only)
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Positive and hard-negative tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
+        run: python -m unittest discover -s tests/agent_os_post_merge_learning -p 'test_*.py' -v
+      - name: Read-only exact-merge analysis
+        env:
+          PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          INPUT_PR: ${{ inputs.pr_number }}
+          INPUT_MERGE_SHA: ${{ inputs.expected_merge_sha }}
+          INPUT_VALIDATION_RUN_ID: ${{ inputs.validation_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/post-merge-learning"
+          args=(--repository "$REPOSITORY" --output "$RUNNER_TEMP/post-merge-learning/report.json")
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            args+=(--merge-sha "$RUN_MERGE_SHA" --validation-run-id "$RUN_ID")
+          else
+            [[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]
+            [[ "$INPUT_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            args+=(--pr-number "$INPUT_PR" --merge-sha "$INPUT_MERGE_SHA")
+            if [[ -n "$INPUT_VALIDATION_RUN_ID" ]]; then
+              [[ "$INPUT_VALIDATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+              args+=(--validation-run-id "$INPUT_VALIDATION_RUN_ID")
+            fi
+          fi
+          python -m scripts.agent_os_post_merge_learning.report "${args[@]}"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: post-merge-learning-${{ github.run_id }}
+          path: ${{ runner.temp }}/post-merge-learning/report.json
+          if-no-files-found: ignore
