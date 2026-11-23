@@ -648,6 +648,7 @@ class LostCreateReceiptRecoveryTests(unittest.TestCase):
         self.assertEqual(outcome["write_attempts"], 1)
         self.assertFalse(outcome["readback_verified"])
         self.assertIsNone(outcome["page_id"])
+        self.assertEqual(outcome["recovery_reason"], "recovery-not-visible")
         self.assertNotIn("create_receipt_recovered", outcome)
         self.assertEqual(client.calls.count("write"), 1)
         self.assertEqual(client.calls[-2:], ["write", "query"])
@@ -677,6 +678,12 @@ class LostCreateReceiptRecoveryTests(unittest.TestCase):
                 self.assertEqual(outcome["write_attempts"], 1)
                 self.assertFalse(outcome["readback_verified"])
                 self.assertNotIn("create_receipt_recovered", outcome)
+                self.assertEqual(outcome["recovery_reason"], {
+                    "duplicate": "recovery-ambiguous",
+                    "has_more": "recovery-incomplete",
+                    "wrong_identity": "recovery-identity-invalid",
+                    "query_failure": "recovery-unavailable",
+                }[case])
                 self.assertEqual(client.calls.count("write"), 1)
                 self.assertNotIn("private-notion-query", json.dumps(outcome))
 
@@ -713,6 +720,113 @@ class LostCreateReceiptRecoveryTests(unittest.TestCase):
         self.assertEqual(outcome["status"], "persisted")
         self.assertTrue(outcome["create_receipt_recovered"])
         self.assertEqual(client.calls.count("write"), 1)
+
+
+class ClaudeDurabilityQATests(unittest.TestCase):
+    """Claude #4101 F3/F4/F7: safety, provenance, stable updates."""
+
+    def test_foreign_activated_page_cannot_be_claimed_as_recovered_create(self):
+        class ForeignActivated(Client):
+            def create(self, intended):
+                self.calls.append("write")
+                raise TimeoutError("private-transport-after-no-commit")
+
+            def find_exact(self, title):
+                self.calls.append("query")
+                if "write" not in self.calls:
+                    return {"results": [], "has_more": False}
+                self.page = page()
+                self.page["properties"]["Status"] = {
+                    "type": "select", "select": {"name": "Applied"},
+                }
+                self.page["properties"]["Surface Before Work?"] = {
+                    "type": "checkbox", "checkbox": True,
+                }
+                return {"results": [deepcopy(self.page)], "has_more": False}
+
+        client = ForeignActivated()
+        outcome = execute(AdmittedRequest(100), client)
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "protected-field-present-after-create")
+        self.assertTrue(outcome["create_receipt_recovered"])
+        self.assertFalse(outcome["readback_verified"])
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_receipted_create_with_activated_protected_fields_is_uncertain(self):
+        class ActivationByAutomation(Client):
+            def create(self, intended):
+                result = super().create(intended)
+                self.page["properties"]["Surface Before Work?"]["checkbox"] = True
+                return result
+
+        outcome = execute(AdmittedRequest(100), ActivationByAutomation())
+        self.assertEqual(outcome["status"], "uncertain")
+        self.assertEqual(outcome["reason_code"], "protected-field-present-after-create")
+
+    def test_status_new_default_is_nonactivated_with_surface_false(self):
+        class NewByDefault(Client):
+            def create(self, intended):
+                result = super().create(intended)
+                self.page["properties"]["Status"] = {
+                    "type": "select", "select": {"name": "New"},
+                }
+                return result
+
+        outcome = execute(AdmittedRequest(100), NewByDefault())
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertTrue(outcome["readback_verified"])
+        self.assertFalse(outcome["activation_prerequisites"]["required_fields_present"])
+
+    def test_update_ignores_volatile_provider_request_id_but_checks_real_state(self):
+        class RequestTaggedPages(Client):
+            def get_page(self, page_id):
+                item = super().get_page(page_id)
+                item["request_id"] = f"provider-request-{self.reads}"
+                return item
+
+        client = RequestTaggedPages(page())
+        outcome = execute(update_request(), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertEqual(outcome["write_attempts"], 1)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_update_timeout_records_recovered_receipt_without_claiming_causality(self):
+        client = Client(page())
+        client.raise_mutation = True
+        outcome = execute(update_request(), client)
+        self.assertEqual(outcome["status"], "persisted")
+        self.assertIs(outcome["update_receipt_recovered"], True)
+        self.assertEqual(client.calls.count("write"), 1)
+
+    def test_runner_persists_uncertain_receipt_before_abnormal_termination(self):
+        class AbruptWrite(Client):
+            def create(self, intended):
+                self.calls.append("write")
+                raise KeyboardInterrupt("simulated abrupt process interruption")
+
+        from scripts.agent_os_notion_lessons_write.runner import main
+
+        env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"],
+               "GITHUB_REF": CONTEXT["ref"],
+               "GITHUB_WORKFLOW_REF": WORKFLOW_REF,
+               "GITHUB_RUN_ATTEMPT": "1"}
+        with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", env, clear=True):
+            root = Path(folder)
+            (root / "event.json").write_text(json.dumps(event()))
+            with patch(
+                "scripts.agent_os_notion_lessons_write.live.LiveLessonsClient",
+                return_value=AbruptWrite(),
+            ), patch(
+                "scripts.agent_os_notion_lessons_write.runner.verify_current_request",
+                return_value=None,
+            ), self.assertRaises(KeyboardInterrupt):
+                main(["--phase", "execute", "--event", str(root / "event.json"),
+                      "--output", str(root / "result.json")])
+            receipt = json.loads((root / "result.json").read_text())
+            self.assertEqual(receipt["status"], "uncertain")
+            self.assertEqual(receipt["reason_code"], "execution-incomplete")
+            self.assertEqual(receipt["write_attempts"], 1)
+            self.assertFalse(receipt["readback_verified"])
 
 
 class IndependentPersistedWriteTests(unittest.TestCase):
