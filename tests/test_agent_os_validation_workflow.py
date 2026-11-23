@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,27 +70,25 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
-def test_validation_gate_preserves_pr_head_validation_without_path_exemptions():
-    content = WORKFLOW.read_text(encoding="utf-8")
-    pull_request = content.index("pull_request:")
-    push = content.index("push:")
-    trigger_block = content[pull_request:push]
-    assert "main" in trigger_block
-    assert "synchronize" in trigger_block
-    assert "paths:" not in trigger_block
-    assert "paths-ignore:" not in trigger_block
+@pytest.fixture(scope="module")
+def validation_triggers():
+    # BaseLoader preserves the GitHub Actions 'on' key, not YAML 1.1 True.
+    workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert isinstance(workflow.get("on"), dict), "Validation workflow is missing its trigger map"
+    return workflow["on"]
 
 
-def test_validation_gate_validates_every_canonical_main_push_without_path_exemptions():
-    content = WORKFLOW.read_text(encoding="utf-8")
-    push = content.index("push:")
-    workflow_dispatch = content.index("workflow_dispatch:")
-    trigger_block = content[push:workflow_dispatch]
+def test_validation_gate_preserves_pr_head_validation_without_path_exemptions(validation_triggers):
+    trigger = validation_triggers["pull_request"]
+    assert "main" in trigger["branches"]
+    assert "synchronize" in trigger["types"]
+    assert not {"paths", "paths-ignore"}.intersection(trigger)
 
-    assert "branches:" in trigger_block
-    assert re.search(r"(?m)^\s*- main\s*$", trigger_block)
-    assert "paths:" not in trigger_block
-    assert "paths-ignore:" not in trigger_block
+
+def test_validation_gate_validates_every_canonical_main_push_without_path_exemptions(validation_triggers):
+    trigger = validation_triggers["push"]
+    assert "main" in trigger["branches"]
+    assert not {"paths", "paths-ignore"}.intersection(trigger)
 
 
 def test_validation_gate_dispatch_supports_diagnostic_and_exact_head_candidate_modes():
@@ -341,7 +340,6 @@ import subprocess  # noqa: E402
 import sys  # noqa: E402
 import textwrap  # noqa: E402
 
-import yaml  # noqa: E402
 
 _PPC_LOCK = "08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json"
 _TEACHER_LOCK = "08_Tooling/teacher-os-web/package-lock.json"
