@@ -99,22 +99,34 @@ def active_decision_for(
     *,
     requirement_id: str,
     role: str,
-    slot: int = 0,
+    slot: int | str = 0,
 ) -> dict[str, Any] | None:
     """Latest active decision for a (requirement, role, slot) triple.
 
     Returns None when absent — never an exception, never a fabricated
     default.
     """
+    from instructional_workflow_contracts.teacher_visual_decision import (
+        canonical_decision_slot_id,
+    )
+
+    canonical_slot = canonical_decision_slot_id(slot)
+    if canonical_slot is None:
+        return None
     matches = [
         d
         for d in decisions
         if d.get("requirement_id") == requirement_id
         and d.get("role") == role
-        and d.get("slot") == slot
+        and canonical_decision_slot_id(d.get("slot")) == canonical_slot
         and d.get("status") == "active"
     ]
     if not matches:
         return None
-    matches.sort(key=lambda d: str(d.get("decided_at", "")))
-    return dict(matches[-1])
+    latest_at = max(str(d.get("decided_at", "")) for d in matches)
+    latest = [d for d in matches if str(d.get("decided_at", "")) == latest_at]
+    if any(d != latest[0] for d in latest[1:]):
+        # Distinct decisions at the same latest timestamp cannot be ordered
+        # safely by input list order, even across integer/string slot aliases.
+        return None
+    return dict(latest[0])

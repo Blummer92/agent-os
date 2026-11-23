@@ -33,6 +33,7 @@ FIXTURES = ROOT / "tests" / "fixtures" / "instructional_workflow_contracts"
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+SHA_D = "d" * 64
 
 
 def _decision(**overrides):
@@ -316,17 +317,155 @@ def _fixture(name):
 
 
 def _two_candidates():
+    """Distinct genuinely valid assets with matching manifest and Drive evidence."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_idempotency_key, artifact_manifest_source_fingerprint,
+        validate_artifact_manifest,
+    )
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+
     c1 = _fixture("valid_visual_asset_compatibility_v2.json")
     c2 = copy.deepcopy(c1)
-    c2["compatibility_evidence"]["asset_reference"]["asset_id"] = "asset-2"
-    c2["compatibility_evidence"]["asset_reference"]["stable_ref"] = "asset-ref-2"
-    c2["compatibility_evidence"]["asset_reference"]["content_fingerprint"] = SHA_B
-    c2["compatibility_evidence"]["library_reference"] = {
-        "page_id": "page-2",
-        "drive_file_id": "file-2",
-    }
-    c2["compatibility_id"] = "compat-2"
+    manifest = c2["artifact_manifest"]
+    asset = manifest["assets"][0]
+    asset.update({
+        "asset_id": "asset-2",
+        "stable_ref": "asset-ref-2",
+        "content_fingerprint": SHA_B,
+        "disposition": "alternate",
+        "duplicate_relationship": "exact-duplicate",
+        "canonical_asset_ref": "asset-ref-1",
+    })
+    manifest["identity"]["manifest_id"] = "manifest-2"
+    manifest["custom_properties"]["manifest_id"] = "manifest-2"
+    external = manifest["external_identity"]
+    external["file_id"] = "file-2"
+    external["exact_reference"] = "drive:file-2"
+    external["web_view_link"] = "https://example.invalid/file-2"
+    key = artifact_manifest_idempotency_key(manifest)
+    manifest["operation"]["idempotency_key"] = key
+    manifest["custom_properties"]["idempotency_key"] = key
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(manifest)
+    valid = validate_artifact_manifest(manifest)
+    assert valid.status is ValidationStatus.VALID, valid.reason_codes
+    assert valid.record is not None
+
+    evidence = c2["compatibility_evidence"]
+    evidence["asset_reference"].update({
+        "asset_id": "asset-2",
+        "stable_ref": "asset-ref-2",
+        "content_fingerprint": SHA_B,
+    })
+    evidence["library_reference"] = {"page_id": "page-2", "drive_file_id": "file-2"}
+    evidence["manifest_reference"].update({
+        "manifest_id": "manifest-2",
+        "external_file_id": "file-2",
+        "fingerprint": valid.record.fingerprint,
+    })
+    evidence["freshness"]["manifest_fingerprint"] = valid.record.fingerprint
+    c2["library_record"]["drive_file_id"] = "file-2"
+    c2["library_record"]["page_id"] = "page-2"
+    # Compatibility identity is derived by the validator; the envelope has no such field.
+    checked = validate_visual_asset_compatibility_evidence(c2)
+    assert checked.status is ValidationStatus.VALID, checked.reason_codes
+    assert checked.record is not None
+    assert checked.record.to_dict()["classification"] == "eligible"
     return [c1, c2]
+
+
+def _role_incompatible_candidate(template):
+    """Third candidate: eligible, but its role types / orientation do not fit
+    the fixture requirement's worked-example role (QA probe L, #3938 F1)."""
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.artifact_manifest import (
+        artifact_manifest_idempotency_key, artifact_manifest_source_fingerprint,
+        validate_artifact_manifest,
+    )
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+
+    cand = copy.deepcopy(template)
+    manifest = cand["artifact_manifest"]
+    asset = manifest["assets"][0]
+    asset.update({
+        "asset_id": "asset-3",
+        "stable_ref": "asset-ref-3",
+        "content_fingerprint": SHA_D,
+        "disposition": "alternate",
+        "duplicate_relationship": "exact-duplicate",
+        "canonical_asset_ref": "asset-ref-1",
+    })
+    manifest["identity"]["manifest_id"] = "manifest-3"
+    manifest["custom_properties"]["manifest_id"] = "manifest-3"
+    external = manifest["external_identity"]
+    external["file_id"] = "file-3"
+    external["exact_reference"] = "drive:file-3"
+    external["web_view_link"] = "https://example.invalid/file-3"
+    key = artifact_manifest_idempotency_key(manifest)
+    manifest["operation"]["idempotency_key"] = key
+    manifest["custom_properties"]["idempotency_key"] = key
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(manifest)
+    valid = validate_artifact_manifest(manifest)
+    assert valid.status is ValidationStatus.VALID, valid.reason_codes
+
+    evidence = cand["compatibility_evidence"]
+    evidence["asset_reference"].update({
+        "asset_id": "asset-3",
+        "stable_ref": "asset-ref-3",
+        "content_fingerprint": SHA_D,
+    })
+    evidence["library_reference"] = {"page_id": "page-3", "drive_file_id": "file-3"}
+    evidence["manifest_reference"].update({
+        "manifest_id": "manifest-3",
+        "external_file_id": "file-3",
+        "fingerprint": valid.record.fingerprint,
+    })
+    evidence["freshness"]["manifest_fingerprint"] = valid.record.fingerprint
+    evidence["purpose"]["role_types"] = ["comparison"]
+    evidence["approved_use"]["role_types"] = ["comparison"]
+    evidence["orientation"]["orientation"] = "square"
+    cand["library_record"]["drive_file_id"] = "file-3"
+    cand["library_record"]["page_id"] = "page-3"
+    checked = validate_visual_asset_compatibility_evidence(cand)
+    assert checked.status is ValidationStatus.VALID, checked.reason_codes
+    return cand
+
+
+def test_both_fixture_assets_are_admitted_by_governed_filter():
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.visual_asset_candidates import (
+        V2_CONTRACT_ID, filter_approved_visual_candidates,
+    )
+    from instructional_workflow_contracts.visual_needs import plan_visual_needs
+
+    candidates = _two_candidates()
+    needs = plan_visual_needs(_fixture("valid_material_requirement_v2.json"))
+    assert needs.status is ValidationStatus.VALID
+    filtered = filter_approved_visual_candidates(
+        needs, candidates,
+        source_revision="visual-library-snapshot-v2", contract_version=V2_CONTRACT_ID,
+    )
+    assert filtered.status is ValidationStatus.VALID, filtered.reason_codes
+    assert filtered.record is not None
+    payload = filtered.record.to_dict()
+    assert payload["candidate_count"] == 2
+    assert len(payload["eligible"]) == 2
+    assert payload["rejected"] == []
+
+
+def test_mismatched_manifest_asset_is_not_valid_teacher_evidence():
+    from instructional_workflow_contracts import ValidationStatus
+    from instructional_workflow_contracts.visual_asset_compatibility import (
+        validate_visual_asset_compatibility_evidence,
+    )
+    candidate = _fixture("valid_visual_asset_compatibility_v2.json")
+    candidate["compatibility_evidence"]["asset_reference"]["asset_id"] = "asset-2"
+    rejected = validate_visual_asset_compatibility_evidence(candidate)
+    assert rejected.status is not ValidationStatus.VALID
 
 
 def _plan(candidates, teacher_decisions=()):
@@ -384,7 +523,7 @@ def test_reuse_path_honors_valid_teacher_selection():
         candidates, role, "asset-2", SHA_B, overridden="asset-1"
     )
     plan = _plan(candidates, [decision])
-    assert plan.outcome == "visuals-ready"
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
     assert plan.selected_asset_ids == ("asset-2",)
     assert plan.teacher_decision_outcomes[0]["honored"] is True
     assert plan.teacher_decision_outcomes[0]["decision_id"] == "dec-teacher-1"
@@ -408,10 +547,37 @@ def test_reuse_path_blocks_invalid_selection_with_reason():
     assert outcome["detail"]
 
 
+def test_materialize_rejected_selection_is_not_recorded_as_selected():
+    # QA F1 (#3938): a teacher decision that passes _apply validity but is
+    # rejected by the materialize role/set recheck must not remain listed as
+    # selected, and its outcome must not read honored.
+    candidates = _two_candidates()
+    candidates.append(_role_incompatible_candidate(candidates[0]))
+    role = _role_id(_plan(candidates))
+    decision = _valid_decision_for(candidates, role, "asset-3", SHA_D, overridden="asset-1")
+    decision = dict(
+        decision,
+        selected_asset=dict(decision["selected_asset"], provider_file_id="file-3"),
+    )
+
+    plan = _plan(candidates, [decision])
+    assert plan.outcome == "teacher-decision-invalidated"
+    assert plan.teacher_decision_block_reason == "teacher-selected-role-incompatible"
+    assert plan.final_production_blocked is True
+    # The rejected selection stands nowhere on the plan.
+    assert plan.selected_asset_ids == ()
+    assert plan.teacher_selected_role_slot_bindings == ()
+    assert plan.effective_role_assignments == ()
+    outcome = plan.teacher_decision_outcomes[0]
+    assert outcome["honored"] is False
+    assert outcome["reason_code"] == "teacher-selected-role-incompatible"
+    assert outcome["asset_id"] == "asset-3"
+
+
 def test_reuse_path_leaves_role_unresolved_without_decision():
     candidates = _two_candidates()
     plan = _plan(candidates)
-    assert plan.outcome == "visuals-ready"
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
     assert plan.teacher_decision_outcomes == ()
     assert plan.selected_asset_ids == ("asset-1",)
 
@@ -431,3 +597,242 @@ def test_teacher_selection_outside_eligible_set_fails_closed():
     outcome = plan.teacher_decision_outcomes[0]
     assert outcome["honored"] is False
     assert outcome["reason_code"] == REASON_ASSET_NO_LONGER_ELIGIBLE
+
+
+# #3251 — exact consumer role/slot binding, alongside #3252 persistence.
+def _resolve_slot_choices(bindings, decisions):
+    from instructional_materials_coach.visual_reuse import _apply_teacher_decisions
+
+    assignments = [
+        {"role_id": role, "slot_id": slot,
+         "selected_candidate": {"asset_reference": {"asset_id": asset}}}
+        for role, slot, asset in bindings
+    ]
+    identity = _content_identities()["asset-a"]
+    return _apply_teacher_decisions(
+        {"required_role_assignments": assignments},
+        tuple(decisions),
+        candidate_set_fingerprint=SHA_C,
+        requirement_id="req-1",
+        eligible_asset_ids={"asset-a", "asset-b"},
+        content_identities={"asset-a": identity, "asset-b": identity},
+        source_revision="visual-library-snapshot-v2",
+    )
+
+
+def _slot_decision(slot=0, asset="asset-b", status="active", decision_id="dec-001"):
+    raw = _decision(slot=slot, status=status, decision_id=decision_id)
+    raw["selected_asset"]["asset_id"] = asset
+    return TeacherVisualDecisionRecord.from_dict(raw).to_dict()
+
+
+def test_named_slot_teacher_decision_contract_and_persistence(tmp_path):
+    from instructional_materials_coach.teacher_decisions import (
+        active_decision_for, load_teacher_decisions, write_teacher_decision,
+    )
+    record = _slot_decision("page-1")
+    assert record["slot"] == "page-1"
+    write_teacher_decision(record, tmp_path)
+    loaded = load_teacher_decisions(tmp_path, requirement_id="req-1")
+    assert len(loaded) == 1 and loaded[0]["slot"] == "page-1"
+    assert active_decision_for(loaded, requirement_id="req-1",
+                               role="hook", slot="page-1") == record
+    assert active_decision_for(loaded, requirement_id="req-1",
+                               role="hook", slot=0) is None
+
+
+def test_legacy_implicit_slot_lookup_matches_literal_zero():
+    from instructional_materials_coach.teacher_decisions import active_decision_for
+    record = _slot_decision(slot=0)
+    assert active_decision_for([record], requirement_id="req-1",
+                               role="hook", slot="0") == record
+
+
+def test_override_preserves_other_slot_and_binding_evidence():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")],
+        [_slot_decision(slot=0, asset="asset-b")],
+    )
+    assert blocked is None
+    assert ids == ("asset-b", "asset-a")
+    assert [(b["slot_id"], b["asset_id"]) for b in bindings] == [
+        ("0", "asset-b"), ("1", "asset-a"),
+    ]
+    assert outcomes[0]["slot_id"] == "0" and outcomes[0]["honored"]
+
+
+def test_integer_slot_is_never_named_slot_ordinal():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "page-1", "asset-a")], [_slot_decision(slot=0)]
+    )
+    assert blocked == "slot-binding-missing"
+    assert ids == ("asset-a",)
+    assert not outcomes[0]["honored"]
+
+
+def test_nonexistent_slot_cannot_authorize():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [_slot_decision(slot=99)]
+    )
+    assert blocked == "slot-binding-missing"
+    assert not outcomes[0]["honored"] and "asset-b" not in ids
+
+
+def test_named_slot_decision_exactly_authorizes_named_slot():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "page-1", "asset-a")], [_slot_decision(slot="page-1")]
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert bindings[0]["slot_id"] == "page-1"
+    assert outcomes[0]["honored"]
+
+
+def test_superseded_record_does_not_override_active():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")],
+        [_slot_decision(), _slot_decision(asset="asset-a",
+                                         status="superseded", decision_id="old")],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [o["honored"] for o in outcomes] == [True, False]
+    assert outcomes[1]["reason_code"] == "superseded"
+
+
+
+
+def test_newer_active_record_wins_over_historical_active_record():
+    old = _slot_decision(slot=0, asset="asset-a", decision_id="old")
+    newer = _slot_decision(slot=0, asset="asset-b", decision_id="new")
+    newer["decided_at"] = "2026-10-03T13:00:00.000Z"
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [newer, old],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [(o["decision_id"], o["reason_code"]) for o in outcomes] == [
+        ("new", None), ("old", "superseded-by-later"),
+    ]
+    assert bindings == ({"role_id": "hook", "slot_id": "0", "asset_id": "asset-b"},)
+
+
+def test_invalid_newest_decision_does_not_resurrect_older_active():
+    old = _slot_decision(slot=0, asset="asset-a", decision_id="old")
+    newer = _slot_decision(slot=0, asset="asset-b", decision_id="new")
+    newer["decided_at"] = "2026-10-03T13:00:00.000Z"
+    newer["candidate_set_fingerprint"] = SHA_B
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [old, newer],
+    )
+    assert blocked == REASON_CANDIDATE_SET_CHANGED
+    assert ids == () and bindings == ()
+    assert all(not outcome["honored"] for outcome in outcomes)
+
+
+def test_teacher_override_is_used_by_generation_placement_and_cli():
+    from instructional_materials_coach.generation_context import _visual_context
+    from instructional_materials_coach.connected_visual_placement import (
+        plan_visual_placement_bindings,
+    )
+    from instructional_materials_coach.cli import (
+        _selected_visuals_for_key,
+        _selected_asset_drive_files,
+        _selected_asset_content_identities,
+    )
+
+    candidates = _two_candidates()
+    baseline = _plan(candidates)
+    role = _role_id(baseline)
+    decision = _valid_decision_for(candidates, role, "asset-2", SHA_B, "asset-1")
+    plan = _plan(candidates, [decision])
+    assert plan.outcome == "visuals-ready", getattr(plan, "teacher_decision_block_reason", None)
+    assert plan.selected_asset_ids == ("asset-2",)
+    bindings, assignment_json = _visual_context(plan)
+    assert len(bindings) == 1 and bindings[0] == (role, "0", "asset-2")
+    assignments = json.loads(assignment_json)
+    assert assignments[0]["selected_candidate"]["asset_reference"]["asset_id"] == "asset-2"
+    placements = plan_visual_placement_bindings(plan)
+    assert len(placements) == 1
+    assert placements[0].asset_id == "asset-2"
+    assert placements[0].drive_file_id == "file-2"
+    assert _selected_visuals_for_key(plan)[0]["asset_id"] == "asset-2"
+    assert _selected_asset_drive_files(plan) == {"asset-2": "file-2"}
+    assert _selected_asset_content_identities(plan)["asset-2"]["value"] == SHA_B
+    # The source proof remains the unchanged planner record.
+    assert baseline.cohesive_visual_plan_result.record.to_dict() == plan.cohesive_visual_plan_result.record.to_dict()
+
+
+def test_generation_context_without_teacher_choices_still_uses_planner():
+    from instructional_materials_coach.generation_context import _visual_context
+    baseline = _plan(_two_candidates())
+    bindings, _ = _visual_context(baseline)
+    assert len(bindings) == 1 and bindings[0][2] == "asset-1"
+
+def test_multiple_conflicting_active_records_fail_closed():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")],
+        [_slot_decision(), _slot_decision(asset="asset-a", decision_id="other")],
+    )
+    assert blocked == "conflicting-active-decisions"
+    assert not any(o["honored"] for o in outcomes)
+    assert "asset-b" not in ids
+
+
+def test_shared_asset_retains_two_slot_bindings():
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")],
+        [_slot_decision(slot=0), _slot_decision(slot=1, decision_id="next")],
+    )
+    assert blocked is None and ids == ("asset-b",)
+    assert [(b["slot_id"], b["asset_id"]) for b in bindings] == [
+        ("0", "asset-b"), ("1", "asset-b"),
+    ]
+
+
+def test_invalid_slot_choice_blocks_only_target_binding():
+    bad = _slot_decision(slot=0)
+    bad["candidate_set_fingerprint"] = SHA_B
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a"), ("hook", "1", "asset-a")], [bad]
+    )
+    assert blocked == "candidate-set-changed"
+    assert ids == ("asset-a",)  # sibling survives; no invalid substitution
+    assert [b["slot_id"] for b in bindings] == ["1"]
+
+
+@pytest.mark.parametrize("slot", [-1, True, "", "page 1", "page:1", "page.1", None])
+def test_decision_rejects_invalid_slot_names(slot):
+    with pytest.raises(ValueError):
+        TeacherVisualDecisionRecord.from_dict(_decision(slot=slot))
+
+
+
+def test_equal_time_conflicting_aliases_fail_closed_in_persistence():
+    from instructional_materials_coach.teacher_decisions import active_decision_for
+    a = _slot_decision(slot=0, asset="asset-a", decision_id="first")
+    b = _slot_decision(slot="0", asset="asset-b", decision_id="second")
+    assert a["decided_at"] == b["decided_at"]
+    assert active_decision_for([a, b], requirement_id="req-1", role="hook", slot=0) is None
+    assert active_decision_for([b, a], requirement_id="req-1", role="hook", slot="0") is None
+
+
+def test_direct_consumer_rejects_other_requirement_same_role_slot():
+    foreign = _slot_decision(slot=0, asset="asset-b")
+    foreign["requirement_id"] = "req-other"
+    ids, outcomes, blocked, bindings = _resolve_slot_choices(
+        [("hook", "0", "asset-a")], [foreign],
+    )
+    assert blocked == "requirement-binding-mismatch"
+    assert outcomes[0]["honored"] is False
+    assert "asset-b" not in ids
+
+
+def test_runtime_import_boundary_remains_public():
+    import ast
+    from pathlib import Path
+    import instructional_materials_coach.visual_reuse as module
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    assert not [
+        alias.name for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names if alias.name.startswith("_")
+    ]
+
