@@ -114,6 +114,11 @@ class Client:
             value["properties"]["Guardrail"]["rich_text"] = []
         return value
 
+    def reserve_create(self, request_id):
+        # Offline fake; dedicated reservation contract tests exercise atomic
+        # GitHub create-only references and cross-run contention separately.
+        assert request_id == REQUEST_ID
+
     def create(self, intended):
         self.calls.append("write")
         self.sent.append(deepcopy(intended))
