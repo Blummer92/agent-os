@@ -566,8 +566,25 @@ def _match_candidate(
     ):
         title = candidate.name.casefold()
         guidance = " ".join(candidate.use_when).casefold()
+        avoidance = " ".join(candidate.avoid_when).casefold()
         def whole(pattern: str, text: str) -> bool:
             return bool(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", text))
+
+        # Negative statements in use_when remain a blanket ambiguity stop.
+        # An explicit warning about readback in avoid_when also vetoes this
+        # specialized lexical match; generic keyword relevance and authority
+        # are distinct contracts and are not changed here.
+        negation = (
+            r"unrelated|irrelevant|nonapplicable|no|not|never|without|"
+            r"avoid|skip|reject(?:ed)?|"
+            r"prohibit(?:ed|ion)?|forbid(?:den)?|cannot|"
+            r"can.t|don.t|doesn.t|didn.t|shouldn.t|mustn.t|"
+            r"wouldn.t|couldn.t|won.t|isn.t|aren.t"
+        )
+        readback_warning = (
+            whole("readback|read.back|verif(?:y|ied|ication)", avoidance)
+            and whole(negation, avoidance)
+        )
 
         if (
             whole("notion", title)
@@ -577,14 +594,8 @@ def _match_candidate(
             and whole("readback|read.back|verif(?:y|ied|ication)", guidance)
             # Reject ambiguous/negative guidance, rather than promote a
             # lexical mention of readback to affirmative advice.
-            and not whole(
-                r"unrelated|irrelevant|nonapplicable|no|not|never|without|"
-                r"avoid|skip|reject(?:ed)?|"
-                r"prohibit(?:ed|ion)?|forbid(?:den)?|cannot|"
-                r"can.t|don.t|doesn.t|didn.t|shouldn.t|mustn.t|"
-                r"wouldn.t|couldn.t|won.t|isn.t|aren.t",
-                title + " " + guidance,
-            )
+            and not whole(negation, title + " " + guidance)
+            and not readback_warning
         ):
             return 2, ("notion-writer-readback-text-match",)
 
