@@ -53,6 +53,7 @@ def _kwargs(**overrides):
         review_state="clear",
         branch_freshness="current",
         mergeability="mergeable",
+        failed_repair_attempt_id="attempt-3280",
     )
     values.update(overrides)
     return values
@@ -202,7 +203,7 @@ def test_omitted_diagnostics_leave_admission_unchanged() -> None:
 
 
 def test_diagnostic_gating_precedes_ckr6_reentry_but_not_the_zero_job_projection() -> None:
-    unconsumed = _activation(retry_reentry_outcome="not-material", mutation_admissible=False)
+    unconsumed = _activation(retry_reentry_outcome="unavailable-or-failed", mutation_admissible=False)
     record = evaluate_failed_repair_admission(
         **_kwargs(activation_result=unconsumed, diagnostics=_diag(attempted=(ACTIONS,)))
     )
@@ -283,6 +284,7 @@ def _call_registered_tool(arguments: dict[str, object]) -> dict[str, object]:
 def _json_arguments(attempted: list[str]) -> dict[str, object]:
     return {
         "activation_result": _activation(),
+        "failed_repair_attempt_id": "attempt-3280",
         "check_state": "red",
         "required_check_configuration_state": "current",
         "review_state": "clear",

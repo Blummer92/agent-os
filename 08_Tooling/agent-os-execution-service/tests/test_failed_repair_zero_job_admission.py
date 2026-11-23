@@ -50,6 +50,7 @@ def _kwargs(**overrides):
         review_state="clear",
         branch_freshness="current",
         mergeability="mergeable",
+        failed_repair_attempt_id="attempt-3277",
     )
     values.update(overrides)
     return values
@@ -84,7 +85,7 @@ def test_zero_job_evidence_skips_ckr6_reentry_even_when_lessons_unconsumed() -> 
     record = evaluate_failed_repair_admission(
         **_kwargs(
             activation_result=_activation(
-                retry_reentry_outcome="not-material", mutation_admissible=False
+                retry_reentry_outcome="unavailable-or-failed", mutation_admissible=False
             ),
             zero_job=_zero_job(Run(1, "action_required", 0)),
         )
@@ -205,8 +206,12 @@ def _call_registered_tool(arguments: dict[str, object]) -> dict[str, object]:
     result = asyncio.run(
         mcp_server.mcp.call_tool("admit_agent_os_failed_repair_tool", arguments)
     )
+    assert not getattr(result, "isError", False), "MCP returned an error result"
     contents = result.content if hasattr(result, "content") else result[0]
-    return json.loads(contents[0].text)
+    assert contents, "Expected a non-empty MCP response"
+    payload = json.loads(contents[0].text)
+    assert isinstance(payload, dict), "Expected a JSON object from MCP admission"
+    return payload
 
 
 def _json_arguments(runs: list[dict[str, object]], **zero_job_overrides):
@@ -220,6 +225,7 @@ def _json_arguments(runs: list[dict[str, object]], **zero_job_overrides):
     zero_job.update(zero_job_overrides)
     return {
         "activation_result": _activation(),
+        "failed_repair_attempt_id": "attempt-3277",
         "check_state": "red",
         "required_check_configuration_state": "current",
         "review_state": "clear",
@@ -266,3 +272,257 @@ def test_failed_repair_admission_is_a_non_test_consumer_of_the_classifier() -> N
     assert "zero_job_validation_recovery import" in source
     assert "project_zero_job_admission" in source
     assert "batch_merge_execution" not in source
+
+
+# --------------------------------------------------------------------------
+# #3772 cross-owner regression matrix (#3277 + #3280 + #2281 + CKR6).
+# These are admission projections only; no workflow or GitHub write is issued.
+# --------------------------------------------------------------------------
+
+from dataclasses import asdict
+from enum import Enum
+
+import pytest
+from mcp.server.mcpserver.exceptions import ToolError
+
+from agent_os_execution_service.failed_repair_admission import DiagnosticSurfaceEvidence
+from workflow_scheduler.execution.continuation import (
+    CONTINUATION_SCHEMA_VERSION,
+    ContinuationDecision,
+    ContinuationDisposition,
+)
+from workflow_scheduler.execution.recovery_progress import (
+    RecoverySemanticEvidence,
+    classify_recovery_progress,
+)
+
+ACTIONS = "github-actions-run-logs"
+ANNOTATIONS = "check-run-annotations"
+
+
+def _recovery_evidence(*, effective_blocker="lease.ambiguous"):
+    continuation = ContinuationDecision(
+        schema_version=CONTINUATION_SCHEMA_VERSION,
+        disposition=ContinuationDisposition.NEEDS_DECISION,
+        repository="Blummer92/agent-os",
+        issue_number=2281,
+        branch="agent/2281-failed-repair-continuation",
+        observed_base_sha=HEAD,
+        observed_head_sha=HEAD,
+        current_base_sha=HEAD,
+        current_head_sha=HEAD,
+        invocation_id="invocation-2281",
+        execution_id="execution-2281",
+        candidate_identity="candidate:2281",
+        checkpoint_lineage_identity="checkpoint:2281",
+        authorization_identity="authorization:2281",
+        executor_identity="governed-runner",
+        scope_identity="scope:2281",
+        resume_plan_id="resume-plan:2281",
+        resume_point="focused-tests-passed",
+        lease_identity="lease:2281",
+        lease_holder_identity=None,
+        lease_generation=3,
+        reason_codes=("lease.ambiguous",),
+        recommended_action="manual recovery",
+    )
+    return RecoverySemanticEvidence(
+        continuation=continuation,
+        recovery_action="reacquire-current-evidence",
+        effective_blocker=effective_blocker,
+        route_decision_id="route:same",
+        environment_evidence_id="environment:same",
+    )
+
+
+def _diagnostics(*, exhausted=False):
+    return DiagnosticSurfaceEvidence(
+        diagnostics_actionable=False,
+        authorized_surfaces=(ACTIONS, ANNOTATIONS),
+        attempted_surfaces=(ACTIONS, ANNOTATIONS) if exhausted else (ACTIONS,),
+    )
+
+
+def _wire_value(value):
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "__dataclass_fields__"):
+        return _wire_value(asdict(value))
+    if isinstance(value, dict):
+        return {key: _wire_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_wire_value(item) for item in value]
+    return value
+
+
+def test_zero_job_head_move_precedes_exhausted_budget():
+    record = evaluate_failed_repair_admission(
+        **_kwargs(
+            zero_job=_zero_job(
+                Run(1, "action_required", 0),
+                current_head_sha=MOVED,
+                recovery_attempts_used=2,
+            )
+        )
+    )
+    assert record.reason_codes[0] == "zero-job-evidence.head-moved"
+    assert "zero-job-recovery.attempts-exhausted" not in record.reason_codes
+    assert record.next_action == "reacquire-current-head-and-exact-head-validation-evidence"
+    assert record.zero_job_recovery is None
+    assert record.bounded_continuation_admitted is False
+    assert record.mutation_admissible is False
+
+
+def test_bounded_zero_job_redispatch_preserves_stalled_recovery_signal():
+    prior = _recovery_evidence()
+    first = classify_recovery_progress(prior, prior=prior)
+    payload = admit_agent_os_failed_repair(
+        **_kwargs(
+            zero_job=_zero_job(Run(1, "action_required", 0)),
+            current=prior,
+            prior=prior,
+            prior_transition_fingerprint=first.transition_fingerprint,
+        )
+    )
+    assert payload["mutation_admissible"] is False
+    assert payload["bounded_continuation_admitted"] is True
+    assert payload["next_action"] == "reinvoke-governed-exact-head-validation"
+    assert "recovery-stalled-repeated-equivalent-transition" in payload["reason_codes"]
+    assert payload["agent_os_continuation"]["stalled"] is True
+    assert payload["agent_os_continuation"]["execution_authorized"] is False
+
+
+def test_zero_job_redispatch_preserves_exhausted_surface_blocker():
+    record = evaluate_failed_repair_admission(
+        **_kwargs(
+            zero_job=_zero_job(Run(1, "action_required", 0)),
+            diagnostics=_diagnostics(exhausted=True),
+        )
+    )
+    assert record.next_action == "reinvoke-governed-exact-head-validation"
+    assert record.bounded_continuation_admitted is True
+    assert record.mutation_admissible is False
+    assert record.diagnostic_blocker is not None
+    assert record.diagnostic_blocker.kind == "BLOCKED_DIAGNOSTIC_SURFACE"
+    assert "diagnostic-surface-exhausted" in record.reason_codes
+    assert record.github_writes_authorized is False
+    assert record.merge_authorized is False
+
+
+def test_zero_job_exhaustion_cannot_be_reopened_by_alternate_diagnostics():
+    record = evaluate_failed_repair_admission(
+        **_kwargs(
+            zero_job=_zero_job(
+                Run(1, "action_required", 0), recovery_attempts_used=2
+            ),
+            diagnostics=_diagnostics(),
+        )
+    )
+    assert "zero-job-recovery.attempts-exhausted" in record.reason_codes
+    assert record.next_diagnostic_surface == ANNOTATIONS
+    assert record.next_action == "route-zero-job-recovery-exhaustion-to-canonical-owner"
+    assert record.bounded_continuation_admitted is False
+    assert record.mutation_admissible is False
+
+
+def test_zero_job_moved_head_cannot_be_reopened_by_alternate_diagnostics():
+    record = evaluate_failed_repair_admission(
+        **_kwargs(
+            zero_job=_zero_job(
+                Run(1, "action_required", 0), current_head_sha=MOVED
+            ),
+            diagnostics=_diagnostics(),
+        )
+    )
+    assert record.reason_codes[0] == "zero-job-evidence.head-moved"
+    assert record.next_diagnostic_surface == ANNOTATIONS
+    assert record.bounded_continuation_admitted is False
+    assert record.mutation_admissible is False
+
+
+def test_executed_failure_still_obeys_recovery_stall_gate():
+    prior = _recovery_evidence()
+    first = classify_recovery_progress(prior, prior=prior)
+    payload = admit_agent_os_failed_repair(
+        **_kwargs(
+            zero_job=_zero_job(Run(1, "failure", 5)),
+            current=prior,
+            prior=prior,
+            prior_transition_fingerprint=first.transition_fingerprint,
+        )
+    )
+    assert payload["mutation_admissible"] is False
+    assert payload["bounded_continuation_admitted"] is False
+    assert payload["agent_os_continuation"]["blocked"] is True
+    assert payload["agent_os_continuation"]["stalled"] is True
+
+
+def test_zero_job_bounded_redispatch_cannot_admit_stale_attempt():
+    record = evaluate_failed_repair_admission(
+        **_kwargs(
+            failed_repair_attempt_id="wrong-attempt",
+            zero_job=_zero_job(Run(1, "action_required", 0)),
+        )
+    )
+    assert "retry-outcome-bound-to-different-attempt" in record.reason_codes
+    assert record.mutation_admissible is False
+    assert record.bounded_continuation_admitted is True
+    assert record.next_action == "reinvoke-governed-exact-head-validation"
+
+
+def test_registered_mcp_wire_composes_zero_job_recovery_diagnostics_and_ckr6():
+    prior = _recovery_evidence()
+    first = classify_recovery_progress(prior, prior=prior)
+    arguments = _json_arguments(
+        [{"run_id": 1, "conclusion": "action_required", "job_count": 0}]
+    )
+    arguments.update(
+        diagnostics={
+            "diagnostics_actionable": False,
+            "authorized_surfaces": [ACTIONS, ANNOTATIONS],
+            "attempted_surfaces": [ACTIONS, ANNOTATIONS],
+        },
+        current=_wire_value(prior),
+        prior=_wire_value(prior),
+        prior_transition_fingerprint=first.transition_fingerprint,
+    )
+    payload = _call_registered_tool(arguments)
+    assert payload["mutation_admissible"] is False
+    assert payload["next_action"] == "reinvoke-governed-exact-head-validation"
+    assert payload["diagnostic_blocker"]["kind"] == "BLOCKED_DIAGNOSTIC_SURFACE"
+    assert "recovery-stalled-repeated-equivalent-transition" in payload["reason_codes"]
+    assert payload["agent_os_continuation"]["stalled"] is True
+    assert payload["agent_os_continuation"]["github_writes_authorized"] is False
+
+
+def test_registered_mcp_wire_stale_attempt_stays_non_admissible_with_zero_job():
+    arguments = _json_arguments(
+        [{"run_id": 1, "conclusion": "action_required", "job_count": 0}]
+    )
+    arguments["failed_repair_attempt_id"] = "stale-attempt"
+    payload = _call_registered_tool(arguments)
+    assert payload["mutation_admissible"] is False
+    assert "retry-outcome-bound-to-different-attempt" in payload["reason_codes"]
+    assert payload["agent_os_continuation"]["execution_authorized"] is False
+
+
+@pytest.mark.parametrize(
+    "invalid_run",
+    [
+        {"run_id": 1, "conclusion": "action_required", "job_count": -1},
+        {"run_id": 1, "conclusion": "action_required", "job_count": "invalid"},
+        {"run_id": 0, "conclusion": "action_required", "job_count": 0},
+    ],
+)
+def test_registered_mcp_wire_rejects_invalid_nested_zero_job_evidence(invalid_run):
+    arguments = _json_arguments([invalid_run])
+    try:
+        result = asyncio.run(
+            mcp_server.mcp.call_tool("admit_agent_os_failed_repair_tool", arguments)
+        )
+    except ToolError:
+        return
+    assert getattr(result, "isError", False), (
+        "Malformed nested zero-job evidence cannot be interpreted as an admitting "
+        "or redispatch-authorizing MCP success response"
+    )

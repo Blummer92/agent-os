@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from agent_memory_context_manager import RetryReentryOutcome
 from scripts.agent_os_issue_acceptance.validation_failure_classifier import (
     ValidationFailureClassification,
     ValidationFailureEvidence,
@@ -42,6 +43,14 @@ _STALE_HEAD_DISPOSITIONS = frozenset(
 
 # PR_REGRESSION is deliberately absent: it keeps ordinary authorized repair and
 # carries the classifier's own focused -> exact-head aggregate ladder.
+# Re-entry outcomes the canonical retry boundary can admit: the lessons were
+# consumed, or the repair is genuinely not lesson-material (failed-repair-lesson-
+# reentry.md steps 3-4). `unavailable-or-failed` never admits. Derived from the
+# canonical enum so this module keeps no second outcome vocabulary.
+_ADMITTING_RETRY_OUTCOMES = frozenset(
+    {RetryReentryOutcome.CONSUMED.value, RetryReentryOutcome.NOT_MATERIAL.value}
+)
+
 _FAILURE_GATE_ACTIONS = {
     ValidationFailureClassification.INHERITED_MAIN_FAILURE: "report-inherited-main-failure-blocker",
     ValidationFailureClassification.CI_INFRASTRUCTURE_CONFIGURATION_FAILURE: "stop-at-ci-infrastructure-authorization-boundary",
@@ -130,6 +139,7 @@ def evaluate_failed_repair_admission(
     diagnostics: DiagnosticSurfaceEvidence | None = None,
     validation_head: ValidationSupersessionEvidence | None = None,
     validation_failure: ValidationFailureEvidence | None = None,
+    failed_repair_attempt_id: str | None = None,
 ) -> FailedRepairAdmissionRecord:
     """Gate the next repair mutation on retry-specific CKR6 and separated diagnostics.
 
@@ -184,8 +194,18 @@ def evaluate_failed_repair_admission(
     main failures, CI infrastructure/configuration failures and insufficient
     evidence make repair inadmissible and route to their own explicit action.
     If both are supplied the failure evidence must bind the current head.
+
+    When ``failed_repair_attempt_id`` is supplied it names the exact failed
+    attempt the next mutation is for, and the activation result must have been
+    produced for that same attempt: an outcome recorded for an earlier attempt
+    never satisfies a later one (failed-repair-lesson-reentry.md). The MCP
+    facade requires it; this pure evaluator treats ``None`` as "not asserted".
+    The re-entry itself is satisfied by the canonical boundary: a ``consumed`` or
+    ``not-material`` outcome that the activation boundary also marked admissible.
     """
     attempt_id = _text(activation_result.get("attempt_id"), "attempt_id")
+    if failed_repair_attempt_id is not None:
+        _text(failed_repair_attempt_id, "failed_repair_attempt_id")
     retry_reentry_outcome = _text(
         activation_result.get("retry_reentry_outcome"), "retry_reentry_outcome"
     )
@@ -255,7 +275,12 @@ def evaluate_failed_repair_admission(
             recovery_stalled = True
         # INITIAL and PROGRESSED add no recovery gating: the first observation
         # and genuine semantic movement continue through existing diagnostics.
-    if retry_reentry_outcome != "consumed" or not activation_mutation_admissible:
+    if failed_repair_attempt_id is not None and failed_repair_attempt_id != attempt_id:
+        reasons.append("retry-outcome-bound-to-different-attempt")
+    if (
+        retry_reentry_outcome not in _ADMITTING_RETRY_OUTCOMES
+        or not activation_mutation_admissible
+    ):
         reasons.append("retry-specific-lessons-not-consumed")
     if required_check_configuration_state in {"unavailable", "unknown"}:
         reasons.append("required-check-configuration-unresolved")
@@ -302,7 +327,10 @@ def evaluate_failed_repair_admission(
         elif next_diagnostic_surface is not None:
             next_action = "diagnose-via-authorized-alternate-surface"
             bounded_continuation_admitted = True
-        elif "retry-specific-lessons-not-consumed" in reasons:
+        elif (
+            "retry-specific-lessons-not-consumed" in reasons
+            or "retry-outcome-bound-to-different-attempt" in reasons
+        ):
             next_action = "reenter-ckr6-for-exact-failed-attempt"
         elif "required-check-configuration-drift" in reasons:
             next_action = "reconcile-required-check-configuration-before-code-repair"
