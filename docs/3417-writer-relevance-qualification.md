@@ -24,3 +24,24 @@ Not in this PR: catalog auto-generation, a new Notion schema or capability prope
 - Positive selections must carry a distinct canonical contextual basis to qualify; generic `keyword-overlap` and `ecosystem-capability-match` alone return `positive-relevance-basis-unverified`. A positive hit remains counted separately from contextual qualification. All negative matches remain blockers.
 - The pytest CKR2 import path is owned by the writer test package's `conftest.py` rather than the individual relevance test module. Actual source package installation, not mock selectors, is required for repository CI.
 - Existing independent CKR6 manual-review decisions and Notion write/activation restrictions are unchanged.
+
+## Notion write durability and lost-response recovery (2026-11-23)
+
+This PR also hardens the existing **owner-admitted** live writer. A successful Notion POST/PATCH and a successfully received HTTP response are different events: the remote write may commit before the response is lost. A timeout is never permission to repeat a mutation.
+
+- Before create: verify the fixed data-source binding, live property schema/options and the absence of an exact-title entry; use the existing bounded one-page query with `has_more == false`.
+- Issue **at most one** POST/PATCH per admitted attempt. GitHub Actions serializes this destination and disallows rerun admission. No retries, fallback POSTs, or new writable fields are introduced.
+- When a create response is missing or malformed, perform **one bounded exact-title reconciliation**. The query must return exactly one valid canonical page in the expected data source. Never use its mere presence to claim success.
+- Fetch the recovered page directly, check all the reviewed properties, require the canonical parent and identity, then perform the existing **independent second read-only GET** with exactly matched lesson ID and revision before the runner returns success.
+- If a query is empty, incomplete, ambiguous, stale, or unavailable, or if either readback mismatches, return `uncertain` with `write_attempts=1`. **Do not issue a second write**. A later manually admitted attempt must reconcile current canonical state first.
+- `create_receipt_recovered=true` reports how the page identity was obtained; it does **not** claim that the current run caused the resulting state. The independent verifier explicitly reports `write_causality_established=false`.
+
+This protects state confirmation and prevents immediate automatic duplicate POSTs. It **cannot** establish exactly-once delivery across independent attempts during Notion eventual-consistency windows without a durable, provider-enforced idempotency key or other approved write identity. If an uncertain result remains, inspect the canonical Notion data source rather than mechanically resubmitting a create.
+
+The writer remains independent of the offline CKR2 relevance advisory. The new recovery path does not activate lessons, turn a review into write authority, or establish live lesson discoverability. The only successful run status after a write remains a result confirmed by the independent read-only observer.
+
+Focused regression command from repository root:
+
+```sh
+python -m pytest tests/agent_os_notion_lessons_write/test_writer.py tests/agent_os_notion_lessons_write/test_live.py -q
+```
