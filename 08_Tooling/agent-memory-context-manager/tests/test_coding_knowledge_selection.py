@@ -761,3 +761,61 @@ def test_gemini_casefold_collision_status_and_count():
     assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
     assert result.selected_count == MAX_SELECTED
     assert result.knowledge_refs == ("A", "a", "SS")
+
+
+def test_multiple_required_libraries_survive_three_candidate_cut():
+    req = request(library_hints=("hypothesis", "pydantic"))
+    values = (
+        candidate("a", library_name="hypothesis"),
+        candidate("b", library_name="hypothesis"),
+        candidate("c", library_name="hypothesis"),
+        candidate("z", library_name="pydantic"),
+    )
+    expected = select_coding_knowledge(req, values)
+    assert expected.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert expected.knowledge_refs == ("a", "b", "z")
+    for ordering in permutations(values):
+        assert select_coding_knowledge(req, ordering).to_json() == expected.to_json()
+
+
+def test_library_coverage_optimizes_all_three_slots():
+    req = request(library_hints=("alpha", "beta", "gamma"))
+    values = tuple(
+        candidate(ident, library_name=library)
+        for ident, library in (
+            ("a", "alpha"), ("b", "alpha"), ("c", "alpha"),
+            ("d", "beta"), ("e", "gamma"),
+        )
+    )
+    result = select_coding_knowledge(req, values)
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.knowledge_refs == ("a", "d", "e")
+
+
+def test_library_coverage_does_not_hide_stale_or_missing_provenance():
+    req = request(library_hints=("alpha", "beta"))
+    values = (
+        candidate("a", library_name="alpha"),
+        candidate("b", library_name="alpha"),
+        candidate("c", library_name="alpha"),
+        candidate("z", library_name="beta", currentness=KnowledgeCurrentness.STALE),
+    )
+    result = select_coding_knowledge(req, values)
+    assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+    assert result.reason_codes == ("stale-relevant-candidate",)
+    current = replace(values[-1], currentness=KnowledgeCurrentness.CURRENT,
+                      canonical_github_refs=())
+    result = select_coding_knowledge(req, (*values[:-1], current))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_library_coverage_never_crosses_relevance_buckets():
+    req = request(library_hints=("alpha", "beta"), capability_keywords=("validation",))
+    high = tuple(candidate(ident, library_name="alpha") for ident in ("a", "b", "c"))
+    low = candidate("z", library_name="other", capability_kind="validation",
+                    keywords=("validation",))
+    result = select_coding_knowledge(req, (*high, low))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.knowledge_refs == ("a", "b", "c")
+    assert result.reason_codes == ("required-library-uncovered",)
