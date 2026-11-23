@@ -1,0 +1,88 @@
+name: Agent OS AI Navigation Read-only Discovery
+
+# Local candidate, not published. Owner comment `/agent-os ai-navigation-discover` on a mission
+# issue runs the canonical #1237 locator read-only against the host-configured store root and
+# records a bounded receipt. It dispatches nothing, writes nothing to GitHub, uses no secret and
+# no Codespace. A GitHub-hosted runner has no durable checkpoint store, so until the owner
+# authorizes one the receipt reports `blocked` with a named reason (never a zero-match claim).
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-ai-navigation-discover-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Read-only AI Navigation handoff discovery
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && github.event.comment.body == '/agent-os ai-navigation-discover' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install the one dependency the canonical locator imports
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Admit owner comment through the existing ingress
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agent-os-ai-navigation"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-ai-navigation/transport.json"
+
+      - name: Run read-only discovery and record receipt
+        env:
+          AGENT_OS_CHECKPOINT_STORE_ROOT: ${{ vars.AGENT_OS_CHECKPOINT_STORE_ROOT }}
+          PYTHONPATH: 08_Tooling/agent-os-execution-service/src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          set -euo pipefail
+          python -m agent_os_execution_service.ai_navigation_actions_operation \
+            --transport "$RUNNER_TEMP/agent-os-ai-navigation/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --run-id "$GITHUB_RUN_ID" \
+            --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/agent-os-ai-navigation/receipt.json"
+
+      - name: Publish bounded receipt summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ai-navigation" / "receipt.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS AI Navigation read-only discovery\n\n")
+              if path.exists():
+                  receipt = json.loads(path.read_text(encoding="utf-8"))
+                  for key in ("status", "reason_codes", "matching_descriptor_count", "handoff_present",
+                              "receipt_digest", "run_id", "source_sha"):
+                      summary.write(f"{key}: `{receipt.get(key)}`\n\n")
+              else:
+                  summary.write("Receipt unavailable; request refused or not admitted.\n")
+          PY
+
+      - name: Publish bounded receipt evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-ai-navigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-ai-navigation/*.json
+          if-no-files-found: warn
+          retention-days: 7
