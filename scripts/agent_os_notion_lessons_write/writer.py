@@ -289,10 +289,22 @@ def execute(request: AdmittedRequest, client) -> dict:
             else:
                 page_id = written
         except Exception:
-            # Existing exact target can still be canonically read. A create
-            # without an exact returned identity stays uncertain; never retry.
             if page_id is None:
-                return result
+                # A create may have committed even when the response was
+                # lost. Never issue a second POST. Reconcile through the same
+                # bounded exact-title lookup and independently fetch that
+                # single canonical page. An absent, ambiguous or incomplete
+                # query stays uncertain; it is never evidence for retry.
+                try:
+                    recovered = _find_title(client, source_id, lesson)
+                    if recovered is None:
+                        return result
+                    page_id = _page(recovered, source_id)
+                except Exception:
+                    return result
+                # Page identity recovery confirms a candidate, not causality.
+                # Exact content and an independent second GET are still needed.
+                result["create_receipt_recovered"] = True
         result["page_id"] = page_id
         readback = client.get_page(page_id)
         _page(readback, source_id, page_id)
