@@ -5,14 +5,16 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-import urllib.request
 
-from tests.agent_os_notion_lessons_write.test_writer import Client, CONTEXT, PAGE_ID, REVISION, SOURCE_ID, event, page
-from scripts.agent_os_notion_lessons_write.admission import (
-    AdmittedRequest, OWNER_ID, REPOSITORY, REPOSITORY_ID, WriteBlocked,
+from tests.agent_os_notion_lessons_write.test_writer import (
+    CONTEXT, PAGE_ID, SOURCE_ID, event,
 )
-from scripts.agent_os_notion_lessons_write.catalog import REQUEST_ID, WRITABLE_TYPES
-from scripts.agent_os_notion_lessons_write.admission import verify_current_request
+from scripts.agent_os_notion_lessons_write.admission import (
+    AdmittedRequest, REPOSITORY, WriteBlocked, verify_current_request,
+)
+from scripts.agent_os_notion_lessons_write.catalog import (
+    LL93_METADATA_REQUEST_ID, REQUEST_ID,
+)
 from scripts.agent_os_notion_lessons_write.live import LiveLessonsClient, _NoRedirect
 from scripts.agent_os_notion_lessons_write.writer import properties
 
@@ -112,7 +114,6 @@ class LiveTests(unittest.TestCase):
         self.assertFalse(client._create_reserved)
 
     def test_lesson_id_query_is_bounded_to_reviewed_target(self):
-        from scripts.agent_os_notion_lessons_write.catalog import LL93_METADATA_REQUEST_ID
         client = self.client()
         with self.assertRaisesRegex(WriteBlocked, "finite-lesson-identity"):
             client.find_lesson(93)  # create entry has no Lesson ID target
