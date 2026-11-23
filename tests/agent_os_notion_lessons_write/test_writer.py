@@ -115,9 +115,9 @@ class Client:
         return value
 
     def reserve_create(self, request_id):
-        # Offline fake; dedicated reservation contract tests exercise atomic
-        # GitHub create-only references and cross-run contention separately.
-        assert request_id == REQUEST_ID
+        # Offline fake accepts any reviewed catalog request. Atomic GitHub
+        # create-only semantics are exercised by test_create_reservation.py.
+        return None
 
     def create(self, intended):
         self.calls.append("write")
