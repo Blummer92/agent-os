@@ -109,6 +109,9 @@ def test_case_a_complete_retrieval_selects_normally_and_reports_none(monkeypatch
         "normalized_rows": 3, "skipped_rows": 0, "candidate_count": 3,
         # PR-1: observational selection basis (mechanism only).
         "best_bucket_tied_identities": 3, "selection_basis": "generic-unique",
+        "miss_ecosystem_rows": 0, "miss_capability_rows": 0,
+        "miss_exact_library_rows": 0, "miss_target_path_rows": 0,
+        "miss_library_hints_not_named": 0,
     }]
 
 
@@ -169,6 +172,9 @@ def test_case_d_projection_rejects_hostile_values():
         "incomplete_reason_code": "none",
         "read_count": 0, "observed_rows": 0, "normalized_rows": 0,
         "skipped_rows": 0, "candidate_count": 4, "best_bucket_tied_identities": 0,
+        "miss_ecosystem_rows": 0, "miss_capability_rows": 0,
+        "miss_exact_library_rows": 0, "miss_target_path_rows": 0,
+        "miss_library_hints_not_named": 0,
     }
     assert bridge.retrieval_diagnostics_projection({}) is None
     assert bridge.retrieval_diagnostics_projection("not a mapping") is None  # type: ignore[arg-type]
