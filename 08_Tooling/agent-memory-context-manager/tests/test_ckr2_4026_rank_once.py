@@ -436,3 +436,33 @@ def test_rank_once_orders_case_distinct_ids_independently_of_provider_order(cut,
         assert prepolicy.candidate_count == 5
         assert prepolicy.selected_lesson_ids == expected_plan[:3]
     _assert_generic_abstention(result)
+
+
+def test_rank_once_multi_library_coverage_survives_bridge_and_preflight():
+    source = _normalized()
+    req = request(
+        task_reference="zzzz qqqq",
+        capability_keywords=("testing",),
+        library_hints=("alpha", "beta"),
+    )
+    # All four records receive the same exact-library bucket. A three-item
+    # lexical prefix would omit beta; coverage-aware ordering must retain it
+    # before the CKR11 five-identity cut, with no CKR2 contextual rescore.
+    records = tuple(
+        replace(
+            source[index],
+            lesson_id=ident,
+            library_name=library,
+            title="synthetic lesson",
+            what_to_do_next_time="synthetic guidance",
+            guardrail="synthetic guardrail",
+        )
+        for index, (ident, library) in enumerate((
+            ("a", "alpha"), ("b", "alpha"), ("c", "alpha"), ("z", "beta")
+        ))
+    )
+    bounded, order = bridge._bound_relevant_lessons_with_order(req, records)
+    assert order == ("a", "b", "z", "c")
+    result = consume_lesson_preflight(req, bounded, _ranked_order=order)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("a", "b", "z")
