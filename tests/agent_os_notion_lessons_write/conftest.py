@@ -2,14 +2,22 @@
 import sys
 from pathlib import Path
 
+# This conftest lives at <repo>/tests/agent_os_notion_lessons_write/.
 ROOT = Path(__file__).resolve().parents[2]
-# Centralized collection-time setup for the real CKR2/CKR11 source package.
-MEMORY_SRC = ROOT / "08_Tooling" / "agent-memory-context-manager" / "src"
-if str(MEMORY_SRC) not in sys.path:
-    sys.path.insert(0, str(MEMORY_SRC))
-for source in (ROOT / "src", ROOT / "08_Tooling/workflow-scheduler/src"):
-    if str(source) not in sys.path:
-        sys.path.insert(0, str(source))
+# Explicit canonical import priority. Inserting in a loop at index 0 without
+# reversing it would silently invert this order.
+SOURCE_PATHS = (
+    ROOT / "08_Tooling" / "agent-memory-context-manager" / "src",
+    ROOT / "src",
+    ROOT / "08_Tooling" / "workflow-scheduler" / "src",
+)
+for source in reversed(SOURCE_PATHS):
+    if source.is_dir():
+        entry = str(source)
+        # Also reposition an already-present PYTHONPATH entry, so priority
+        # does not depend on the launch environment or previous imports.
+        sys.path[:] = [existing for existing in sys.path if existing != entry]
+        sys.path.insert(0, entry)
 
 
 # Pytest 9 reports unittest subtests in the JUnit suite's "tests" total,
@@ -21,7 +29,16 @@ for source in (ROOT / "src", ROOT / "08_Tooling/workflow-scheduler/src"):
 from collections import defaultdict
 
 import pytest
-from _pytest.subtests import SubtestReport
+# pytest >=9 provides native subtests. pytest 8 can supply the separate
+# pytest-subtests plugin; without either implementation, no subtest report
+# will be silently manufactured (the JUnit regression will fail closed).
+try:
+    from _pytest.subtests import SubtestReport
+except ImportError:
+    try:
+        from pytest_subtests.plugin import SubTestReport as SubtestReport
+    except ImportError:
+        SubtestReport = None
 
 
 _SUBTEST_SEQUENCE = defaultdict(int)
@@ -29,7 +46,11 @@ _SUBTEST_SEQUENCE = defaultdict(int)
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
-    if not isinstance(report, SubtestReport):
+    if SubtestReport is None or not isinstance(report, SubtestReport):
+        return
+    # Currently native/plugin subtests emit only call-phase reports. Guard
+    # explicitly so future phase-bearing subtests cannot gain multiple IDs.
+    if report.when != "call":
         return
     parent_nodeid = report.nodeid
     _SUBTEST_SEQUENCE[parent_nodeid] += 1
