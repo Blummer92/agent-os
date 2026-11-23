@@ -32,6 +32,24 @@ def reviewed_entry(*, area="Governance", learning_type="Mistake", applies_to=())
     return {"target_lesson_id": None, "properties": fields}
 
 
+
+def structural_entry(*, target_lesson_id=None, include_narrative=True, meta=None):
+    """Minimal schema fixture ONLY; never use as evidence for CKR2 relevance.
+
+    Deliberately short values exercise catalog shape/types, not semantic hits.
+    Tests of select_coding_knowledge continue to use reviewed_entry().
+    """
+    fields = ({
+        "Lesson Learned": "T",
+        "What Happened": "H",
+        "What To Do Next Time": "N",
+        "Guardrail": "G",
+    } if include_narrative else {})
+    if meta:
+        fields.update(meta)
+    return {"target_lesson_id": target_lesson_id, "properties": fields}
+
+
 def check(entry, positives, negatives):
     with patch.object(catalog, "LESSONS", {"reviewed-create": entry}):
         return qualify_reviewed_create(
@@ -279,3 +297,68 @@ def test_qualified_selection_has_exactly_one_real_candidate():
     assert result.positive_hits == 1
     assert result.publication_authorized is False
     assert result.activation_authorized is False
+
+
+def test_structural_fixture_validates_create_and_narrow_update_without_ckr2():
+    """Catalog shape validity is deliberately separate from lesson relevance."""
+    create = structural_entry()
+    assert catalog.validate_entry(create) is create
+    assert set(create["properties"]) == set(catalog.NARRATIVE_TYPES)
+
+    # A reviewed update may contain one writable field; it need not recreate
+    # all four narrative fields.
+    update = structural_entry(
+        target_lesson_id="LL-91", include_narrative=False, meta={"Guardrail": "G"}
+    )
+    assert catalog.validate_entry(update) is update
+    assert set(update["properties"]) == {"Guardrail"}
+
+
+def test_structural_fixture_accepts_exact_descriptive_types_without_narrative_padding():
+    entry = structural_entry(meta={
+        "Area": "Governance",
+        "Learning Type": "Mistake",
+        "Applies To": ("Notion",),
+        "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
+        "Supporting Source Links": (
+            "https://github.com/Blummer92/agent-os/issues/3417",
+        ),
+    })
+    assert catalog.validate_entry(entry) is entry
+    assert set(entry["properties"]) == set(catalog.WRITABLE_TYPES)
+    assert all(name not in entry["properties"] for name in catalog.PROTECTED_FIELDS)
+
+
+@pytest.mark.parametrize("entry,reason", [
+    (
+        structural_entry(include_narrative=False, meta={"Area": "Governance"}),
+        "reviewed-narrative-fields-required",
+    ),
+    (
+        structural_entry(target_lesson_id="LL-91", include_narrative=False),
+        "reviewed-narrative-fields-required",
+    ),
+    (
+        structural_entry(meta={"Applies To": ()}),
+        "reviewed-field-value-invalid",
+    ),
+    (
+        structural_entry(meta={"Applies To": tuple(f"item{i}" for i in range(9))}),
+        "reviewed-field-value-invalid",
+    ),
+    (
+        structural_entry(meta={"Supporting Source Links": ()}),
+        "reviewed-field-value-invalid",
+    ),
+    (
+        structural_entry(meta={"Source Link": "https://example.com/other"}),
+        "reviewed-field-value-invalid",
+    ),
+    (
+        structural_entry(meta={"Status": "Applied"}),
+        "protected-activation-field-refused",
+    ),
+])
+def test_structural_fixture_fails_closed_on_invalid_contracts(entry, reason):
+    with pytest.raises(ValueError, match=f"^{reason}$"):
+        catalog.validate_entry(entry)
