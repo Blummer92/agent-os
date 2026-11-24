@@ -1,0 +1,531 @@
+{
+  "schema": "agent-os-ci-negative-ledger/1",
+  "repository": "Blummer92/agent-os",
+  "snapshot_date": "2026-11-24",
+  "provenance": "Offline snapshot of canonical GitHub issue descriptions and verified main test contracts. Historical issue links are sources, not runtime GitHub API dependencies or proof of hosted replay.",
+  "scope": "CI validation planning, authoritative status, focused JUnit, and negative-control integration-test preservation. Does not claim all Agent OS ledger issues or live hosted validation.",
+  "source_pulls": [
+    "https://github.com/Blummer92/agent-os/pull/4108"
+  ],
+  "existing_controls": [
+    {
+      "id": "NC07",
+      "issue": 3901,
+      "negative": "tests/test_agent_os_ci_test_completeness.py::test_mandatory_skipped_test_cannot_pass",
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_allowlisted_skip_passes_complete"
+    },
+    {
+      "id": "NC08",
+      "issue": 3902,
+      "negative": "tests/test_agent_os_ci_test_completeness.py::test_conftest_modifyitems_drop_is_caught",
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_conftest_marker_only_passes_complete"
+    },
+    {
+      "id": "NC09",
+      "issue": 3872,
+      "negative": "tests/test_agent_os_ci_junit_diff.py::test_duplicate_nodes_and_count_mismatch_are_rejected",
+      "positive": "tests/test_agent_os_ci_junit_diff.py::test_mapped_replacement_is_machine_verified"
+    },
+    {
+      "id": "NC19",
+      "issue": 3869,
+      "negative": "tests/test_agent_os_aggregate_gate.py::test_nc19_skipped_aggregate_publishes_error_not_success",
+      "positive": "tests/test_agent_os_aggregate_gate.py::test_real_aggregate_success_publishes_success"
+    },
+    {
+      "id": "D07",
+      "issue": 4056,
+      "negative": "tests/test_agent_os_ci_validation.py::test_d07_focused_does_not_reuse_stale_passing_junit",
+      "positive": "tests/test_agent_os_ci_validation.py::test_d07_successful_child_requires_fresh_positive_case_evidence"
+    },
+    {
+      "id": "NC-SELECT",
+      "issue": 3816,
+      "negative": "tests/test_agent_os_ci_test_completeness.py::test_configuration_narrowing_cannot_pass",
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_legitimate_suites_pass_complete"
+    }
+  ],
+  "cases": [
+    {
+      "id": "D07-focused-executor",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": [
+          "scripts/agent_os_ci_validation.py"
+        ]
+      },
+      "expected": {
+        "profile": "focused",
+        "commands": [
+          "python -m pytest tests/test_agent_os_ci_validation.py"
+        ]
+      }
+    },
+    {
+      "id": "D07-renamed-path-owners",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": [
+          "scripts/agent_os_notion_lessons_write/old.py",
+          "scripts/agent_os_issue_acceptance/new.py"
+        ]
+      },
+      "expected": {
+        "profile": "focused",
+        "commands": [
+          "python -m pytest tests/agent_os_issue_acceptance",
+          "python -m pytest tests/agent_os_notion_lessons_write"
+        ]
+      }
+    },
+    {
+      "id": "D07-unmapped-code-fallback",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": [
+          "scripts/unknown_unregistered.py"
+        ]
+      },
+      "expected": {
+        "profile": "aggregate",
+        "commands": [
+          "python -m pytest"
+        ]
+      }
+    },
+    {
+      "id": "D07-workflow-trust-change",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": [
+          ".github/workflows/agent-os-validation.yml"
+        ]
+      },
+      "expected": {
+        "profile": "aggregate",
+        "commands": [
+          "python -m pytest"
+        ]
+      }
+    },
+    {
+      "id": "D07-no-changed-files",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": []
+      },
+      "expected": {
+        "profile": "manual-review",
+        "commands": []
+      }
+    },
+    {
+      "id": "D07-documentation-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056",
+      "kind": "selection",
+      "input": {
+        "paths": [
+          "docs/ci-guide.md"
+        ]
+      },
+      "expected": {
+        "profile": "static",
+        "commands": []
+      }
+    },
+    {
+      "id": "NC19-skipped-ready-publish-error",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "",
+        "event_name": "pull_request",
+        "pr_draft": "false",
+        "validate_result": "skipped",
+        "validate_head_sha": "",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": true,
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "NC19-skipped-draft-no-authority",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "",
+        "event_name": "pull_request",
+        "pr_draft": "true",
+        "validate_result": "skipped",
+        "validate_head_sha": "",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": false,
+        "head": ""
+      }
+    },
+    {
+      "id": "NC19-empty-output-not-enough",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "",
+        "event_name": "pull_request",
+        "pr_draft": "false",
+        "validate_result": "failure",
+        "validate_head_sha": "",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": false,
+        "head": ""
+      }
+    },
+    {
+      "id": "NC19-explicit-deny-is-final",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "false",
+        "event_name": "pull_request",
+        "pr_draft": "false",
+        "validate_result": "skipped",
+        "validate_head_sha": "",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": false,
+        "head": ""
+      }
+    },
+    {
+      "id": "NC19-validated-wrong-head",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "true",
+        "event_name": "pull_request",
+        "pr_draft": "false",
+        "validate_result": "success",
+        "validate_head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": false,
+        "head": ""
+      }
+    },
+    {
+      "id": "NC19-matching-head-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "authority",
+      "input": {
+        "validate_authoritative": "true",
+        "event_name": "pull_request",
+        "pr_draft": "false",
+        "validate_result": "success",
+        "validate_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "pr_head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "authorized": true,
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "NC19-skipped-does-not-merge",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "gate",
+      "input": {
+        "validate_result": "skipped"
+      },
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "id": "NC19-skipped-status-is-error",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "terminal",
+      "input": {
+        "authoritative": true,
+        "reused": false,
+        "validate_result": "skipped"
+      },
+      "expected": {
+        "state": "error"
+      }
+    },
+    {
+      "id": "NC19-exit-zero-not-proof",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "terminal",
+      "input": {
+        "authoritative": true,
+        "reused": false,
+        "validate_result": "success",
+        "aggregate_outcome": ""
+      },
+      "expected": {
+        "state": "error"
+      }
+    },
+    {
+      "id": "NC19-aggregate-executed-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869",
+      "kind": "terminal",
+      "input": {
+        "authoritative": true,
+        "reused": false,
+        "validate_result": "success",
+        "aggregate_outcome": "success"
+      },
+      "expected": {
+        "state": "success"
+      }
+    },
+    {
+      "id": "ISSUE2589-pending-aggregate-stays-closed",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "gate",
+      "input": {
+        "validate_result": ""
+      },
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "id": "ISSUE2589-failed-plan-vetoes-green-aggregate",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "gate",
+      "input": {
+        "validate_result": "success",
+        "plan_result": "failure"
+      },
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "id": "ISSUE2589-missing-frontend-vetoes-green",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "gate",
+      "input": {
+        "validate_result": "success",
+        "frontend_required": true,
+        "frontend_result": ""
+      },
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "id": "ISSUE2589-wrong-frontend-head-vetoes-green",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "gate",
+      "input": {
+        "validate_result": "success",
+        "frontend_required": true,
+        "frontend_result": "success",
+        "frontend_expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frontend_tested_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "id": "ISSUE2589-matching-head-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "gate",
+      "input": {
+        "validate_result": "success",
+        "frontend_required": true,
+        "frontend_result": "success",
+        "frontend_expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "frontend_tested_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "open": true
+      }
+    },
+    {
+      "id": "ISSUE2589-failed-plan-supersedes-reuse",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "terminal",
+      "input": {
+        "authoritative": true,
+        "reused": true,
+        "validate_result": "success",
+        "aggregate_outcome": "success",
+        "plan_result": "failure"
+      },
+      "expected": {
+        "state": "failure"
+      }
+    },
+    {
+      "id": "ISSUE2589-reuse-never-mints-another-success",
+      "source": "https://github.com/Blummer92/agent-os/issues/2589",
+      "kind": "terminal",
+      "input": {
+        "authoritative": true,
+        "reused": true,
+        "validate_result": "success",
+        "aggregate_outcome": "success"
+      },
+      "expected": {
+        "state": null
+      }
+    },
+    {
+      "id": "NC09-swallowed-exit-failure-is-observable",
+      "source": "https://github.com/Blummer92/agent-os/issues/3872",
+      "kind": "junit",
+      "input": {
+        "operation": "outcomes",
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"><failure message=\"failure\">failed</failure></testcase></testsuite>"
+      },
+      "expected": {
+        "failures": 1,
+        "errors": 0
+      }
+    },
+    {
+      "id": "NC09-counter-lie-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3872",
+      "kind": "junit",
+      "input": {
+        "operation": "outcomes",
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"><failure message=\"failure\">failed</failure></testcase></testsuite>"
+      },
+      "expected": {
+        "error": "ValueError"
+      }
+    },
+    {
+      "id": "NC09-zero-case-phantom-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3872",
+      "kind": "junit",
+      "input": {
+        "operation": "outcomes",
+        "xml": "<testsuite name=\"pytest\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"/></testsuite>"
+      },
+      "expected": {
+        "error": "ValueError"
+      }
+    },
+    {
+      "id": "NC07-skipped-body-detected",
+      "source": "https://github.com/Blummer92/agent-os/issues/3901",
+      "kind": "junit",
+      "input": {
+        "operation": "skipped",
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\"><testcase classname=\"tests.example\" name=\"test_required\"><skipped reason=\"historical negative control\"/></testcase></testsuite>"
+      },
+      "expected": {
+        "nodes": [
+          "tests.example::test_required"
+        ]
+      }
+    },
+    {
+      "id": "NC07-no-skipped-body-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/3901",
+      "kind": "junit",
+      "input": {
+        "operation": "skipped",
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"/></testsuite>"
+      },
+      "expected": {
+        "nodes": []
+      }
+    },
+    {
+      "id": "PR4108-missing-junit-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": null
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-malformed-junit-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite"
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-zero-collected-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite name=\"pytest\" tests=\"0\" failures=\"0\" errors=\"0\" skipped=\"0\"></testsuite>"
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-all-skipped-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\"><testcase classname=\"tests.example\" name=\"test_required\"><skipped reason=\"historical negative control\"/></testcase></testsuite>"
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-failure-despite-zero-exit",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"><failure message=\"failure\">failed</failure></testcase></testsuite>"
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-count-inconsistent-veto",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite name=\"pytest\" tests=\"2\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"/></testsuite>"
+      },
+      "expected": {
+        "reject": true
+      }
+    },
+    {
+      "id": "PR4108-executed-clean-positive",
+      "source": "https://github.com/Blummer92/agent-os/issues/3690",
+      "kind": "focused-junit",
+      "input": {
+        "xml": "<testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"tests.example\" name=\"test_required\"/></testsuite>"
+      },
+      "expected": {
+        "reject": false
+      }
+    }
+  ]
+}
