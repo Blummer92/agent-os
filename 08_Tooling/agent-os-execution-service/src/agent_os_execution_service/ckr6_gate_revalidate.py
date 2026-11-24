@@ -18,6 +18,7 @@ import urllib.request
 
 from .ckr6_github_bridge import envelope_from_event, parse_ckr6_result_comment
 from .ckr6_mutation_gate import _linked_issue_from_pr_body
+from .ckr6_github_reader import _MAX_RESPONSE_BYTES
 
 REPO = "Blummer92/agent-os"
 OWNER_ID = 32861845
@@ -87,7 +88,12 @@ def api(method, endpoint, token):
                 if response.status != 201:
                     raise RevalidationBlocked("rerun-request-failed")
                 return None
-            return json.load(response)
+            # Bound GET bodies before JSON parsing; a full/oversized response
+            # is never evidence that a CKR6 request or run is valid.
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                raise RevalidationBlocked("github-read-failed")
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if method == "POST":
             raise RevalidationBlocked(
