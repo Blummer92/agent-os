@@ -572,31 +572,20 @@ def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
         ) from exc
 
 
-def read_bounded_comment_pages(
-    fetch_page: Callable[[int], object],
-    *,
-    require_unique_ids: bool = False,
-) -> list[dict[str, object]]:
-    """Exhaust a bounded GitHub comment population; never admit a partial page.
-
-    The gate reads the entire thread, while postback revalidation applies a
-    GitHub server-side `since` filter. Both consume this same completeness
-    rule without duplicating pagination or changing either query's scope.
-    """
-    records: list[dict[str, object]] = []
-    seen_ids: set[int] = set()
+def read_bounded_comment_pages(fetch_page, *, require_unique_ids=False):
+    """Exhaust bounded comment pages, refusing incomplete or unstable reads."""
+    records, seen = [], set()
     for page in range(1, _MAX_COMMENT_PAGES + 1):
         batch = fetch_page(page)
         if (type(batch) is not list or len(batch) > _COMMENT_PAGE_SIZE
                 or any(not isinstance(item, Mapping) for item in batch)):
             raise ValueError("comment-population-incomplete")
         if require_unique_ids:
-            for item in batch:
-                comment_id = item.get("id")
-                if (type(comment_id) is not int or comment_id <= 0
-                        or comment_id in seen_ids):
-                    raise ValueError("comment-population-incomplete")
-                seen_ids.add(comment_id)
+            ids = [item.get("id") for item in batch]
+            if (any(type(value) is not int or value <= 0 for value in ids)
+                    or len(set(ids)) != len(ids) or seen.intersection(ids)):
+                raise ValueError("comment-population-incomplete")
+            seen.update(ids)
         records.extend(dict(item) for item in batch)
         if len(batch) < _COMMENT_PAGE_SIZE:
             return records
