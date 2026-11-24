@@ -29,6 +29,7 @@ from .ckr6_mutation_gate import (
     _HEAD_REFERENCE_RE as SHA_REFERENCE,
     _PR_TARGET_RE as PR_REFERENCE,
     _COMMENT_PAGE_SIZE as COMMENT_PAGE_SIZE,
+    _MAX_COMMENT_PAGES as MAX_COMMENT_PAGES,
     read_bounded_comment_pages,
     _linked_issue_from_pr_body,
 )
