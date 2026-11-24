@@ -30,8 +30,8 @@ def candidate(kind="pagination", **overrides):
         ("GitHub issue comment pagination",
          "Reject duplicate GitHub comment IDs across paginated pages and verify complete page records.")
         if kind == "pagination" else
-        ("GitHub REST bounded HTTP response evidence",
-         "Reject oversized GitHub HTTP response bytes and verify edited timestamp provenance.")
+        ("GitHub REST bounded HTTP GET response evidence",
+         "Reject oversized GitHub HTTP GET response bytes and verify edited timestamp provenance.")
     )
     fields = dict(knowledge_id="LL-SYNTHETIC", source_system="notion-lessons-learned",
                   source_revision="2026-11-24T00:00:00Z",

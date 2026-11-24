@@ -519,31 +519,62 @@ def _github_rest_evidence_match(
         return re.search(r"\b(?:" + pattern + r")\b", value) is not None
 
     title = candidate.name.casefold()
-    guidance = " ".join((*candidate.use_when, *candidate.avoid_when)).casefold()
-    if not has(r"github", title):
-        return False
-    if has(r"(?:never|do\s+not|don't|skip|avoid)\s+(?:reject|detect|verify|validate|check|fail)", guidance):
+    if not has(r"github", title) or has(r"not|never|unrelated", title):
         return False
 
-    if pagination and (
-        has(r"(?:issue[- ]?)?comments?", title)
-        and has(r"pag(?:e|es|ed|ing|ination)", title)
-        and has(r"github", guidance)
-        and has(r"comments?", guidance)
-        and has(r"(?:duplicate|duplicates|unique)", guidance)
-        and has(r"(?:ids?|records?|pages?)", guidance)
-        and has(r"(?:reject|detect|verify|validate|check|fail)", guidance)
+    # Negative guidance can veto an apparent match, but cannot supply
+    # positive tokens. Do not combine tokens from different fields/sentences.
+    negated_action = (
+        r"(?:never|do\s+not|don['’]t|skip|avoid)\s+"
+        r"(?:reject|detect|verify|validate|check|fail)"
+    )
+    if any(has(negated_action, value.casefold())
+           for value in (*candidate.use_when, *candidate.avoid_when)):
+        return False
+    clauses = tuple(
+        clause.strip()
+        for value in candidate.use_when
+        for line in value.casefold().splitlines()
+        # A Markdown bullet affects presentation, not the clause's polarity.
+        for clause in re.split(r"[.!?;,]+", re.sub(r"^[-*+][ \t]+", "", line.strip()))
+    )
+    affirmative = r"(?:reject|detect|verify|validate|check|fail)\b"
+    if pagination and has(r"issue[- ]comments?", title) and has(
+        r"pag(?:e|es|ed|ing|ination)", title
     ):
-        return True
-    if receipts and (
-        has(r"(?:http|rest)", title)
-        and has(r"(?:response|receipt|evidence|reads?)", title)
-        and has(r"(?:size|bounded|bound|limit|limits|trust|provenance|cap)", title)
-        and has(r"(?:github|http|rest|producer)", guidance)
-        and has(r"(?:oversized|size|bytes?|bounded|bound|limit|limits|timestamp|edited|malformed)", guidance)
-        and has(r"(?:reject|detect|verify|validate|check|fail)", guidance)
+        comment_identity = r"github\s+(?:issue[- ]+)?comments?\s+(?:ids?|records?)"
+        # Bind the validating action to comment identities, not page validity.
+        # For example, checking complete pages and keeping duplicates is not
+        # evidence of duplicate identity detection.
+        action_on_identity = (
+            rf"(?:"
+            rf"(?:reject|detect)\s+duplicate\s+{comment_identity}"
+            rf"|(?:verify|validate|check)\s+(?:that\s+)?{comment_identity}\s+are\s+unique"
+            rf")\s+across\s+(?:(?:all|paginated)\s+)?pages?\b"
+        )
+        if any(re.match(action_on_identity, clause) for clause in clauses):
+            return True
+
+    if receipts and all(
+        has(pattern, title) for pattern in (
+            r"get", r"http|rest", r"response|receipt|evidence|reads?",
+            r"size|bounded|bound|limit|limits|trust|provenance|cap",
+        )
     ):
-        return True
+        for clause in clauses:
+            if (
+                re.match(affirmative, clause)
+                and all(has(pattern, clause) for pattern in (
+                    r"github", r"http|rest", r"get", r"response|receipt",
+                    r"oversized|size|bytes?|bounded|bound|limit|limits",
+                ))
+                and re.search(
+                    r"\b(?:and|then)\s+(?:verify|validate|check|detect)\b"
+                    r".*\b(?:timestamp|timestamps)\b",
+                    clause,
+                )
+            ):
+                return True
     return False
 
 
