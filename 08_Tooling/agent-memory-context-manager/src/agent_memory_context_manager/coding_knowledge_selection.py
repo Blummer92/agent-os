@@ -484,6 +484,69 @@ def _deduplicate(
     return tuple(by_id[key] for key in sorted(by_id, key=lambda key: (key.casefold(), key))), False
 
 
+def _github_rest_evidence_match(
+    request: CodingKnowledgeRequest,
+    candidate: CodingKnowledgeCandidate,
+) -> bool:
+    """#4026: bounded source-owned GitHub REST mechanism relevance.
+
+    This is a relevance hypothesis, not a live lesson qualification or
+    authorization. Unlike broad Python/Testing tags, two independent explicit
+    capability hints and affirmative lesson-owned text are both required.
+    """
+    hints = {_norm(value) for value in request.capability_keywords}
+    pagination = {
+        "github issue comment pagination", "duplicate record detection",
+    } <= hints
+    receipts = {
+        "bounded http get response limits", "timestamp provenance",
+    } <= hints
+    ecosystems = {_norm(value) for value in (
+        request.ecosystem_hints + request.language_hints
+    )}
+    if not (pagination or receipts):
+        return False
+    if not {"python", "github rest api"} <= ecosystems:
+        return False
+    if candidate.source_system != "notion-lessons-learned" or candidate.ecosystem != "python":
+        return False
+
+    # Only source-owned title and activation guidance are eligible. Neither
+    # arbitrary task_reference prose nor known_knowledge_refs are interpreted.
+    import re
+
+    def has(pattern: str, value: str) -> bool:
+        return re.search(r"\b(?:" + pattern + r")\b", value) is not None
+
+    title = candidate.name.casefold()
+    guidance = " ".join((*candidate.use_when, *candidate.avoid_when)).casefold()
+    if not has(r"github", title):
+        return False
+    if has(r"(?:never|do\s+not|don't|skip|avoid)\s+(?:reject|detect|verify|validate|check|fail)", guidance):
+        return False
+
+    if pagination and (
+        has(r"(?:issue[- ]?)?comments?", title)
+        and has(r"pag(?:e|es|ed|ing|ination)", title)
+        and has(r"github", guidance)
+        and has(r"comments?", guidance)
+        and has(r"(?:duplicate|duplicates|unique)", guidance)
+        and has(r"(?:ids?|records?|pages?)", guidance)
+        and has(r"(?:reject|detect|verify|validate|check|fail)", guidance)
+    ):
+        return True
+    if receipts and (
+        has(r"(?:http|rest)", title)
+        and has(r"(?:response|receipt|evidence|reads?)", title)
+        and has(r"(?:size|bounded|bound|limit|limits|trust|provenance|cap)", title)
+        and has(r"(?:github|http|rest|producer)", guidance)
+        and has(r"(?:oversized|size|bytes?|bounded|bound|limit|limits|timestamp|edited|malformed)", guidance)
+        and has(r"(?:reject|detect|verify|validate|check|fail)", guidance)
+    ):
+        return True
+    return False
+
+
 def _match_candidate(
     request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
@@ -551,6 +614,12 @@ def _match_candidate(
             and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
         ):
             return 2, ("pr-refresh-reconciliation-text-match",)
+
+    # #4026: a source-owned REST evidence mechanism can outrank generic
+    # metadata only after an explicit conjunctive request and strict content
+    # check. Canonical currentness/provenance/identity gates still run later.
+    if _github_rest_evidence_match(request, candidate):
+        return 2, ("github-rest-evidence-text-match",)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
