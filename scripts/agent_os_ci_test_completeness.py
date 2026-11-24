@@ -69,6 +69,7 @@ Exit codes: 0 COMPLETE, 1 INCOMPLETE or OUTCOME_FAILED, 2 ERROR.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -76,9 +77,9 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-from agent_os_ci_junit_diff import junit_outcomes, node_ids, skipped_node_ids
+from agent_os_ci_junit_diff import TEST_COMPLETENESS_SCHEMA, junit_outcomes, node_ids, skipped_node_ids
 
-SCHEMA = "agent-os-ci-test-completeness/1"
+SCHEMA = TEST_COMPLETENESS_SCHEMA
 SKIP_ALLOWLIST_SCHEMA = "agent-os-ci-skipped-allowlist/1"
 SKIP_ALLOWLIST_FILENAME = "agent_os_ci_skipped_allowlist.json"
 _NODE_LINE = re.compile(r"^\S+?\.py::.+$")
@@ -302,6 +303,7 @@ def check_suite(
     except ValueError as exc:
         result["error"] = f"executed JUnit report rejected: {exc}"
         return result
+    result["junit_sha256"] = hashlib.sha256(junit_bytes).hexdigest()
     result["outcome"] = outcome
     expected = {_identity(line) for line in proc.stdout.splitlines() if _NODE_LINE.match(line)}
     missing, extra = sorted(expected - executed), sorted(executed - expected)

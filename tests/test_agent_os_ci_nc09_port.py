@@ -336,3 +336,30 @@ def test_invalid_outcome_evidence_vetoes_passing_suite_manifest(
     assert receipt["verdict"] == "ERROR"
     assert "junit-" in receipt["error"]
     assert "EXECUTED_PASS" not in (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("damage", ["truncated", "minimal", "changed-junit", "missing"])
+def test_success_with_partial_or_detached_receipt_never_publishes_pass(
+    tmp_path: Path, damage: str,
+) -> None:
+    repo = _repo(tmp_path, {})
+    helper = repo / "scripts" / "agent_os_ci_test_completeness.py"
+    source = helper.read_text(encoding="utf-8")
+    original = '        args.receipt.write_text(text, encoding="utf-8")\n'
+    assert source.count(original) == 1
+    operation = {
+        "truncated": "args.receipt.write_text('{\\n  \"verdict\": \"COMPLETE\",\\n')",
+        "minimal": "args.receipt.write_text('{\\n  \"verdict\": \"COMPLETE\"\\n}')",
+        "changed-junit": "args.junit.write_bytes(args.junit.read_bytes() + b'\\n')",
+        # Retain the existing status-0-without-receipt regression separately too.
+        "missing": "args.receipt.unlink()",
+    }[damage]
+    helper.write_text(source.replace(original, original + f"        {operation}\n"), encoding="utf-8")
+    junit_dir = tmp_path / "junit"
+    result = _run(repo, junit_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    rows = _rows(junit_dir)
+    assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+    assert _completeness(junit_dir)[2] == "FAIL"
+    assert _completeness(junit_dir)[4] == "TEST_COLLECTION_ERROR"
+    assert "- FAIL | root | exit 0 |" in result.stdout

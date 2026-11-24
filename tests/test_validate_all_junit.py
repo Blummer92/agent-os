@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = (
+    "agent_os_ci_test_completeness.py",
+    "agent_os_ci_junit_diff.py",
+    "agent_os_ci_junit_validate.py",
+    "agent_os_ci_junit_subtest_receipt.py",
+    "agent_os_ci_evidence_health.py",
+)
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -145,3 +151,40 @@ def test_focused_target_gets_unique_junit(repo: Path, tmp_path: Path) -> None:
     assert "focused__tests__test_root.py.xml" in [p.name for p in junit_dir.glob("*.xml")]
     manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
     assert "focused: tests/test_root.py" in manifest
+
+
+@pytest.mark.parametrize("damage", ["missing", "malformed", "all-skipped", "stale"])
+def test_focused_exit_zero_requires_fresh_executed_junit(
+    repo: Path, tmp_path: Path, damage: str,
+) -> None:
+    junit_dir = tmp_path / "junit"
+    junit_dir.mkdir()
+    path = junit_dir / "focused__tests__test_root.py.xml"
+    passing = '<testsuite tests="1"><testcase classname="m" name="t"/></testsuite>'
+    if damage == "stale":
+        path.write_text(passing, encoding="utf-8")
+    content = {
+        "missing": None,
+        "malformed": "<testsuite",
+        "all-skipped": '<testsuite tests="1" skipped="1"><testcase classname="m" name="t">'
+                       '<skipped/></testcase></testsuite>',
+        "stale": None,
+    }[damage]
+    shim = repo / "fake-python"
+    source = shim.read_text(encoding="utf-8")
+    anchor = "    target = args[2]\n"
+    assert source.count(anchor) == 1
+    injection = "    if target == 'tests/test_root.py' and junit:\n"
+    if content is not None:
+        injection += f"        pathlib.Path(junit).write_text({content!r}, encoding='utf-8')\n"
+    injection += "        raise SystemExit(0)\n"
+    shim.write_text(source.replace(anchor, anchor + injection), encoding="utf-8")
+    result = run(repo, "--focused", "tests/test_root.py", env={"CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "focused JUnit missing, malformed or failed" in result.stderr
+    row = next(line.split("\t") for line in (junit_dir / "manifest.tsv").read_text().splitlines()
+               if line.startswith("focused: tests/test_root.py\t"))
+    assert row[3] == "FAIL"
+    assert row[-1] != "EXECUTED_PASS"
+    if damage in {"missing", "stale"}:
+        assert not path.exists()

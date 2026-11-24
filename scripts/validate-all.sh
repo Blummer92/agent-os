@@ -807,7 +807,10 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
   mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
   manifest_file="$CI_JUNIT_DIR/manifest.tsv"
   printf 'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n' > "$manifest_file" || runner_error "cannot write validation manifest"
-  for result in "${check_results[@]}"; do
+  # Each completeness row immediately follows its own suite row.
+  previous_manifest_status=""
+  for manifest_result_index in "${!check_results[@]}"; do
+    result="${check_results[$manifest_result_index]}"
     IFS='|' read -r status name command_text code <<< "$result"
     case "$name" in
       "Ruff lint"|"structural validation") continue ;;
@@ -831,8 +834,16 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       completeness_suite="${name#test selection completeness: }"
       junit_file="test-completeness-$(junit_key "$completeness_suite").json"
       if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
-      if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
-        classification="COMPLETE"
+      if [ "$status" = "PASS" ] && [ "$code" = "0" ]; then
+        if [ "$previous_manifest_status" = "EXECUTED_PASS" ] && [ "$junit_exists" = "yes" ]; then
+          classification="COMPLETE"
+        else
+          status="FAIL"
+          classification="TEST_COLLECTION_ERROR"
+          if [ "$previous_manifest_status" = "EXECUTED_PASS" ]; then
+            record_failure "$name (missing receipt)" "$command_text" 2
+          fi
+        fi
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$CI_JUNIT_DIR/$junit_file"; then
         classification="TEST_OUTCOME_FAILED"
       elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
@@ -848,7 +859,13 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
       if [ "$classification" = "EXECUTED_PASS" ]; then
-        verify_junit "$CI_JUNIT_DIR/$junit_file"
+        case "$name" in
+          "focused: "*) verify_junit "$CI_JUNIT_DIR/$junit_file" --require-executed ;;
+          *)
+            verify_junit "$CI_JUNIT_DIR/$junit_file" --suite-receipt \
+              "$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json" "$name"
+            ;;
+        esac
         junit_verdict=$?
         if [ "$junit_verdict" -ne 0 ]; then
           status="FAIL"
@@ -860,26 +877,6 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
           record_failure "$name (JUnit evidence)" "$command_text" 2
         fi
       fi
-      # For full suites, require the independent completeness/outcome receipt.
-      # Do not certify an EXECUTED_PASS when a helper failed or its receipt is absent.
-      if [ "$classification" = "EXECUTED_PASS" ]; then
-        case "$name" in
-          "focused: "*) ;; # Explicit focused selections have no completeness receipt.
-          *)
-            outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
-            if [ ! -f "$outcome_receipt" ]; then
-              status="FAIL"
-              classification="TEST_COLLECTION_ERROR"
-            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$outcome_receipt"; then
-              status="FAIL"
-              classification="TEST_OUTCOME_FAILED"
-            elif grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"ERROR"' "$outcome_receipt"; then
-              status="FAIL"
-              classification="TEST_COLLECTION_ERROR"
-            fi
-            ;;
-        esac
-      fi
     else
       junit_exists="no"
       if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else
@@ -888,6 +885,8 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
         record_failure "$name (missing JUnit)" "$command_text" 2
       fi
     fi
+    check_results[$manifest_result_index]="$status|$name|$command_text|$code"
+    previous_manifest_status="$classification"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification" >> "$manifest_file" || runner_error "cannot append validation manifest"
   done
 fi

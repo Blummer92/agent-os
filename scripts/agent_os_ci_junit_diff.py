@@ -21,6 +21,9 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
+TEST_COMPLETENESS_SCHEMA = "agent-os-ci-test-completeness/1"
+
+
 def _testcases(xml: bytes) -> list[tuple[str, bool]]:
     """Strictly parsed ``(identity, was_skipped)`` pairs from a JUnit report.
 

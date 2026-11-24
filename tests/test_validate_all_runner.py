@@ -10,7 +10,13 @@ import pytest
 
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = (
+    "agent_os_ci_test_completeness.py",
+    "agent_os_ci_junit_diff.py",
+    "agent_os_ci_junit_validate.py",
+    "agent_os_ci_junit_subtest_receipt.py",
+    "agent_os_ci_evidence_health.py",
+)
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -683,3 +689,24 @@ def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receip
     for name in ("pkg-pass", "root"):
         assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
     assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
+
+def test_partial_discovery_output_is_not_a_success(repo: Path, tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_find = bin_dir / "find"
+    fake_find.write_text("#!/bin/sh\nprintf './tests\\n'\nexit 3\n", encoding="utf-8")
+    fake_find.chmod(0o755)
+    result = run(repo, env={"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"})
+    assert result.returncode != 0
+    assert "pytest test discovery failed" in result.stderr
+    assert "OVERALL STATUS\nPASS" not in result.stdout
+
+
+def test_manifest_destination_write_error_is_not_a_success(repo: Path, tmp_path: Path) -> None:
+    junit = tmp_path / "junit"
+    (junit / "manifest.tsv").mkdir(parents=True)
+    result = run(repo, env={"CI_JUNIT_DIR": str(junit)})
+    assert result.returncode != 0
+    assert "cannot replace stale validation manifest" in result.stderr
+    assert "OVERALL STATUS\nPASS" not in result.stdout

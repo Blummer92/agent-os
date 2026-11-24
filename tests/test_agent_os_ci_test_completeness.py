@@ -23,7 +23,14 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
-RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_FILES = (
+    "validate-all.sh",
+    "agent_os_ci_test_completeness.py",
+    "agent_os_ci_junit_diff.py",
+    "agent_os_ci_junit_validate.py",
+    "agent_os_ci_junit_subtest_receipt.py",
+    "agent_os_ci_evidence_health.py",
+)
 PYTEST_VERSION = tuple(int(part) for part in pytest.__version__.split(".")[:2])
 
 PASSING = "def test_{}():\n    assert True\n"
@@ -166,7 +173,7 @@ CONTROLS = [
     _control("NC15-collect_imported_tests-false",
              {"tests/guards.py": PASSING.format("imported_guard"),
               "tests/test_main.py": "from tests.guards import test_imported_guard  # noqa: F401\n",
-              "pytest.ini": "[pytest]\naddopts = -v\ncollect_imported_tests = false\n"}, "INCOMPLETE"),
+              "pytest.ini": "[pytest]\naddopts = -v\ncollect_imported_tests = false\n"}, "INCOMPLETE", min_pytest=(8, 4)),
     _control("NC16-omitted-param-not-masked-by-regenerated-sibling",
              {"tests/test_regen.py": (
                  "import secrets\n\nimport pytest\n\n\n"
@@ -197,8 +204,12 @@ def test_configuration_narrowing_cannot_pass(
         # the suite row from EXECUTED_PASS to TEST_COLLECTION_ERROR as well;
         # the runner's exit 0 is preserved in the row, only its status fails.
         assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+    elif any("--collect-only" in config for config in files.values()):
+        # Successful collection is not test execution. The independent
+        # completeness record still reports the omitted expected nodes.
+        assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
     else:
-        assert rows["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran; the gate is the completeness row
+        assert rows["root"][4] == "EXECUTED_PASS"  # some tests ran; completeness separately fails
     row = _completeness(junit_dir)
     classification = {"INCOMPLETE": "TEST_SELECTION_INCOMPLETE", "ERROR": "TEST_COLLECTION_ERROR"}[expected]
     assert row[2:5] == ("FAIL", "1" if expected == "INCOMPLETE" else "2", classification)

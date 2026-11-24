@@ -11,7 +11,13 @@ import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = (
+    "agent_os_ci_test_completeness.py",
+    "agent_os_ci_junit_diff.py",
+    "agent_os_ci_junit_validate.py",
+    "agent_os_ci_junit_subtest_receipt.py",
+    "agent_os_ci_evidence_health.py",
+)
 TIMING_LINE = re.compile(r"^- .+ \| (?:[0-9]+\.[0-9]{3} s|unavailable)$", re.MULTILINE)
 
 
