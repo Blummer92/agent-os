@@ -9,28 +9,30 @@ import argparse
 import datetime
 import json
 import os
-import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from .ckr6_github_bridge import envelope_from_event, parse_ckr6_result_comment
-from .ckr6_mutation_gate import _linked_issue_from_pr_body
+from .ckr6_github_bridge import (
+    CKR6_PRODUCER_ACCOUNT_ID as BOT_ID,
+    CKR6_RESULT_MARKER as RESULT_MARKER,
+    envelope_from_event,
+    parse_ckr6_result_comment,
+)
+# Target interpretation is owned by the gate this lane reruns; never keep a
+# second, divergent PR/head grammar here.
+from .ckr6_mutation_gate import (
+    BOUNDARY_OPERATIONS as MUTATION_OPERATIONS,
+    DEFAULT_ALLOWED_ACTOR_ID as OWNER_ID,
+    _HEAD_REFERENCE_RE as SHA_REFERENCE,
+    _PR_TARGET_RE as PR_REFERENCE,
+    _linked_issue_from_pr_body,
+)
 
 REPO = "Blummer92/agent-os"
-OWNER_ID = 32861845
-BOT_ID = 41898282
 WORKFLOW = "agent-os-ckr6-mutation-gate.yml"
-RESULT_MARKER = "<!-- agent-os-ckr6-result:v1 -->"
-MUTATION_OPERATIONS = frozenset({"issue-start", "failed-repair"})
-PR_REFERENCE = re.compile(
-    r"(?<!\w)PR\s*#([1-9][0-9]{0,6})(?!\d)"
-    r"|https://github\.com/Blummer92/agent-os/pull/([1-9][0-9]{0,6})(?!\d)",
-    re.IGNORECASE,
-)
-SHA_REFERENCE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
 ISSUE_URL = "https://api.github.com/repos/" + REPO + "/issues/"
 
 

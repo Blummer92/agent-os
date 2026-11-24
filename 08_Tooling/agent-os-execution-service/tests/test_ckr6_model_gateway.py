@@ -1615,7 +1615,11 @@ def test_B8b_records_without_updated_at_are_refused_because_an_edit_could_hide()
                 rec.pop("updated_at", None)
     store.list_hook = hook
     out = gateway.invoke(request())
-    assert (out.admitted, out.reason) == (False, "result-record-missing-or-edited-updated_at") and backend.calls == []
+    # The shared R07 consumer now owns producer-record unedited proof: a result
+    # record without updated_at is never selected, so the request is never
+    # answered and the gateway stops at its bounded wait. Still refused, and
+    # the backend is never reached.
+    assert (out.admitted, out.reason) == (False, "bounded-wait-expired") and backend.calls == []
 
 
 def test_C1_hostile_json_nesting_does_not_kill_the_rpc_connection():

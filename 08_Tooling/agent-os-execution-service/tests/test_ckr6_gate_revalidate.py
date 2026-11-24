@@ -702,3 +702,29 @@ def test_revalidation_job_install_pins_full_runtime_graph_in_isolated_venv():
     assert 'ckr6-revalidation-venv/bin/python" -m pip install' in bounded
     # The step that runs the verifier must use that same isolated interpreter.
     assert "ckr6-revalidation-venv/bin/python" in block.split("Verify completed result", 1)[1]
+
+
+# --- Single target grammar (#3690 audit): revalidation reruns the gate, so it
+# must interpret PR/head targets with the gate's own grammar, never a copy.
+from agent_os_execution_service import ckr6_github_bridge as _bridge  # noqa: E402
+from agent_os_execution_service import ckr6_mutation_gate as _gate  # noqa: E402
+
+
+def test_revalidation_reuses_gate_target_grammar_and_identities():
+    assert r.PR_REFERENCE is _gate._PR_TARGET_RE
+    assert r.SHA_REFERENCE is _gate._HEAD_REFERENCE_RE
+    assert r.MUTATION_OPERATIONS is _gate.BOUNDARY_OPERATIONS
+    assert r.OWNER_ID == _gate.DEFAULT_ALLOWED_ACTOR_ID
+    assert r.BOT_ID == _bridge.CKR6_PRODUCER_ACCOUNT_ID
+    assert r.RESULT_MARKER == _bridge.CKR6_RESULT_MARKER
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["PR # 4105 head", "PR\n#4105", "ÆPR#4105", "PR #4105 and PR #4106",
+     "https://github.com/Blummer92/agent-os/pull/4105"],
+)
+def test_revalidation_and_gate_agree_on_pr_targets(reference):
+    def numbers(regex):
+        return {int(m.group(1) or m.group(2)) for m in regex.finditer(reference)}
+    assert numbers(r.PR_REFERENCE) == numbers(_gate._PR_TARGET_RE)

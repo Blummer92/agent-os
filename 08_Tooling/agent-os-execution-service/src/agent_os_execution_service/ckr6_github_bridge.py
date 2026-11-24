@@ -1144,8 +1144,12 @@ def _trusted_result_body(
         raise ValueError("CKR6 result comment predates the pending request")
     if comment_id <= expected_request_comment_id:
         raise ValueError("CKR6 result comment predates the pending request")
+    # GitHub always reports ``updated_at``; an absent value cannot prove the
+    # record is unedited, so it fails closed exactly like an edited record.
+    # This is the single owner of producer-record unedited proof for every
+    # consumer (mutation gate, MCP host tool, model gateway, learning loop).
     updated = comment.get("updated_at")
-    if updated is not None and _utc(updated, "updated_at") != created:
+    if updated is None or _utc(updated, "updated_at") != created:
         raise ValueError("CKR6 result comment was edited after creation")
     return body
 

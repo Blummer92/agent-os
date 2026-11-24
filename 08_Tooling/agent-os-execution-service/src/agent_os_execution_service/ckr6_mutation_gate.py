@@ -24,9 +24,10 @@ Semantics (fail closed):
   identity: an account rename could reuse it), whose body is a canonical
   CKR6 command envelope parsed by the ingress's own parser, whose envelope
   repository and issue number match the thread it was posted on.
-- Producer result records are held to the SAME unedited proof: a producer
-  record whose ``updated_at`` is missing or differs from ``created_at`` is
-  not evidence and is excluded before result selection.
+- Producer result records are held to the SAME unedited proof by the shared
+  R07 consumer (``select_ckr6_result_comment``): a producer record whose
+  ``updated_at`` is missing or differs from ``created_at`` is not evidence
+  and is excluded before result selection and ambiguity counting.
 - For a gated PR, consider only owner requests addressed to that exact PR:
   the parent issue's task_reference must name one matching PR number, while a
   request on the PR's own thread inherits its target from the trusted thread.
@@ -91,8 +92,6 @@ from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
 
 from .ckr6_github_bridge import (
-    CKR6_PRODUCER_ACCOUNT_ID,
-    CKR6_PRODUCER_LOGIN,
     COMMAND_PREFIX,
     MAX_COMMENT_BYTES,
     ckr6_result_admits_boundary,
@@ -308,40 +307,6 @@ def _request_target_unambiguous(request: _TrustedRequest, pr_number: int) -> boo
     return references == {pr_number}
 
 
-def _drop_unproven_producer_records(
-    comments: Sequence[Mapping[str, object]],
-) -> list[Mapping[str, object]]:
-    """Exclude producer records that cannot prove they are unedited.
-
-    The R07 consumer rejects an EDITED result record (``updated_at`` present
-    and different) but accepts one with the field MISSING. The request side
-    of this gate requires the proof positively, so the same standard is
-    applied here before result selection: a trusted-producer record without
-    a present-and-equal ``updated_at`` is not evidence and does not
-    participate in selection, ambiguity, or admission.
-    """
-    kept: list[Mapping[str, object]] = []
-    for record in comments:
-        if isinstance(record, Mapping):
-            user = record.get("user")
-            if (
-                isinstance(user, Mapping)
-                and user.get("login") == CKR6_PRODUCER_LOGIN
-                and type(user.get("id")) is int
-                and user.get("id") == CKR6_PRODUCER_ACCOUNT_ID
-            ):
-                created_at = record.get("created_at")
-                updated_at = record.get("updated_at")
-                if (
-                    type(created_at) is not str
-                    or type(updated_at) is not str
-                    or updated_at != created_at
-                ):
-                    continue
-        kept.append(record)
-    return kept
-
-
 def _trusted_boundary_requests(
     comments: object,
     *,
@@ -470,7 +435,7 @@ def evaluate_mutation_boundary(
         raise ValueError("head_sha must be exact 40-hex text")
 
     requests = _trusted_boundary_requests(
-        _drop_unproven_producer_records(issue_comments),
+        issue_comments,
         repository=repository,
         thread_number=issue_number,
         target_kind="issue",
@@ -479,7 +444,7 @@ def evaluate_mutation_boundary(
     )
     if pr_number is not None:
         requests = requests + _trusted_boundary_requests(
-            _drop_unproven_producer_records(pr_comments),
+            pr_comments,
             repository=repository,
             thread_number=pr_number,
             target_kind="pr",

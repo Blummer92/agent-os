@@ -60,8 +60,9 @@ bodies are never logged.
 neither who wrote a comment nor which request it answers. Hosts must consume
 through `ckr6_github_bridge.consume_ckr6_result_comment` (one comment) or
 `select_ckr6_result_comment` (a bounded list), passing the GitHub
-issue-comment **record** (`id`, `user`, `created_at`, `issue_url`/`html_url`,
-optional `updated_at`/`performed_via_github_app`) -- never a bare body -- plus
+issue-comment **record** (`id`, `user`, `created_at`, `updated_at`,
+`issue_url`/`html_url`, optional `performed_via_github_app`) -- never a bare
+body -- plus
 the exact pending request identity (`expected_request_comment_id`,
 `expected_request_created_at`, issue, repository) and the **required**
 `expected_operation`. Both fail closed with `ValueError`.
@@ -70,7 +71,10 @@ Producer provenance. A result is trusted only if the GitHub record shows the
 `github-actions[bot]` account (numeric id 41898282, type `Bot` when present,
 app slug `github-actions` when present), a location equal to the pending
 request's repository/issue (and the comment's own id), a creation time and id
-after the request, and no edit after creation. `select_` discards untrusted or
+after the request, and a present `updated_at` equal to `created_at` (an
+absent value cannot prove the record is unedited and fails closed like an
+edit). This consumer is the single owner of producer-record unedited proof;
+the mutation gate and other consumers do not re-implement it. `select_` discards untrusted or
 unparsable candidates *before* the exactly-one/ambiguity check, so a forged
 comment can neither satisfy a request nor force an ambiguity. Producer claims
 inside the body are never used. **Limitation:** this proves the comment was
