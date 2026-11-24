@@ -306,15 +306,35 @@ def required_library_coverage_order(
         if candidate.library_name:
             aliases.add(_norm(candidate.library_name))
         coverage.append(required & aliases)
-    if len(set().union(*coverage)) < 2:
+    max_coverage = len(set().union(*coverage))
+    if max_coverage < 2:
         return indices
 
     best = tuple(indices[:selection_size])
     best_count = len(set().union(*(coverage[index] for index in best)))
-    for subset in combinations(indices, selection_size):
+    if best_count == max_coverage:
+        return indices
+    # Equal coverage is interchangeable for this objective. A subset uses
+    # at most selection_size of any signature, so any later equivalent
+    # position can be exchanged for an earlier unused one and improve the
+    # original lexicographic tie-break. Keep all indices in the returned tail.
+    signature_count: dict[frozenset[str], int] = {}
+    search_indices = []
+    for index, covered in enumerate(coverage):
+        signature = frozenset(covered)
+        count = signature_count.get(signature, 0)
+        if count < selection_size:
+            signature_count[signature] = count + 1
+            search_indices.append(index)
+
+    for subset in combinations(search_indices, selection_size):
         count = len(set().union(*(coverage[index] for index in subset)))
         if count > best_count:
             best, best_count = subset, count
+            # Global union is an upper bound. Combinations are lexicographic,
+            # so the first subset reaching it also wins the existing tie.
+            if count == max_coverage:
+                break
 
     retained = set(best)
     return [*best, *(index for index in indices if index not in retained)]
