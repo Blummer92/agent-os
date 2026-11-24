@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +16,8 @@ from scripts.agent_os_notion_read_request.models import (
 )
 from scripts.agent_os_notion_read_request.projection import reject_credential_keys
 from scripts.agent_os_notion_read_request.runner import MAX_TRANSPORT_BYTES, main
+
+from .notion_read_support import transport
 
 REPO = "Blummer92/agent-os"
 ACTOR = "32861845"
@@ -190,14 +194,19 @@ def test_transport_actual_byte_bound_does_not_trust_stat(tmp_path, capsys) -> No
     _assert_failure_shape(receipt, "transport-exceeds-byte-bound")
 
 
+_RUNNER_ROUTES = (
+    ("visual-asset-library-schema", 2816, "execute_source_schema", "project_source_schema_result"),
+    ("candy-branding-lesson-content", 3580, "execute_lesson_content", "project_lesson_content_result"),
+    ("rc6-operator-planning-destination", 249, "execute_destination_verification", None),
+    ("photography-foundations-visual-assets", 2283, "execute_admitted_notion_read", "project_public_result"),
+)
+_RUNNER_ROUTE_IDS = ("source-schema", "lesson-content", "destination-verification", "visual-assets")
+
+
 @pytest.mark.parametrize(
-    ("request_class", "executor_name"),
-    [
-        ("source-schema", "execute_source_schema"),
-        ("lesson-content", "execute_lesson_content"),
-        ("destination-verification", "execute_destination_verification"),
-        ("visual-assets", "execute_admitted_notion_read"),
-    ],
+    ("request_id", "issue_number", "executor_name", "projector_name"),
+    _RUNNER_ROUTES,
+    ids=_RUNNER_ROUTE_IDS,
 )
 @pytest.mark.parametrize(
     ("outcome", "reason"),
@@ -205,35 +214,54 @@ def test_transport_actual_byte_bound_does_not_trust_stat(tmp_path, capsys) -> No
         ({"status": "failed"}, "execution-returned-non-success"),
         ({"status": "success", "error": "synthetic-error"}, "execution-returned-non-success"),
         (None, "execution-return-contract-invalid"),
+        ({"status": "success", "test_marker": "validated"}, None),
     ],
-    ids=("failed-status", "error-despite-success", "not-a-mapping"),
+    ids=("failed-status", "error-despite-success", "not-a-mapping", "success-control"),
 )
-def test_explicit_failed_executor_is_never_stamped_completed(
-    request_class, executor_name, outcome, reason
+def test_runner_enforces_completion_contract_before_projection(
+    verified_catalog, request_id, issue_number, executor_name, projector_name, outcome, reason,
 ) -> None:
-    from scripts.agent_os_notion_read_request.runner import run_notion_read_request
+    from scripts.agent_os_notion_read_request import runner
 
-    class Admission:
-        secret_dispatch_authorized = True
-        reason_codes = ("admitted",)
-        def __init__(self):
-            self.request_class = request_class
-        def to_dict(self):
-            return {"status": "admitted"}
-
-    with patch(
-        "scripts.agent_os_notion_read_request.runner.admit_notion_read_request",
-        return_value=Admission(),
-    ), patch(
-        "scripts.agent_os_notion_read_request.runner." + executor_name,
-        return_value=outcome,
-    ):
-        with pytest.raises(NotionReadRequestError, match=reason):
-            run_notion_read_request(
-                {}, expected_repository=REPO, expected_actor=ACTOR,
-                generated_at=GENERATED_AT, catalog=object(),
+    # Use a real admitted transport/catalog, but isolate the completion guard
+    # from the independent projector's defensive validation on three routes.
+    event = transport(request_id=request_id, issue_number=issue_number)
+    projected_result = {"test_marker": "validated"}
+    projector = (
+        patch.object(runner, projector_name, return_value=projected_result)
+        if projector_name is not None else nullcontext(None)
+    )
+    evidence = None
+    caught = None
+    with patch.object(runner, executor_name, return_value=outcome) as executor, projector as project:
+        try:
+            evidence = runner.run_notion_read_request(
+                event, expected_repository=REPO, expected_actor=event["actor"],
+                generated_at=GENERATED_AT, catalog=verified_catalog,
                 scheduler_task_executor_factory=lambda: None,
             )
+        except (NotionReadRequestError, TypeError) as error:
+            caught = error
+        executor.assert_called_once()
+
+        if reason is not None:
+            # Destination's bare ** expansion would raise TypeError for None
+            # without the producer guard: the typed, finite runner refusal is
+            # the contract, not just any exception from downstream.
+            assert type(caught) is NotionReadRequestError, (
+                f"runner completion guard must issue its typed refusal, got {caught!r} "
+                f"and dispatch={evidence and evidence['dispatch_status']!r}"
+            )
+            assert str(caught) == reason
+            if project is not None:
+                project.assert_not_called()
+        else:
+            assert caught is None
+            assert evidence is not None
+            assert evidence["dispatch_status"] == "completed"
+            assert evidence["result"]["test_marker"] == "validated"
+            if project is not None:
+                project.assert_called_once()
 
 
 def test_malformed_runner_catalog_is_not_a_transport_failure(tmp_path, capsys) -> None:
@@ -257,3 +285,48 @@ def test_transport_accepts_exactly_its_byte_limit(tmp_path, capsys) -> None:
     assert code == 0
     assert receipt["dispatch_status"] == "blocked"
     assert "failure" not in receipt
+
+
+
+def test_transport_bounds_bytes_requested_before_parsing(tmp_path) -> None:
+    from scripts.agent_os_notion_read_request.runner import _read_transport
+
+    class RecordingBinaryInput(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__(b"{}")
+            self.read_sizes = []
+
+        def read(self, size=-1):
+            self.read_sizes.append(size)
+            return super().read(size)
+
+    stream = RecordingBinaryInput()
+    with patch.object(Path, "open", return_value=stream) as boundary:
+        assert _read_transport(tmp_path / "transport.json") == {}
+    boundary.assert_called_once_with("rb")
+    assert stream.read_sizes == [MAX_TRANSPORT_BYTES + 1]
+
+
+def test_result_write_failure_emits_only_sanitized_stdout_receipt(tmp_path, capsys) -> None:
+    transport = tmp_path / "transport.json"
+    transport.write_text("{}", encoding="utf-8")
+    output = tmp_path / "output-is-directory"
+    output.mkdir()
+    code = main([
+        "--transport", str(transport),
+        "--repository", REPO,
+        "--allowed-actor", ACTOR,
+        "--generated-at", GENERATED_AT,
+        "--output", str(output),
+    ])
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err == ""
+    receipt = json.loads(captured.out)
+    _assert_failure_shape(receipt, "receipt-write-failed")
+    assert receipt["failure"]["phase"] == "write"
+    assert receipt["failure"]["error_class"] == "IsADirectoryError"
+    assert receipt["failure"]["detail"] is None
+    assert str(output) not in captured.out
+    assert output.is_dir()
+    assert not list(output.iterdir())
