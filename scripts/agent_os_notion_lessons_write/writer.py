@@ -268,7 +268,72 @@ def _check_evidence_append(existing: Mapping, lesson: Mapping) -> tuple[str, ...
     return tuple(value for value in wanted if value not in old)
 
 
-def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[tuple[str, ...], list[dict]]:
+def _direct_duplicate(row: Mapping, lesson: Mapping) -> bool:
+    """Only a fully comparable, no-new-evidence lesson can be reused.
+
+    Title paraphrases are allowed ONLY after the duplicate title scan has
+    identified a single candidate and all substantive guidance, guardrails,
+    relevant metadata and known sources have been compared. Title overlap
+    by itself is not enough. Unknown fields fail closed to review.
+    """
+    try:
+        for name in lesson:
+            if name in ("Lesson Learned", "Source Link", SUPPORTING_SOURCE_LINKS):
+                continue
+            if _values(row, (name,))[name] != lesson[name]:
+                return False
+        # A matching title cannot hide changes to lesson guidance.
+        for name in ("What Happened", "What To Do Next Time", "Guardrail"):
+            if _values(row, (name,))[name] != lesson[name]:
+                return False
+        current = _values(row, ("Source Link", SUPPORTING_SOURCE_LINKS))
+        refs = set(current[SUPPORTING_SOURCE_LINKS])
+        if current["Source Link"]:
+            refs.add(current["Source Link"])
+        if "Source Link" in lesson and lesson["Source Link"] not in refs:
+            return False
+        if any(ref not in refs for ref in lesson.get(SUPPORTING_SOURCE_LINKS, ())):
+            return False
+        return True
+    except (WriteBlocked, TypeError, ValueError, KeyError):
+        return False
+
+
+def _reuse_duplicate(client, source_id: str, row: Mapping, lesson: Mapping,
+                     result: dict) -> dict:
+    """Read back a single canonical duplicate, log reuse but not fake usage.
+
+    The outcome is an immutable, no-mutation writer receipt; the actual
+    applied-lesson metrics are calculated separately from verified CKR6/CKR7
+    GitHub application receipts, never from duplicate title encounters.
+    """
+    page_id = _page(row, source_id)
+    current = client.get_page(page_id)
+    _page(current, source_id, page_id)
+    if (_page_state(current) != _page_state(row)
+            or _lesson_id(current) is None or not _direct_duplicate(current, lesson)):
+        result.update(status="conflict", reason_code="duplicate-changed-before-reuse")
+        return result
+    lesson_id = _lesson_id(current)
+    revision = current["last_edited_time"]
+    result.update(
+        status="unchanged", reason_code="direct-duplicate-reused",
+        write_attempts=0, readback_verified=True, page_id=page_id,
+        lesson_id=lesson_id, revision=revision,
+        follow_existing_lesson=True,
+        reuse_log={
+            "event": "direct-duplicate-encountered",
+            "lesson_id": lesson_id,
+            "source_revision": revision,
+            "counted_as_applied": False,
+            "application_receipt_required": True,
+        },
+        activation_prerequisites=activation_prerequisites(current),
+    )
+    return result
+
+
+def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[tuple[str, ...], list[dict], Mapping | None]:
     """Inspect one complete, capped canonical catalog snapshot; never mutate.
 
     Incomplete pagination, malformed identities, duplicates and schema drift
@@ -283,6 +348,7 @@ def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[
         raise WriteBlocked("incomplete-duplicate-scan")
     matches = set()
     reviews = {}
+    direct_matches = {}
     seen_page_ids = set()
     for row in rows:
         page_id = _page(row, source_id)
@@ -296,10 +362,13 @@ def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[
                 raise WriteBlocked("ambiguous-duplicate-scan")
             matches.add(lesson_id)
             reviews[lesson_id] = _duplicate_evidence_review(row, lesson, lesson_id)
+            if _direct_duplicate(row, lesson):
+                direct_matches[lesson_id] = row
     if len(matches) > 10:
         raise WriteBlocked("ambiguous-duplicate-scan")
     ordered = tuple(sorted(matches, key=lambda value: int(value[3:])))
-    return ordered, [reviews[lesson_id] for lesson_id in ordered]
+    return (ordered, [reviews[lesson_id] for lesson_id in ordered],
+            direct_matches.get(ordered[0]) if len(ordered) == 1 else None)
 
 
 def _find_lesson_id(client, source_id: str, lesson_id: str) -> Mapping | None:
@@ -433,7 +502,9 @@ def execute(request: AdmittedRequest, client) -> dict:
         else:
             existing = _find_title(client, source_id, lesson)
             if existing is None:
-                possible, reviews = _find_semantic_duplicates(client, source_id, lesson)
+                possible, reviews, direct_row = _find_semantic_duplicates(client, source_id, lesson)
+                if direct_row is not None:
+                    return _reuse_duplicate(client, source_id, direct_row, lesson, result)
                 if possible:
                     result.update(status="blocked", reason_code="possible-semantic-duplicate",
                                   duplicate_lesson_ids=list(possible), duplicate_evidence_reviews=reviews)
@@ -449,6 +520,20 @@ def execute(request: AdmittedRequest, client) -> dict:
                           revision=existing["last_edited_time"])
             added_supporting_refs = _check_evidence_append(existing, lesson) if target is not None else None
             if _values(existing, lesson) == lesson:
+                if target is None and _direct_duplicate(existing, lesson):
+                    result.update(
+                        status="unchanged", reason_code="direct-duplicate-reused",
+                        follow_existing_lesson=True,
+                        reuse_log={
+                            "event": "direct-duplicate-encountered",
+                            "lesson_id": _lesson_id(existing),
+                            "source_revision": existing["last_edited_time"],
+                            "counted_as_applied": False,
+                            "application_receipt_required": True,
+                        },
+                        readback_verified=True,
+                        activation_prerequisites=activation_prerequisites(existing))
+                    return result
                 result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True,
                               activation_prerequisites=activation_prerequisites(existing))
                 return result
@@ -472,7 +557,9 @@ def execute(request: AdmittedRequest, client) -> dict:
         elif target is None:
             # Close the read-only pre-reservation window; an ambiguous page
             # must never be resolved by POST or a force-rearmed tag.
-            possible, reviews = _find_semantic_duplicates(client, source_id, lesson)
+            possible, reviews, direct_row = _find_semantic_duplicates(client, source_id, lesson)
+            if direct_row is not None:
+                return _reuse_duplicate(client, source_id, direct_row, lesson, result)
             if possible:
                 result.update(status="blocked", reason_code="possible-semantic-duplicate",
                               duplicate_lesson_ids=list(possible), duplicate_evidence_reviews=reviews)
