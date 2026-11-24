@@ -2,6 +2,8 @@
 
 This is a deterministic, read-only producer for review, not a lesson writer.
 Commit labels are hints, never evidence that a reusable rule was proven.
+To keep the report bounded, it does not reconstruct historical CI attempts,
+review threads or force-pushed heads.
 CKR5 remains the sole learning-quality evaluator; Notion publication and
 all merge, issue, and approval decisions are explicitly out of scope.
 """
@@ -31,9 +33,6 @@ SUBJECT = re.compile(r"^(feat|fix|test|docs|refactor|chore)(?:\(([a-zA-Z0-9_.-]{
 MAX_COMMITS = 250
 MAX_REFS_PER_GROUP = 20
 MAX_GROUPS = 25
-MAX_DISCUSSION_ITEMS = 200
-MAX_CHECKS_PER_COMMIT = 100
-MAX_FAILED_CHECK_REFS = 30
 
 
 class EvidenceError(Exception):
@@ -115,7 +114,7 @@ def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str,
     collected: list[dict[str, Any]] = []
     for page in range(1, 5):
         rows = reader.get(f"/pulls/{number}/commits?per_page=100&page={page}")
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
             raise EvidenceError("commit-list-malformed")
         collected.extend(rows)
         if len(collected) > MAX_COMMITS:
@@ -128,108 +127,6 @@ def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str,
     if len(ids) != declared or len(set(ids)) != declared:
         raise EvidenceError("commit-history-identity-invalid")
     return collected
-
-
-def _paged_discussion(reader: GitHubReader, path: str) -> tuple[list[dict[str, Any]], bool]:
-    """Return at most 200 items, explicitly indicating incomplete history."""
-    values: list[dict[str, Any]] = []
-    for page in range(1, 4):
-        records = reader.get(f"{path}?per_page=100&page={page}")
-        if not isinstance(records, list) or len(records) > 100 or any(not isinstance(x, dict) for x in records):
-            raise EvidenceError("discussion-evidence-malformed")
-        values.extend(records)
-        if len(values) > MAX_DISCUSSION_ITEMS:
-            return values[:MAX_DISCUSSION_ITEMS], True
-        if len(records) < 100:
-            return values, False
-    return values[:MAX_DISCUSSION_ITEMS], True
-
-
-def _check_history(reader: GitHubReader, sha: str) -> list[dict[str, Any]]:
-    """Fetch all historical check runs, including reruns hidden by filter=latest."""
-    values: list[dict[str, Any]] = []
-    for page in range(1, 5):
-        response = reader.get(f"/commits/{sha}/check-runs?filter=all&per_page=100&page={page}")
-        if not isinstance(response, dict) or type(response.get("total_count")) is not int:
-            raise EvidenceError("check-run-evidence-malformed")
-        rows = response.get("check_runs")
-        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
-            raise EvidenceError("check-run-evidence-malformed")
-        values.extend(rows)
-        if len(values) > 300:
-            raise EvidenceError("check-run-evidence-incomplete")
-        if len(rows) < 100:
-            if len(values) != response["total_count"]:
-                raise EvidenceError("check-run-evidence-incomplete")
-            return values
-    raise EvidenceError("check-run-evidence-incomplete")
-
-
-def _legacy_statuses(reader: GitHubReader, sha: str) -> list[dict[str, Any]]:
-    values: list[dict[str, Any]] = []
-    for page in range(1, 4):
-        rows = reader.get(f"/commits/{sha}/statuses?per_page=100&page={page}")
-        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
-            raise EvidenceError("legacy-status-evidence-malformed")
-        values.extend(rows)
-        if len(rows) < 100:
-            return values
-    raise EvidenceError("legacy-status-evidence-incomplete")
-
-
-def _review_and_ci_evidence(reader: GitHubReader, number: int, commits: list[dict[str, Any]]) -> dict[str, Any]:
-    reviews, reviews_truncated = _paged_discussion(reader, f"/pulls/{number}/reviews")
-    comments, comments_truncated = _paged_discussion(reader, f"/issues/{number}/comments")
-    inline, inline_truncated = _paged_discussion(reader, f"/pulls/{number}/comments")
-    timeline, timeline_truncated = _paged_discussion(reader, f"/issues/{number}/timeline")
-    force_push = any(item.get("event") == "head_ref_force_pushed" for item in timeline)
-    review_changes_requested = [item["html_url"] for item in reviews if item.get("state") == "CHANGES_REQUESTED" and isinstance(item.get("html_url"), str)]
-    inline_refs = [item["html_url"] for item in inline if isinstance(item.get("html_url"), str) and item["html_url"].startswith(f"https://github.com/{reader.repository}/")]
-    check_totals = {"success": 0, "failure": 0, "other": 0, "missing": 0, "attention": 0}
-    legacy_totals = {"success": 0, "failure": 0, "pending": 0, "error": 0, "other": 0}
-    failed_checks: list[dict[str, str]] = []
-    valid_failed_refs_seen = missing_failed_refs = 0
-    for entry in commits:
-        sha = entry["sha"]
-        checks = _check_history(reader, sha)
-        statuses = _legacy_statuses(reader, sha)
-        if not checks:
-            check_totals["missing"] += 1
-        for check in checks:
-            outcome = check.get("conclusion")
-            if outcome == "success":
-                check_totals["success"] += 1
-            elif outcome == "failure":
-                check_totals["failure"] += 1
-            else:
-                check_totals["other"] += 1
-            if outcome not in ("success", "neutral", "skipped"):
-                check_totals["attention"] += 1
-                url = check.get("html_url")
-                if isinstance(url, str) and url.startswith(f"https://github.com/{reader.repository}/"):
-                    valid_failed_refs_seen += 1
-                    if len(failed_checks) < MAX_FAILED_CHECK_REFS:
-                        failed_checks.append({"commit_sha": sha, "check_url": url})
-                else:
-                    missing_failed_refs += 1
-        for status in statuses:
-            state = status.get("state")
-            legacy_totals[state if state in legacy_totals else "other"] += 1
-    return {
-        "review_count_observed": len(reviews), "issue_comment_count_observed": len(comments),
-        "inline_comment_count_observed": len(inline), "inline_comment_refs": inline_refs,
-        "review_history_truncated": reviews_truncated,
-        "issue_comment_history_truncated": comments_truncated,
-        "inline_comment_history_truncated": inline_truncated,
-        "timeline_history_truncated": timeline_truncated,
-        "rewritten_history_observed": force_push,
-        "change_request_refs": review_changes_requested,
-        "check_run_counts": check_totals, "legacy_status_counts": legacy_totals,
-        "failed_check_refs": failed_checks,
-        "failed_check_refs_unavailable": missing_failed_refs,
-        "failed_check_refs_truncated": valid_failed_refs_seen > MAX_FAILED_CHECK_REFS,
-        "independent_review_verified": False,
-    }
 
 
 def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> dict[str, Any] | None:
@@ -376,7 +273,6 @@ def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validati
         raise EvidenceError("validation-run-evidence-missing")
     validation = _validate_run(run, sha)
     groups, kinds = _group_history(commits, repo, number)
-    supporting = _review_and_ci_evidence(reader, number, commits)
     return {
         "schema_version": 1, "repository": repo, "pr_number": number,
         "merge_sha": sha, "pr_url": f"https://github.com/{repo}/pull/{number}",
@@ -386,16 +282,12 @@ def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validati
         "commit_count": expected_count,
         "all_commit_shas": [entry["sha"] for entry in commits],
         "commit_kind_counts": kinds, "validation": validation,
-        "supporting_evidence": supporting,
-        "review_leads": groups, "status": ("review-needed" if (groups or validation["state"] != "success"
-            or supporting["check_run_counts"]["attention"] or supporting["change_request_refs"]
-            or supporting["inline_comment_count_observed"] or supporting["rewritten_history_observed"]
-            or supporting["legacy_status_counts"]["failure"] or supporting["legacy_status_counts"]["error"]
-            or supporting["legacy_status_counts"]["pending"]
-            or supporting["review_history_truncated"] or supporting["issue_comment_history_truncated"]
-            or supporting["inline_comment_history_truncated"] or supporting["timeline_history_truncated"]
-            or supporting["failed_check_refs_unavailable"] or supporting["failed_check_refs_truncated"])
-            else "no-repair-leads-observed"),
+        # No historical CI, review-comment or force-push reconstruction:
+        # this small, bounded report never certifies those unobserved surfaces.
+        "historical_ci_or_review_examined": False,
+        "review_leads": groups,
+        "status": ("review-needed" if groups or validation["state"] != "success"
+                   else "no-repair-leads-observed"),
         "lesson_proposal": None, "existing_lesson_duplicate_review": "not-run",
         "notion_write_performed": False, "github_write_performed": False,
         "publication_authorized": False, "merge_authorized": False,
@@ -416,13 +308,9 @@ def render_summary(report: dict[str, Any]) -> str:
              f"- Listed PR commits: **{report['commit_count']}** (historical removed heads not certified)",
              f"- Exact merge validation: **{report['validation']['state']}**",
              f"- Repair review leads: **{len(report['review_leads'])}**",
-             f"- Historical failed CI checks: **{report['supporting_evidence']['check_run_counts']['failure']}** (review-only)",
-             f"- Attention-worthy CI checks: **{report['supporting_evidence']['check_run_counts']['attention']}**",
-             f"- Rewritten history observed: **{report['supporting_evidence']['rewritten_history_observed']}**",
              f"- Analyzer revision: **{report.get('analyzer_sha') or 'unavailable'}**",
-             f"- Prior change-request reviews: **{len(report['supporting_evidence']['change_request_refs'])}** (review-only)",
-             f"- Discussion history truncated: **{report['supporting_evidence']['review_history_truncated'] or report['supporting_evidence']['issue_comment_history_truncated']}**",
-             f"- Failed check links unavailable: **{report['supporting_evidence']['failed_check_refs_unavailable']}**", "",
+             "- Evidence scope: current merged PR commit list and supplied validation run only.",
+             "- Historical CI attempts, code reviews, and removed heads: **not examined**.", "",
              "| Commit scope | Fix commits | Test commits | Disposition |",
              "| --- | ---: | ---: | --- |"]
     for lead in report["review_leads"]:
