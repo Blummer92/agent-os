@@ -85,8 +85,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
@@ -106,6 +104,10 @@ from .ckr6_github_reader import (
     ALLOWED_REPOSITORY,
     GITHUB_API_BASE_URL,
     GitHubIssueCommentReadUnavailable,
+    _urllib_http_get,
+    _MAX_RESPONSE_BYTES,
+    _READ_HEADERS as _SHARED_READ_HEADERS,
+    GitHubIssueCommentReader,
 )
 
 DEFAULT_ALLOWED_ACTOR = "Blummer92"
@@ -143,14 +145,7 @@ _MAX_COMMENT_PAGES = 50  # 5000 comments; deeper threads fail closed.
 _WORKFLOW_RUN_PAGE_SIZE = 100
 _MAX_WORKFLOW_RUN_PAGES = 10
 _CKR6_GATE_WORKFLOW_PATH = ".github/workflows/agent-os-ckr6-mutation-gate.yml"
-_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-_READ_TIMEOUT_SECONDS = 30
-_USER_AGENT = "agent-os-ckr6-mutation-gate"
-_READ_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "User-Agent": _USER_AGENT,
-    "X-GitHub-Api-Version": "2022-11-28",
-}
+_READ_HEADERS = _SHARED_READ_HEADERS | {"User-Agent": "agent-os-ckr6-mutation-gate"}
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _HEAD_SHA_RE = re.compile(r"(?i)^[0-9a-f]{40}$")
 # The canonical request's task_reference is free text, so accept only an
@@ -557,20 +552,6 @@ def evaluate_mutation_boundary(
 HttpGet = Callable[[str, dict[str, str]], "tuple[int, bytes]"]
 
 
-def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, method="GET", headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=_READ_TIMEOUT_SECONDS) as response:
-            return response.status, response.read(_MAX_RESPONSE_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-failure", f"GitHub API returned HTTP {exc.code}"
-        ) from exc
-    except Exception as exc:  # URLError, timeout, TLS failure: no read happened.
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-failure", f"GitHub API read failed: {type(exc).__name__}"
-        ) from exc
-
 
 def read_bounded_comment_pages(fetch_page, *, require_unique_ids=False):
     """Exhaust bounded comment pages, refusing incomplete or unstable reads."""
@@ -615,24 +596,10 @@ class PaginatedIssueCommentReader:
         self._http_get = http_get or _urllib_http_get
 
     def _token(self) -> str:
-        if self._token_provider is None:
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "no GitHub App installation-token provider is installed",
-            )
-        try:
-            token = self._token_provider.get_installation_token()
-        except Exception:
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "GitHub App installation token is unavailable",
-            ) from None
-        if type(token) is not str or not token.strip():
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "no GitHub App installation token is available",
-            )
-        return token
+        return GitHubIssueCommentReader(
+            token_provider=self._token_provider,
+            http_get=self._http_get,
+        )._read_token()
 
     def _get_json_list(self, url: str) -> list[Mapping[str, object]]:
         status, body = self._http_get(
