@@ -31,7 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: main
+          # Pin the analyzer to the event's trusted default-branch revision.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
