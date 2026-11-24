@@ -67,6 +67,7 @@ jobs:
       needs_node_cache: ${{ steps.plan.outputs.needs_node_cache }}
       needs_picture_perfect_install: ${{ steps.plan.outputs.needs_picture_perfect_install }}
       node_lock_paths: ${{ steps.plan.outputs.node_lock_paths }}
+      ci_integrity: ${{ steps.plan.outputs.ci_integrity }}
     steps:
       - name: Check out exact pull request head
         uses: actions/checkout@v7
@@ -128,6 +129,12 @@ jobs:
               json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
           ).decode("ascii")
           print(f"profile={plan.profile}")
+          ci_integrity = any(
+              path.startswith(("scripts/agent_os_ci_", "tests/test_validate_all_", "tests/test_ci_junit_", "tests/test_agent_os_ci_"))
+              or path in {"scripts/validate-all.sh", ".github/workflows/agent-os-validation.yml", ".github/workflows/agent-os-ci-evidence-collector.yml"}
+              for path in changed
+          )
+          print(f"ci_integrity={str(ci_integrity).lower()}")
           print(f"plan_base64={encoded}")
           node = node_setup_requirements(plan.commands)
           print(f"needs_node={str(node['needs_node']).lower()}")
@@ -228,6 +235,46 @@ jobs:
             fi
             echo "- Static/focused evidence is non-final; Ready-for-Review still requires one exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  ci_integrity_contracts:
+    name: CI integrity regression tests
+    needs: plan
+    if: ${{ github.event_name == 'pull_request' && needs.plan.outputs.ci_integrity == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install CI contract test dependencies
+        run: python -m pip install 'pytest>=9' 'pytest-cov>=7.1.0' 'ruff>=0.16.8' 'pyyaml>=6.0.3'
+      - name: Run CI integrity regression tests
+        env:
+          PYTEST_ADDOPTS: ""
+        run: |
+          python -m pytest -q \
+            tests/test_validate_all_*.py \
+            tests/test_ci_junit_validate.py \
+            tests/test_agent_os_ci_junit_diff.py \
+            tests/test_agent_os_ci_junit_subtest_receipt.py \
+            tests/test_agent_os_ci_test_completeness.py \
+            tests/test_agent_os_ci_evidence_collector.py \
+            tests/test_agent_os_ci_aggregate_manifest.py \
+            --junitxml="$RUNNER_TEMP/ci-integrity-contracts.xml"
+      - name: Upload CI integrity regression evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-integrity-contracts-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-integrity-contracts.xml
+          if-no-files-found: error
+          retention-days: 7
 
   frontend:
     name: Run frontend checks
@@ -984,6 +1031,9 @@ jobs:
           CI_JUNIT_HEAD_SHA: ${{ steps.authority.outputs.head_sha || github.sha }}
         run: bash ./scripts/validate-all.sh
 
+      - name: Validate complete aggregate evidence bundle
+        run: python scripts/agent_os_ci_aggregate_manifest.py "${{ runner.temp }}/junit-aggregate"
+
       - name: Record not-executed infrastructure receipt
         # Only when a pre-aggregate step failed and the aggregate step
         # itself never produced a verdict (skipped/cancelled): the
@@ -1292,3 +1342,4 @@ jobs:
           FRONTEND_TESTED_SHA: ${{ needs.frontend.outputs.tested_sha }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
         run: python3 scripts/agent_os_aggregate_gate.py
+

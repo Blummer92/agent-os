@@ -368,7 +368,16 @@ def test_review_3762_aggregate_junit_required_and_provider_unavailable_preserved
     jobs = _receipt_jobs("success", "success")
     missing_download = _receipt_for_aggregate(jobs, [artifact])
     assert missing_download["streams"]["aggregate"]["classification"] == "PROVIDER_UNAVAILABLE"
-    valid = _receipt_for_aggregate(jobs, [artifact], {"82": _zip({"aggregate.xml": xml})})
+    manifest = (
+        "suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n"
+        "root\taggregate.xml\tyes\tPASS\t0\tEXECUTED_PASS\n"
+        "test selection completeness: root\ttest-completeness-root.json\tyes\tPASS\t0\tCOMPLETE\n"
+    ).encode()
+    complete = json.dumps({'schema': 'agent-os-ci-test-completeness/1', 'suite_name': 'root', 'verdict': 'COMPLETE', 'error': None, 'expected_count': 1, 'executed_count': 1, 'missing_count': 0, 'missing': [], 'skipped_mandatory': [], 'skip_allowlist_stale': [], 'reference_only': [], 'reference_noconftest_only': [], 'reference_returncode': 0, 'reference_noconftest_returncode': 0, 'outcome': {'failures': 0, 'errors': 0, 'failed_nodes': []}}).encode()
+    valid = _receipt_for_aggregate(jobs, [artifact], {"82": _zip({
+        "aggregate.xml": xml, "manifest.tsv": manifest,
+        "test-completeness-root.json": complete,
+    })})
     assert valid["streams"]["aggregate"]["classification"] == "EVIDENCE_VALID"
     invalid = _receipt_for_aggregate(jobs, [artifact], {"82": _zip({"aggregate.xml": b"broken"})})
     assert invalid["streams"]["aggregate"]["classification"] == "REJECT_SCHEMA"
@@ -615,3 +624,4 @@ def test_main_duplicate_aggregate_steps_fail_closed(monkeypatch, tmp_path) -> No
     assert [u for u in calls if u.endswith("/logs")] == []
     assert receipt["subtest_log_corroboration"] == "unavailable"
     assert receipt["subtest_log_error"]["stage"] == "aggregate_step_resolution"
+

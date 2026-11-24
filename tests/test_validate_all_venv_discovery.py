@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 VENV_SUITES = (".venv-1/lib/site-packages/pkg", ".venv-2/lib/site-packages/pkg")
 JUNIT_PASS = (
     '<?xml version="1.0"?><testsuites><testsuite name="pytest" tests="1" failures="0" '
@@ -128,3 +128,4 @@ def test_collection_error_is_not_success(tmp_path: Path) -> None:
         "pkg-collecterr" in line and line.split("\t")[3] == "FAIL" and line.endswith("TEST_COLLECTION_ERROR")
         for line in lines
     )
+

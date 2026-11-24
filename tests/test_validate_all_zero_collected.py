@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 
 
 def _write_test(path: Path) -> None:
@@ -89,3 +89,4 @@ def test_zero_collected_suite_is_not_green(repo: Path, tmp_path: Path) -> None:
     manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
     assert any("pkg-zero" in line and "ZERO_COLLECTED" in line for line in manifest.splitlines())
     assert any("root" in line and "EXECUTED_PASS" in line for line in manifest.splitlines())
+

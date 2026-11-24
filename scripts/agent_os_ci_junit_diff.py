@@ -32,7 +32,7 @@ def _testcases(xml: bytes) -> list[tuple[str, bool]]:
         raise ValueError("empty-junit")
     try:
         root = ET.fromstring(xml)
-    except ET.ParseError as exc:
+    except (ET.ParseError, LookupError) as exc:
         raise ValueError("invalid-junit-xml") from exc
     suites = [root] if root.tag == "testsuite" else list(root) if root.tag == "testsuites" else []
     if not suites or any(x.tag != "testsuite" for x in suites):
@@ -43,7 +43,8 @@ def _testcases(xml: bytes) -> list[tuple[str, bool]]:
         # pytest 9 counts unittest subtests in ``tests`` without a <testcase> each, so the
         # attribute may exceed the elements; elements beyond it (--setup-only/--setup-plan
         # report tests="0" with passing-looking elements) are not executed tests.
-        if len(cases) > int(suite.attrib.get("tests", "-1")):
+        declared_tests = int(suite.attrib.get("tests", "-1"))
+        if len(cases) > declared_tests or (not cases and declared_tests != 0):
             raise ValueError("testcase-count-mismatch")
         for case in cases:
             classname = case.attrib.get("classname") or case.attrib.get("file") or ""
@@ -107,6 +108,8 @@ def junit_outcomes(xml: bytes) -> dict:
                     classname = case.attrib.get("classname") or case.attrib.get("file") or ""
                     failed_nodes.add(f"{classname}::{case.attrib['name']}")
         for attr, actual in observed.items():
+            if actual > int(suite.attrib["tests"]):
+                raise ValueError("junit-outcome-count-mismatch")
             if attr in suite.attrib:
                 try:
                     claimed = int(suite.attrib[attr])
@@ -224,3 +227,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

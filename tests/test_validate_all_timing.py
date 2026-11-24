@@ -11,7 +11,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 TIMING_LINE = re.compile(r"^- .+ \| (?:[0-9]+\.[0-9]{3} s|unavailable)$", re.MULTILINE)
 
 
@@ -147,3 +147,4 @@ def test_validate_all_focused_behavior_ignores_tmp_aggregate_exclusion(tmp_path:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "- PASS | focused: tests/test_sample.py | exit 0 |" in result.stdout
+

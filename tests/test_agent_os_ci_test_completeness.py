@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
-RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 PYTEST_VERSION = tuple(int(part) for part in pytest.__version__.split(".")[:2])
 
 PASSING = "def test_{}():\n    assert True\n"
@@ -192,13 +192,14 @@ def test_configuration_narrowing_cannot_pass(
         assert rows["root"][2:5] == ("FAIL", "4", "NOT_EXECUTED_SETUP_FAILURE")
         assert "test selection completeness: root" not in rows
         return
-    if expected == "ERROR":
+    if expected == "ERROR" or any("--collect-only" in value for value in files.values()):
+        # Empty JUnit is invalid execution evidence even when pytest exited zero.
         # bee17d3 (Copilot review r4528975030): an ERROR receipt reclassifies
         # the suite row from EXECUTED_PASS to TEST_COLLECTION_ERROR as well;
-        # the runner's exit 0 is preserved in the row, only its status fails.
-        assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+        # the effective validation exit records the evidence failure.
+        assert rows["root"][2:5] == ("FAIL", "2", "TEST_COLLECTION_ERROR")
     else:
-        assert rows["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran; the gate is the completeness row
+        assert rows["root"][2:5] == ("FAIL", "1", "TEST_SELECTION_INCOMPLETE")
     row = _completeness(junit_dir)
     classification = {"INCOMPLETE": "TEST_SELECTION_INCOMPLETE", "ERROR": "TEST_COLLECTION_ERROR"}[expected]
     assert row[2:5] == ("FAIL", "1" if expected == "INCOMPLETE" else "2", classification)
@@ -247,7 +248,7 @@ def test_mandatory_skipped_test_cannot_pass(tmp_path: Path) -> None:
     output = result.stdout + result.stderr
     assert result.returncode == 1, output
     assert "OVERALL STATUS\nFAIL" in output
-    assert _rows(junit_dir)["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran
+    assert _rows(junit_dir)["root"][2:5] == ("FAIL", "1", "TEST_SELECTION_INCOMPLETE")
     row = _completeness(junit_dir)
     assert row[2:5] == ("FAIL", "1", "TEST_SELECTION_INCOMPLETE")
     receipt = json.loads((junit_dir / "test-completeness-root.json").read_text(encoding="utf-8"))
@@ -501,3 +502,4 @@ def test_helper_failures_fail_closed_and_ignore_stale_receipts(
     row = _completeness(junit_dir)
     assert row[2:5] == ("FAIL", code, classification)
     assert row[1] == "no"  # the stale receipt was cleared, never reused as evidence
+

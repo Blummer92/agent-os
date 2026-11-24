@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -145,3 +145,4 @@ def test_focused_target_gets_unique_junit(repo: Path, tmp_path: Path) -> None:
     assert "focused__tests__test_root.py.xml" in [p.name for p in junit_dir.glob("*.xml")]
     manifest = (junit_dir / "manifest.tsv").read_text(encoding="utf-8")
     assert "focused: tests/test_root.py" in manifest
+

@@ -28,6 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.agent_os_ci_aggregate_manifest import validate_aggregate_manifest  # noqa: E402
+
 from scripts.agent_os_ci_evidence_health import (  # noqa: E402
     AdvisoryReport,
     StreamObservation,
@@ -494,10 +496,11 @@ def health_classification_from_zip(zip_bytes: bytes, *, source_run_id: int | Non
     return classification if isinstance(classification, str) else None
 
 
-def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = None, source_attempt: int | None = None, source_head: str | None = None, log_markers: dict[str, dict] | None = None) -> dict:
+def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = None, source_attempt: int | None = None, source_head: str | None = None, log_markers: dict[str, dict] | None = None, require_manifest: bool = False) -> dict:
     """Validate a downloaded JUnit artifact: ZIP safety, every XML member
-    valid, no duplicate node ids across files. Manifests and other members
-    are ignored, not parsed.
+    valid, no duplicate node ids across files. A claimed successful aggregate
+    also requires its manifest/member/COMPLETE-receipt contract; focused and
+    failed-run XML remains diagnostic evidence.
 
     A member whose declared total exceeds its testcase elements is
     accepted ONLY with a source-bound subtest receipt inside the same
@@ -576,6 +579,12 @@ def classify_junit_artifact(zip_bytes: bytes, *, source_run_id: int | None = Non
         # be read. Corrupt/unsupported member data is invalid evidence,
         # never a collector crash or an EVIDENCE_VALID receipt.
         return {"classification": "REJECT_SCHEMA"}
+    if require_manifest:
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                validate_aggregate_manifest({name: zf.read(name) for name in members})
+        except (ValueError, KeyError, RuntimeError, zipfile.BadZipFile, OSError) as exc:
+            return {"classification": "REJECT_SCHEMA", "error": str(exc)}
     return {"classification": "EVIDENCE_VALID", "node_count": len(seen), "counts": totals}
 
 
@@ -712,6 +721,8 @@ def build_verified_receipt(*, source_run: dict, jobs: list[dict], artifacts: lis
             junit_results[name] = classify_junit_artifact(
                 data, source_run_id=source_run_id, source_attempt=source_attempt, source_head=source_head,
                 log_markers=log_markers,
+                require_manifest=(name == aggregate_name and aggregate_job is not None
+                                  and aggregate_job.get("conclusion") == "success"),
             )
         for name in duplicates:
             junit_results[name] = {"classification": "REJECT_SCHEMA"}
@@ -918,4 +929,5 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

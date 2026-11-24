@@ -485,6 +485,7 @@ def test_full_collector_path_accepts_real_production_layout_archive(tmp_path: Pa
     )
     assert entry is not None
     artifact = _zip({
+        **_complete_manifest_entries(),
         "root.xml": xml,
         "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
     })
@@ -850,6 +851,18 @@ def _zip(files: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+def _complete_manifest_entries() -> dict[str, bytes]:
+    """Independent completeness fixture for two parent testcase identities."""
+    return {
+        "manifest.tsv": (
+            "suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n"
+            "root\troot.xml\tyes\tPASS\t0\tEXECUTED_PASS\n"
+            "test selection completeness: root\ttest-completeness-root.json\tyes\tPASS\t0\tCOMPLETE\n"
+        ).encode(),
+        "test-completeness-root.json": json.dumps({'schema': 'agent-os-ci-test-completeness/1', 'suite_name': 'root', 'verdict': 'COMPLETE', 'error': None, 'expected_count': 2, 'executed_count': 2, 'missing_count': 0, 'missing': [], 'skipped_mandatory': [], 'skip_allowlist_stale': [], 'reference_only': [], 'reference_noconftest_only': [], 'reference_returncode': 0, 'reference_noconftest_returncode': 0, 'outcome': {'failures': 0, 'errors': 0, 'failed_nodes': []}}).encode(),
+    }
+
+
 def _verified_receipt(zip_bytes: bytes, *, aggregate_conclusion: str = "success",
                       aggregate_log_bytes: bytes | None = None) -> dict:
     run = {"id": RUN_ID, "head_sha": SOURCE_HEAD,
@@ -877,6 +890,7 @@ def test_full_collector_path_accepts_explained_surplus(tmp_path: Path) -> None:
     )
     assert entry is not None
     receipt = _verified_receipt(_zip({
+        **_complete_manifest_entries(),
         "root.xml": xml,
         "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
     }), aggregate_log_bytes=_log_zip({"root": _marker_counts(entry)}))
@@ -934,6 +948,7 @@ def test_full_collector_path_accepts_plaintext_job_log(tmp_path: Path) -> None:
     )
     assert entry is not None
     artifact = _zip({
+        **_complete_manifest_entries(),
         "root.xml": xml,
         "junit-subtest-receipt-root.json": json.dumps(entry).encode(),
     })

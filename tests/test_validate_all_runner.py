@@ -10,7 +10,7 @@ import pytest
 
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py")
 
 
 def _write_test(path: Path, *, failing: bool = False) -> None:
@@ -683,3 +683,4 @@ def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receip
     for name in ("pkg-pass", "root"):
         assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
     assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
