@@ -865,3 +865,44 @@ def test_revalidation_get_decodes_valid_bounded_json_and_preserves_post_semantic
 
     monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
     assert r.api("GET", "/issues/3418/comments?per_page=100", "token") == [{"id": 1}]
+
+
+def test_revalidation_get_accepts_valid_json_at_the_exact_byte_limit(monkeypatch):
+    limit = 64
+    monkeypatch.setattr(r, "_MAX_RESPONSE_BYTES", limit)
+    payload = b'[{"id":1}]'.ljust(limit, b" ")
+    responses = iter((payload, payload + b" "))
+    calls = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            assert size == limit + 1
+            return next(responses)[:size]
+
+    def read_only(request, *, timeout):
+        calls.append(request.method)
+        assert request.method == "GET"
+        return Response()
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", read_only)
+    path = "/issues/3418/comments?per_page=100"
+    assert r.api("GET", path, "offline-fixture") == [{"id": 1}]
+    with pytest.raises(r.RevalidationBlocked, match="^github-read-failed$"):
+        r.api("GET", path, "offline-fixture")
+    assert calls == ["GET", "GET"]
+
+
+def test_select_run_picks_latest_exact_match_regardless_of_list_order():
+    listing = runs()
+    older = listing["workflow_runs"][0]
+    later = {**older, "id": 89, "created_at": "2026-11-14T04:01:00Z"}
+    assert r.select_run(pr(), {"total_count": 2, "workflow_runs": [later, older]}) == 89
+    assert r.select_run(pr(), {"total_count": 2, "workflow_runs": [older, later]}) == 89
