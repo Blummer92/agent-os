@@ -805,7 +805,7 @@ def test_3951_postback_targets_issues_endpoint_for_pr_conversation(monkeypatch):
 @pytest.mark.parametrize("dedupe_payload", [
     b"x" * (bridge._MAX_RESPONSE_BYTES + 1),
     b"not-json",
-    b"\\xff",
+    bytes([255]),
 ])
 def test_postback_dedupe_get_is_bounded_and_falls_back_to_post(
     monkeypatch, capsys, dedupe_payload,
