@@ -31,10 +31,10 @@ against a fresh merged-PR readback (head, merge commit, actor when GitHub
 supplies one, base, and PR-to-issue linkage) before the batch runs, and merge
 evidence is a routing prerequisite only: closure still requires the
 independent owner decision, satisfaction, QA, and fresh issue admission
-inside ``run_closure_batch``. A head-bound QA record cannot be honoured by
-the issue-only reader below (its snapshot carries no PR head), and fails
-closed by the canonical ADV-2 rule — that is the intended behaviour, not a
-gap to paper over with a caller-supplied head.
+inside ``run_closure_batch``. When that route is given head-bound QA,
+the observed PR head qualifies the initial issue snapshot and is verified
+again at the batch's pre-write snapshot read. Ordinary issue-only reads
+remain headless and cannot confirm head-bound QA.
 
 Reader honesty. The reader performs one fresh GET of a single issue and
 builds an ISSUE-ONLY snapshot: ``pull_request_number`` / ``source_head`` /
@@ -82,6 +82,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from github import Github
@@ -172,7 +173,9 @@ def github_api_transport(token: str | None) -> Transport:
         except GitHubRequestError as exc:
             if type(exc.status) is int:
                 return exc.status, {}
-            if exc.kind == "transport-unavailable":
+            if exc.kind == "transport-unavailable" or method in {"PATCH", "POST", "DELETE"}:
+                # A status-less requester failure may follow a committed write,
+                # including malformed response headers. Readback decides; never retry.
                 raise ConnectionError("github-transport-unavailable") from exc
             raise RuntimeError(f"github-transport-failed:{exc.kind}") from exc
 
@@ -263,68 +266,85 @@ class GitHubClosureReader:
         )
 
 
+class _PostMergeHeadReader(GitHubClosureReader):
+    """Carry verified head evidence without changing the issue mutation target."""
+
+    def __init__(self, request: Transport, initial_head: str, reverify: Callable[[], str]) -> None:
+        super().__init__(request)
+        self._initial_head: str | None = initial_head
+        self._reverify = reverify
+
+    def read_issue_readback(self, repository: str, issue_number: int) -> ClosureIssueReadback:
+        observed = super().read_issue_readback(repository, issue_number)
+        head, self._initial_head = self._initial_head, None
+        if head is None:
+            return observed  # Ordinary post-close readback; no unobserved PR claims.
+        return replace(observed, snapshot=replace(observed.snapshot, source_head=head, snapshot_id=""))
+
+    def read_issue_snapshot(self, repository: str, issue_number: int) -> LifecycleStateSnapshot:
+        head = self._reverify()
+        observed = super().read_issue_snapshot(repository, issue_number)
+        return replace(observed, source_head=head, snapshot_id="")
+
+
 class GitHubClosureWriter:
     """Live GitHub writer implementing the closure writer protocol."""
 
     def __init__(self, request: Transport) -> None:
         self._request = request
 
+    def _write(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+        *,
+        action: str,
+        success: tuple[int, ...],
+    ) -> Any:
+        """Dispatch once; preserve per-action status and uncertainty semantics."""
+        try:
+            status, payload = self._request(method, path, body)
+        except OSError as exc:
+            raise ClosureWriteUncertain(
+                f"github-issue-{action}-uncertain:{type(exc).__name__}"
+            ) from exc
+        if status in success:
+            return payload
+        if 500 <= status <= 599:
+            raise ClosureWriteUncertain(f"github-issue-{action}-uncertain:{status}")
+        raise RuntimeError(f"github-issue-{action}-failed:{status}")
+
     def close_issue(
         self, repository: str, issue_number: int, *, state_reason: str
     ) -> None:
         if state_reason != "completed":
             raise ValueError("closure writer only closes with state_reason completed")
-        try:
-            status, payload = self._request(
-                "PATCH",
-                f"/repos/{repository}/issues/{issue_number}",
-                dict(_CLOSE_PAYLOAD),
-            )
-        except OSError as exc:
-            # Timeout / connection failure: the write may have landed.
-            # Never retry here; the batch reconciles through readback.
-            raise ClosureWriteUncertain(
-                f"github-issue-close-uncertain:{type(exc).__name__}"
-            ) from exc
-        if status == 200:
-            if type(payload) is dict:
-                if "state" in payload and payload["state"] != "closed":
-                    raise ClosureWriteUncertain(
-                        "github-issue-close-ambiguous: payload still open"
-                    )
-                if "state_reason" in payload and payload["state_reason"] != "completed":
-                    raise ClosureWriteUncertain(
-                        "github-issue-close-ambiguous: payload reason mismatch"
-                    )
-            return None
-        if 500 <= status <= 599:
-            raise ClosureWriteUncertain(f"github-issue-close-uncertain:{status}")
-        raise RuntimeError(f"github-issue-close-failed:{status}")
+        payload = self._write(
+            "PATCH", f"/repos/{repository}/issues/{issue_number}",
+            dict(_CLOSE_PAYLOAD), action="close", success=(200,),
+        )
+        if type(payload) is dict:
+            if "state" in payload and payload["state"] != "closed":
+                raise ClosureWriteUncertain(
+                    "github-issue-close-ambiguous: payload still open"
+                )
+            if "state_reason" in payload and payload["state_reason"] != "completed":
+                raise ClosureWriteUncertain(
+                    "github-issue-close-ambiguous: payload reason mismatch"
+                )
 
     def remove_label(
         self, repository: str, issue_number: int, *, label: str
     ) -> None:
         if label != "status:ready":
             raise ValueError("closure writer only removes the status:ready label")
-        try:
-            status, _payload = self._request(
-                "DELETE",
-                f"/repos/{repository}/issues/{issue_number}/labels/{label}",
-                None,
-            )
-        except OSError as exc:
-            raise ClosureWriteUncertain(
-                f"github-issue-label-remove-uncertain:{type(exc).__name__}"
-            ) from exc
-        if status in (200, 204, 404):
-            # 404 means the label is already gone: the reconciliation goal
-            # is achieved. The post-phase re-read still verifies this.
-            return None
-        if 500 <= status <= 599:
-            raise ClosureWriteUncertain(
-                f"github-issue-label-remove-uncertain:{status}"
-            )
-        raise RuntimeError(f"github-issue-label-remove-failed:{status}")
+        # 404 means the label is already gone. Post-phase readback still
+        # verifies this; only this operation accepts 404.
+        self._write(
+            "DELETE", f"/repos/{repository}/issues/{issue_number}/labels/{label}",
+            None, action="label-remove", success=(200, 204, 404),
+        )
 
     def list_comment_bodies(
         self, repository: str, issue_number: int
@@ -349,21 +369,10 @@ class GitHubClosureWriter:
             raise ValueError("evidence comment body must be a non-empty string")
         if "closes #" in body.lower() or "fixes #" in body.lower() or "resolves #" in body.lower():
             raise ValueError("evidence comment must not carry a closing keyword")
-        try:
-            status, _payload = self._request(
-                "POST",
-                f"/repos/{repository}/issues/{issue_number}/comments",
-                {"body": body},
-            )
-        except OSError as exc:
-            raise ClosureWriteUncertain(
-                f"github-issue-comment-uncertain:{type(exc).__name__}"
-            ) from exc
-        if status in (200, 201):
-            return None
-        if 500 <= status <= 599:
-            raise ClosureWriteUncertain(f"github-issue-comment-uncertain:{status}")
-        raise RuntimeError(f"github-issue-comment-failed:{status}")
+        self._write(
+            "POST", f"/repos/{repository}/issues/{issue_number}/comments",
+            {"body": body}, action="comment", success=(200, 201),
+        )
 
 
 def _reconcile_closed_items(
@@ -404,16 +413,17 @@ def _reconcile_closed_items(
         try:
             if stale_ready:
                 writer.remove_label(repository, issue_number, label="status:ready")
+            intended_comment = render_evidence_comment(
+                repository=repository,
+                issue_number=issue_number,
+                evidence_id=request.acceptance.evidence_id,
+                evaluator_id=request.acceptance.evaluator_id,
+                receipt_id=record["receipt_id"] if isinstance(record["receipt_id"], str) else None,
+            )
             writer.post_comment(
                 repository,
                 issue_number,
-                body=render_evidence_comment(
-                    repository=repository,
-                    issue_number=issue_number,
-                    evidence_id=request.acceptance.evidence_id,
-                    evaluator_id=request.acceptance.evaluator_id,
-                    receipt_id=record["receipt_id"] if isinstance(record["receipt_id"], str) else None,
-                ),
+                body=intended_comment,
             )
             after = reader.read_issue_readback(repository, issue_number)
             if after.snapshot.issue_state != "closed" or after.state_reason != "completed":
@@ -423,12 +433,10 @@ def _reconcile_closed_items(
             if not stale_ready and "status:ready" in after.snapshot.lifecycle_labels:
                 # A label that appeared between reads is not silently ignored.
                 raise RuntimeError("reconciliation readback carries status:ready")
-            # Verify the posted comment is present by receipt id, when known.
-            receipt_id = record["receipt_id"]
-            if isinstance(receipt_id, str):
-                bodies = writer.list_comment_bodies(repository, issue_number)
-                if receipt_id not in " ".join(bodies):
-                    raise RuntimeError("reconciliation comment not found in readback")
+            # A receipt citation in unrelated prose is not this evidence comment.
+            bodies = writer.list_comment_bodies(repository, issue_number)
+            if intended_comment not in bodies:
+                raise RuntimeError("reconciliation comment not found in readback")
             # After successful reconciliation the label requirement is
             # discharged: the status no longer claims it is required.
             record["status"] = (
@@ -489,7 +497,14 @@ def run_closure_dispatch(
     """
     if type(requests) is not tuple:
         raise TypeError("closure requests must be an exact tuple")
-    reader = GitHubClosureReader(transport)
+    return _dispatch_with_reader(requests, transport, GitHubClosureReader(transport))
+
+
+def _dispatch_with_reader(
+    requests: tuple[IssueClosureRequest, ...],
+    transport: Transport,
+    reader: GitHubClosureReader,
+) -> list[dict[str, object]]:
     writer = GitHubClosureWriter(transport)
     outcomes = run_closure_batch(
         requests,
@@ -505,7 +520,7 @@ def _verify_post_merge_observation(
     observation: MergeExecutionObservation,
     requests: tuple[IssueClosureRequest, ...],
     transport: Transport,
-) -> None:
+) -> str:
     """Correlate canonical merge-module evidence with a fresh merged PR.
 
     Merge evidence is a routing prerequisite, never closure authority.
@@ -576,6 +591,7 @@ def _verify_post_merge_observation(
             raise ValueError("merge-observation.pr-linkage-ambiguous")
     else:
         raise ValueError("merge-observation.pr-linkage-not-admitted")
+    return head["sha"]
 
 
 def run_post_merge_closure_dispatch(
@@ -592,8 +608,15 @@ def run_post_merge_closure_dispatch(
     """
     if type(requests) is not tuple:
         raise TypeError("closure requests must be an exact tuple")
-    _verify_post_merge_observation(observation, requests, transport)
-    outcomes = run_closure_dispatch(requests, transport)
+    def verify_head() -> str:
+        return _verify_post_merge_observation(observation, requests, transport)
+
+    head = verify_head()
+    if requests[0].acceptance.validated_head_sha is None:
+        outcomes = run_closure_dispatch(requests, transport)
+    else:
+        reader = _PostMergeHeadReader(transport, head, verify_head)
+        outcomes = _dispatch_with_reader(requests, transport, reader)
     return [
         {
             **outcome,
