@@ -7,6 +7,16 @@ set -u
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || exit 2
 
+# Keep public evidence paths stable across package subprocess cwd changes.
+if [ -n "${CI_JUNIT_DIR:-}" ]; then
+  case "$CI_JUNIT_DIR" in
+    /*) ;;
+    *) CI_JUNIT_DIR="$ROOT_DIR/$CI_JUNIT_DIR" ;;
+  esac
+  mkdir -p "$CI_JUNIT_DIR" || { echo "Runner error: cannot prepare CI_JUNIT_DIR" >&2; exit 2; }
+  rm -f "$CI_JUNIT_DIR/manifest.tsv" || { echo "Runner error: cannot replace stale validation manifest" >&2; exit 2; }
+fi
+
 runner_error() {
   echo "Runner error: $1" >&2
   exit 2
@@ -16,6 +26,8 @@ VALIDATE_ALL_MAX_PARALLEL="${VALIDATE_ALL_MAX_PARALLEL:-3}"
 case "$VALIDATE_ALL_MAX_PARALLEL" in
   *[!0-9]*|'') runner_error "VALIDATE_ALL_MAX_PARALLEL must be a positive integer." ;;
 esac
+# Avoid shell integer overflow and Bash-dependent large-decimal comparisons.
+[ "${#VALIDATE_ALL_MAX_PARALLEL}" -le 1 ] || runner_error "VALIDATE_ALL_MAX_PARALLEL must be between 1 and 8."
 if [ "$VALIDATE_ALL_MAX_PARALLEL" -lt 1 ] || [ "$VALIDATE_ALL_MAX_PARALLEL" -gt 8 ]; then
   runner_error "VALIDATE_ALL_MAX_PARALLEL must be between 1 and 8."
 fi
@@ -33,7 +45,8 @@ while [ "$#" -gt 0 ]; do
       ;;
     --focused-maxfail)
       [ "$#" -ge 2 ] || runner_error "--focused-maxfail requires a positive integer."
-      [ -z "$focused_maxfail" ] || runner_error "--focused-maxfail may be supplied only once."
+      [ "${focused_maxfail_present:-0}" -eq 0 ] || runner_error "--focused-maxfail may be supplied only once."
+      focused_maxfail_present=1
       focused_maxfail="$2"
       shift 2
       ;;
@@ -46,7 +59,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -n "$focused_maxfail" ]; then
+if [ "${focused_maxfail_present:-0}" -eq 1 ]; then
   case "$focused_maxfail" in
     *[!0-9]*|'') runner_error "--focused-maxfail must be a positive integer." ;;
   esac
@@ -262,6 +275,23 @@ junit_path_for() {
   fi
 }
 
+# Independent JUnit evidence check for explicit focused tests and manifest rows.
+# Full suites retain their stronger reference-collection completeness check.
+verify_junit() {
+  "$PYTHON_BIN" scripts/agent_os_ci_junit_validate.py "$@" >/dev/null 2>&1
+}
+
+# Refuse two distinct suite names resolving to the same lossy artifact key.
+junit_seen_keys=()
+require_unique_junit_key() {
+  local name="$1" key i
+  key="$(junit_key "$name")"
+  for i in "${!junit_seen_keys[@]}"; do
+    [ "${junit_seen_keys[$i]}" != "$key" ] || runner_error "colliding JUnit artifact keys: $key"
+  done
+  junit_seen_keys+=("$key")
+}
+
 run_check() {
   local name="$1"
   local workdir="$2"
@@ -325,8 +355,10 @@ run_focused_target() {
     focused_junit_path="$(junit_path_for "focused__$target")"
     command+=("--junitxml=$focused_junit_path")
     display+=" --junitxml=$focused_junit_path"
+    rm -f "$focused_junit_path" || runner_error "cannot replace focused JUnit evidence"
   fi
 
+  local focused_code check_display="$display"
   if [ -d "$suite_dir/src" ]; then
     local pythonpath_value
     pythonpath_value="$(python_path_with_src "$suite_dir/src")"
@@ -339,15 +371,26 @@ run_focused_target() {
         focused_display+=" --maxfail=$focused_maxfail"
       fi
     fi
+    check_display="$focused_display"
     run_check "focused: $target" "$suite_dir" "$focused_display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
+    focused_code=$?
   else
     run_check "focused: $target" "$suite_dir" "$display" "${command[@]}"
+    focused_code=$?
+  fi
+  if [ "$focused_code" -eq 0 ] && [ -n "${CI_JUNIT_DIR:-}" ]; then
+    if ! verify_junit "$focused_junit_path" --require-executed; then
+      echo "focused JUnit missing, malformed or failed: $target" >&2
+      check_results[${#check_results[@]}-1]="FAIL|focused: $target|$check_display|2"
+      record_failure "focused: $target (JUnit evidence)" "$check_display" 2
+    fi
   fi
 }
 
 is_python_pytest_suite() {
-  local tests_dir="$1"
-  find "$tests_dir" -type f \( -name 'test_*.py' -o -name '*_test.py' \) 2>/dev/null | grep -q .
+  local tests_dir="$1" first
+  first="$(find "$tests_dir" -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print -quit)" || return 2
+  [ -n "$first" ]
 }
 
 coverage_target_for_suite() {
@@ -471,7 +514,7 @@ run_captured_suite() {
   run_pytest_suite "$suite_dir" "$suite_name" >"$output_file" 2>&1
   code=$?
   ended_us="$(timer_now_us || true)"
-  printf '%s|%s|%s\n' "$code" "$started_us" "$ended_us" >"$status_file"
+  printf '%s|%s|%s\n' "$code" "$started_us" "$ended_us" >"$status_file" || return 2
   return 0
 }
 
@@ -535,11 +578,17 @@ consume_captured_suite() {
   fi
   # A foreground coach wrapper can exit before writing this receipt too.
   # Preserve its failure, then consume other suites and publish the manifest.
-  if [ ! -f "$status_file" ] || ! IFS='|' read -r code started_us ended_us <"$status_file" || ! [[ "$code" =~ ^(0|[1-9][0-9]{0,2})$ ]]; then
+  local receipt=""
+  [ ! -f "$status_file" ] || receipt="$(cat "$status_file")"
+  if ! [[ "$receipt" =~ ^(0|[1-9][0-9]{0,2})\|([0-9]+|unavailable)\|([0-9]+|unavailable)$ ]]; then
     echo "suite subprocess ended without a valid status receipt: $suite_name" >&2
     code=2
     started_us=unavailable
     ended_us=unavailable
+  else
+    code="${BASH_REMATCH[1]}"
+    started_us="${BASH_REMATCH[2]}"
+    ended_us="${BASH_REMATCH[3]}"
   fi
   commands_executed+=("$command_text")
   record_timing "$suite_name" "$started_us" "$ended_us"
@@ -603,6 +652,7 @@ echo "Repository: $ROOT_DIR"
 echo "Python: $PYTHON_BIN"
 
 for target in "${normalized_focused_targets[@]}"; do
+  require_unique_junit_key "focused__$target"
   run_focused_target "$target"
 done
 
@@ -610,29 +660,32 @@ run_check "Ruff lint" "$ROOT_DIR" "$PYTHON_BIN -m ruff check ." "$PYTHON_BIN" -m
 
 run_check "structural validation" "$ROOT_DIR" "PYTHON_BIN=$PYTHON_BIN bash $STRUCTURAL_SCRIPT" env PYTHON_BIN="$PYTHON_BIN" bash "$STRUCTURAL_SCRIPT"
 
-mapfile -t test_dirs < <(
-  find . -type d -name tests \
-    -not -path './.git/*' \
-    -not -path './.venv/*' \
-    -not -path './.venv-*/*' \
-    -not -path './venv/*' \
-    -not -path './node_modules/*' \
-    -not -path './.tmp/*' \
-    -not -path './03_Templates/*' \
-    | sort | while IFS= read -r test_dir; do
-        if is_python_pytest_suite "$test_dir"; then
-          printf '%s\n' "$test_dir"
-        fi
-      done
-)
-
-if [ "${#test_dirs[@]}" -eq 0 ]; then
-  runner_error "no pytest test directories discovered."
-fi
-
 parallel_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-os-validate.XXXXXX")" || runner_error "unable to create validation capture directory."
 trap 'rm -rf "$parallel_tmp"' EXIT
 mkdir -p "$parallel_tmp/junit" || runner_error "unable to create private JUnit directory."
+
+# Bash 3.2-compatible discovery. Check find/sort separately: process
+# substitution can hide producer failures and cause a zero-suite false green.
+find . -type d -name tests \
+  -not -path './.git/*' \
+  -not -path './.venv/*' \
+  -not -path './.venv-*/*' \
+  -not -path './venv/*' \
+  -not -path './node_modules/*' \
+  -not -path './.tmp/*' \
+  -not -path './03_Templates/*' \
+  >"$parallel_tmp/discovered.paths" || runner_error "pytest test discovery failed."
+sort "$parallel_tmp/discovered.paths" >"$parallel_tmp/sorted.paths" || runner_error "pytest test discovery failed."
+test_dirs=()
+while IFS= read -r test_dir; do
+  if is_python_pytest_suite "$test_dir"; then
+    test_dirs+=("$test_dir")
+  else
+    probe_status=$?
+    [ "$probe_status" -eq 1 ] || runner_error "pytest test discovery failed."
+  fi
+done <"$parallel_tmp/sorted.paths"
+[ "${#test_dirs[@]}" -gt 0 ] || runner_error "no pytest test directories discovered."
 
 # Keep suite identity and report order equal to the canonical sorted discovery.
 # Scheduling order is deliberately separate from evidence/manifest order.
@@ -647,6 +700,10 @@ for test_dir in "${test_dirs[@]}"; do
     suite_names+=("${suite_dir#./}")
     suite_dirs+=("$suite_dir")
   fi
+done
+
+for suite_name in "${suite_names[@]}"; do
+  require_unique_junit_key "$suite_name"
 done
 
 # The coach suite is exclusively foregrounded before starting other pytest
@@ -713,6 +770,10 @@ for index in "${schedule_indices[@]}"; do
   suite_name="${suite_names[$index]}"
   output_file="$parallel_tmp/output-$index"
   status_file="$parallel_tmp/status-$index"
+  rm -f "$(suite_junit_path_for "$suite_name")" || runner_error "cannot replace stale suite JUnit evidence"
+  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    rm -f "$CI_JUNIT_DIR/junit-subtest-receipt-$(junit_key "$suite_name").json" || runner_error "cannot replace stale subtest evidence"
+  fi
   captured_commands[$index]="$(suite_command_text "$suite_dir" "$suite_name")"
   captured_outputs[$index]="$output_file"
   captured_statuses[$index]="$status_file"
@@ -745,7 +806,7 @@ done
 if [ -n "${CI_JUNIT_DIR:-}" ]; then
   mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
   manifest_file="$CI_JUNIT_DIR/manifest.tsv"
-  printf 'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n' > "$manifest_file"
+  printf 'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n' > "$manifest_file" || runner_error "cannot write validation manifest"
   for result in "${check_results[@]}"; do
     IFS='|' read -r status name command_text code <<< "$result"
     case "$name" in
@@ -786,6 +847,19 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
     elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
+      if [ "$classification" = "EXECUTED_PASS" ]; then
+        verify_junit "$CI_JUNIT_DIR/$junit_file"
+        junit_verdict=$?
+        if [ "$junit_verdict" -ne 0 ]; then
+          status="FAIL"
+          if [ "$junit_verdict" -eq 1 ]; then
+            classification="TEST_OUTCOME_FAILED"
+          else
+            classification="TEST_COLLECTION_ERROR"
+          fi
+          record_failure "$name (JUnit evidence)" "$command_text" 2
+        fi
+      fi
       # For full suites, require the independent completeness/outcome receipt.
       # Do not certify an EXECUTED_PASS when a helper failed or its receipt is absent.
       if [ "$classification" = "EXECUTED_PASS" ]; then
@@ -808,9 +882,13 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
       fi
     else
       junit_exists="no"
-      if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else classification="MISSING_UNEXPECTED"; fi
+      if [ "$status" = "FAIL" ]; then classification="NOT_EXECUTED_SETUP_FAILURE"; else
+        classification="MISSING_UNEXPECTED"
+        status="FAIL"
+        record_failure "$name (missing JUnit)" "$command_text" 2
+      fi
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification" >> "$manifest_file"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification" >> "$manifest_file" || runner_error "cannot append validation manifest"
   done
 fi
 

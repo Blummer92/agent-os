@@ -22,6 +22,7 @@ from agent_memory_context_manager.lesson_activation_bridge import _AREA_ECOSYSTE
 from .ckr6_github_reader import (
     ALLOWED_REPOSITORY as GITHUB_REPOSITORY,
     GitHubIssueCommentReader,
+    _MAX_RESPONSE_BYTES,
 )
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_learning_loop import capture_lesson_candidate, propose_lesson_refinement
@@ -1453,7 +1454,10 @@ def _existing_result_comment(
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            comments = json.loads(response.read().decode("utf-8"))
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                raise ValueError("bounded dedupe GET response exceeded limit")
+            comments = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         # Lookup failure is still not evidence of absence of work: the
         # caller posts, preferring a duplicate receipt over silence. But

@@ -21,6 +21,8 @@ from .ckr6_github_bridge import (
     envelope_from_event,
     parse_ckr6_result_comment,
 )
+from .ckr6_github_reader import _MAX_RESPONSE_BYTES
+
 # Target interpretation is owned by the gate this lane reruns; never keep a
 # second, divergent PR/head grammar here.
 from .ckr6_mutation_gate import (
@@ -92,14 +94,17 @@ def api(method, endpoint, token):
                 if response.status != 201:
                     raise RevalidationBlocked("rerun-request-failed")
                 return None
-            return json.load(response)
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                raise RevalidationBlocked("github-read-failed")
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if method == "POST":
             raise RevalidationBlocked(
                 "rerun-permission-denied" if exc.code in (401, 403) else "rerun-request-failed"
             ) from None
         raise RevalidationBlocked("github-read-failed") from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeError):
         raise RevalidationBlocked("rerun-request-failed" if method == "POST" else "github-read-failed") from None
 
 
