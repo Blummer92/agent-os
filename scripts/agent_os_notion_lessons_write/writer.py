@@ -14,7 +14,7 @@ from collections.abc import Mapping
 import re
 import unicodedata
 from .admission import AdmittedRequest, WriteBlocked, notion_id
-from .catalog import LESSON_ID, MAX_SUPPORTING_REFS, NARRATIVE_TYPES, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
+from .catalog import LESSON_ID, MAX_SUPPORTING_REFS, NARRATIVE_TYPES, PROTECTED_FIELDS, REQUEST_ID, SOURCE_LINK, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
 
 
 def properties(request_id: str = REQUEST_ID) -> dict:
@@ -60,7 +60,10 @@ def _text(items: object) -> str:
     for item in items:
         if not isinstance(item, Mapping) or item.get("type") != "text":
             raise WriteBlocked("non-text-lesson-content")
-        value = item.get("plain_text", item.get("text", {}).get("content"))
+        text = item.get("text", {})
+        if not isinstance(text, Mapping):
+            raise WriteBlocked("malformed-page-properties")
+        value = item.get("plain_text", text.get("content"))
         if type(value) is not str or len(value) > 2000:
             raise WriteBlocked("malformed-page-properties")
         texts.append(value)
@@ -83,9 +86,22 @@ def _values(page: Mapping, names) -> dict:
             # into one string would destroy the per-ref boundary the
             # catalog validated.
             items = prop.get("rich_text")
-            if type(items) is not list:
+            if type(items) is not list or len(items) > MAX_SUPPORTING_REFS:
                 raise WriteBlocked("malformed-page-properties")
-            values[name] = tuple(_text([item]) for item in items)
+            refs = []
+            for entry in items:
+                value = _text([entry])
+                text = entry.get("text", {})
+                link = text.get("link")
+                if (not value.strip() or len(value) > 512 or value in refs
+                        or ("content" in text and text["content"] != value)
+                        or (entry.get("href") is not None and entry["href"] != value)
+                        or (link is not None and (
+                            not isinstance(link, Mapping) or link.get("url") != value
+                        ))):
+                    raise WriteBlocked("malformed-duplicate-source-state")
+                refs.append(value)
+            values[name] = tuple(refs)
             continue
         item = prop.get(kind)
         if kind in ("title", "rich_text"):
@@ -195,6 +211,15 @@ def _possible_same_lesson(title: str, other_title: str) -> bool:
     return shared >= 3 and 2 * shared >= min(len(left), len(right))
 
 
+def _primary_source(row: Mapping) -> str | None:
+    value = _values(row, ("Source Link",))["Source Link"]
+    if ("url" not in row["properties"]["Source Link"]
+            or (value is not None
+                and (type(value) is not str or SOURCE_LINK.fullmatch(value) is None))):
+        raise WriteBlocked("malformed-duplicate-source-state")
+    return value
+
+
 def _duplicate_evidence_review(row: Mapping, lesson: Mapping, lesson_id: str) -> dict:
     """Bounded, read-only handoff; not a claim of verified evidence or identity.
 
@@ -218,16 +243,11 @@ def _duplicate_evidence_review(row: Mapping, lesson: Mapping, lesson_id: str) ->
         "automatic_update_authorized": False,
     }
     try:
-        current = _values(row, ("Source Link", SUPPORTING_SOURCE_LINKS))
-        current_refs = set(current[SUPPORTING_SOURCE_LINKS])
-        if current["Source Link"]:
-            current_refs.add(current["Source Link"])
-        if (len(current[SUPPORTING_SOURCE_LINKS]) > MAX_SUPPORTING_REFS
-                or any(type(value) is not str or not value.strip() or len(value) > 512
-                       for value in current_refs)):
-            raise WriteBlocked("malformed-duplicate-source-state")
+        primary = _primary_source(row)
+        supporting = set(_values(row, (SUPPORTING_SOURCE_LINKS,))[SUPPORTING_SOURCE_LINKS])
+        current_refs = supporting if primary is None else supporting | {primary}
         additional = [value for value in candidate_refs if value not in current_refs]
-        proposed = set(current[SUPPORTING_SOURCE_LINKS]) | set(additional)
+        proposed = supporting | set(additional)
         review.update(
             source_comparison="complete",
             new_source_refs_to_review=additional,
@@ -260,10 +280,10 @@ def _check_evidence_append(existing: Mapping, lesson: Mapping) -> tuple[str, ...
     """
     if SUPPORTING_SOURCE_LINKS not in lesson or "Source Link" in lesson:
         return None
+    _primary_source(existing)
     old = _values(existing, (SUPPORTING_SOURCE_LINKS,))[SUPPORTING_SOURCE_LINKS]
     wanted = lesson[SUPPORTING_SOURCE_LINKS]
-    if (len(old) > MAX_SUPPORTING_REFS or len(set(old)) != len(old)
-            or not set(old).issubset(wanted)):
+    if not set(old).issubset(wanted):
         raise WriteBlocked("supporting-evidence-would-be-lost")
     return tuple(value for value in wanted if value not in old)
 
