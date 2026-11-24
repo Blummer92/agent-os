@@ -135,24 +135,44 @@ def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> 
             raise EvidenceError("pr-number-invalid")
         return reader.get(f"/pulls/{explicit_number}")
     prs = reader.get(f"/commits/{sha}/pulls?per_page=100")
-    if not isinstance(prs, list):
+    if not isinstance(prs, list) or any(not isinstance(pr, dict) for pr in prs):
         raise EvidenceError("associated-prs-malformed")
-    candidates = [p for p in prs if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha]
+    # A full first page is not evidence that the association set is complete.
+    # Keep this automatic path bounded; an explicit exact PR can be supplied.
+    if len(prs) >= 100:
+        raise EvidenceError("associated-pr-list-bound-exceeded")
+    candidates = [p for p in prs if p.get("merged_at") and p.get("merge_commit_sha") == sha]
     if not candidates:
         return None
     if len(candidates) != 1:
         raise EvidenceError("associated-pr-ambiguous")
-    return candidates[0]
+    number = candidates[0].get("number")
+    if type(number) is not int or not (0 < number <= 2_147_483_647):
+        raise EvidenceError("pr-metadata-invalid")
+    # GitHub's commit-association endpoint returns a simplified PR object
+    # without commit count or the canonical merged flag. Read PR details.
+    detail = reader.get(f"/pulls/{number}")
+    if not isinstance(detail, dict) or type(detail.get("number")) is not int:
+        raise EvidenceError("pr-metadata-invalid")
+    if detail["number"] != number:
+        raise EvidenceError("requested-pr-identity-mismatch")
+    return detail
 
 
 def _validate_pr(pr: dict[str, Any], repo: str, sha: str) -> tuple[int, int]:
-    if not isinstance(pr, dict) or not pr.get("merged_at") or pr.get("merged") is False:
+    if not isinstance(pr, dict) or not pr.get("merged_at") or pr.get("merged") is not True:
         raise EvidenceError("pr-not-merged")
     if pr.get("merge_commit_sha") != sha:
         raise EvidenceError("merge-sha-mismatch")
-    if pr.get("base", {}).get("ref") != "main":
+    base = pr.get("base")
+    if not isinstance(base, dict):
+        raise EvidenceError("pr-metadata-invalid")
+    if base.get("ref") != "main":
         raise EvidenceError("base-not-main")
-    if pr.get("base", {}).get("repo", {}).get("full_name") != repo:
+    base_repo = base.get("repo")
+    if not isinstance(base_repo, dict):
+        raise EvidenceError("pr-metadata-invalid")
+    if base_repo.get("full_name") != repo:
         raise EvidenceError("base-repository-mismatch")
     number, count = pr.get("number"), pr.get("commits")
     # Exact type checks already reject bool; zero is invalid metadata.

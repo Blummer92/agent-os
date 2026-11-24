@@ -59,6 +59,47 @@ class FollowupReviewTests(unittest.TestCase):
         self.assertEqual(report.build_report(reader, SHA, None, None)["status"], "not-applicable")
         self.assertEqual(calls, [f"/commits/{SHA}/pulls?per_page=100"])
 
+    def test_automatic_association_reads_full_pr_before_final_commits(self):
+        reader = Reader([commit(1, "fix(api): repair")])
+        original = reader.get
+        association = f"/commits/{SHA}/pulls?per_page=100"
+
+        def github_shape(path):
+            if path != association:
+                return original(path)
+            reader.requests.append(path)
+            # The actual commit-association endpoint omits details-only fields.
+            return [{k: v for k, v in reader.metadata.items() if k not in {"merged", "commits"}}]
+
+        reader.get = github_shape
+        result = report.build_report(reader, SHA, None, 100)
+        self.assertEqual(result["status"], "review-needed")
+        self.assertEqual(result["commit_count"], 1)
+        self.assertEqual(reader.requests, [
+            association, "/pulls/4101", "/pulls/4101/commits?per_page=100&page=1",
+            "/actions/runs/100",
+        ])
+
+    def test_association_limit_does_not_certify_incomplete_candidate_population(self):
+        reader = Reader([])
+        reader.get = lambda _: [pr(1)] * 100
+        with self.assertRaisesRegex(report.EvidenceError, "associated-pr-list-bound-exceeded"):
+            report.build_report(reader, SHA, None, None)
+
+    def test_malformed_provider_base_metadata_preserves_bounded_receipt(self):
+        for base in (None, {"ref": "main", "repo": None}):
+            with self.subTest(base=base), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "report.json"
+                summary = Path(tmp) / "summary.md"
+                malformed = Reader([commit(1, "fix(api): repair")], metadata={**pr(1), "base": base})
+                with patch.object(report, "GitHubReader", return_value=malformed), patch.dict(
+                    os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}
+                ):
+                    code = report.main(["--repository", REPO, "--merge-sha", SHA,
+                                        "--pr-number", "4101", "--output", str(output)])
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(output.read_text())["reason_code"], "pr-metadata-invalid")
+
     def test_requested_pr_identity_mismatch(self):
         reader = Reader([commit(1, "fix(api): repair")], metadata={**pr(1), "number": 4102})
         with self.assertRaisesRegex(report.EvidenceError, "requested-pr-identity-mismatch"):
