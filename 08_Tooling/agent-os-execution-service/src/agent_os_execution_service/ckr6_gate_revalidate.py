@@ -267,7 +267,8 @@ def _completed_result_for_owner(event, token):
             if type(comment_id) is not int or comment_id <= 0 or comment_id in seen_comment_ids:
                 raise RevalidationBlocked("result-provenance-unverified")
             seen_comment_ids.add(comment_id)
-            if item.get("user", {}).get("id") != BOT_ID:
+            user = item.get("user")
+            if not isinstance(user, dict) or user.get("id") != BOT_ID:
                 continue
             if not _unedited_comment(item):
                 continue
