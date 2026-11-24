@@ -299,7 +299,7 @@ def test_missing_published_run_association_is_explicit_stop():
 @pytest.mark.parametrize("response_body", [
     b"x" * (r._MAX_RESPONSE_BYTES + 1),
     b"not-json",
-    b"\\xff",
+    bytes([255]),
 ])
 def test_revalidation_get_refuses_oversized_or_malformed_json_without_leaking_token(
     monkeypatch, response_body,
