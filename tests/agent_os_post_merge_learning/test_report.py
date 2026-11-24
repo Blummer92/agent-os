@@ -100,7 +100,10 @@ class TestLearning(unittest.TestCase):
 
     def test_positive_non_merge_push(self):
         reader = Reader([])
-        reader.get = lambda path: [] if path.endswith("/pulls?per_page=100") else reader.metadata
+        def exact_get(path):
+            self.assertEqual(path, f"/commits/{MERGE}/pulls?per_page=100")
+            return []
+        reader.get = exact_get
         self.assertEqual(report.build_report(reader, SHA, None, 100)["status"], "not-applicable")
 
     def test_negative_bounded_evidence(self):
