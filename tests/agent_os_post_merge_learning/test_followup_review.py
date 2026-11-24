@@ -41,8 +41,10 @@ class Reader:
         if path == "/actions/runs/100": return self.validation
         if path == f"/commits/{SHA}/pulls?per_page=100": return [self.metadata]
         if "/reviews?" in path or "/comments?" in path: return []
-        if path.endswith("/check-runs?per_page=100"):
+        if "/check-runs?filter=all&per_page=100&page=" in path:
             return {"total_count": 0, "check_runs": []}
+        if "/statuses?per_page=100&page=" in path: return []
+        if "/timeline?per_page=100&page=" in path: return []
         raise AssertionError("unexpected read: " + path)
 
 class FollowupReviewTests(unittest.TestCase):
@@ -109,7 +111,7 @@ class FollowupReviewTests(unittest.TestCase):
     def test_render_summary_is_read_only(self):
         result = report.build_report(Reader([commit(1, "fix(api): repair")]), SHA, 4101, 100)
         summary = report.render_summary(result)
-        self.assertIn("Complete PR commit list: **1**", summary)
+        self.assertIn("Listed PR commits: **1**", summary)
         self.assertIn("No lesson candidate, Notion write, activation, merge authority", summary)
         self.assertEqual(summary.count("Review needed (CKR5: not proven)"), 1)
 
