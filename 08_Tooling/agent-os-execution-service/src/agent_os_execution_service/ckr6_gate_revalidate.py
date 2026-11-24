@@ -28,6 +28,8 @@ from .ckr6_mutation_gate import (
     DEFAULT_ALLOWED_ACTOR_ID as OWNER_ID,
     _HEAD_REFERENCE_RE as SHA_REFERENCE,
     _PR_TARGET_RE as PR_REFERENCE,
+    _COMMENT_PAGE_SIZE as COMMENT_PAGE_SIZE,
+    _MAX_COMMENT_PAGES as MAX_COMMENT_PAGES,
     _linked_issue_from_pr_body,
 )
 
@@ -243,26 +245,47 @@ def _completed_result_for_owner(event, token):
     request_id = comment["id"]
     number = event["issue"]["number"]
     since = urllib.parse.quote(comment["created_at"], safe="")
-    listing = api("GET", f"/issues/{number}/comments?per_page=100&since={since}", token)
-    if not isinstance(listing, list) or len(listing) >= 100:
-        raise RevalidationBlocked("result-provenance-unverified")
     matching = []
-    for item in listing:
-        if not isinstance(item, dict) or item.get("user", {}).get("id") != BOT_ID:
-            continue
-        if not _unedited_comment(item):
-            continue
-        try:
-            result = parse_ckr6_result_comment(item.get("body"))
-        except (ValueError, TypeError):
-            continue
-        if (result.get("request_comment_id") != request_id
-                or result.get("issue_number") != number
-                or result.get("repository") != REPO):
-            continue
-        if item["created_at"] < comment["created_at"]:
-            continue
-        matching.append({**result, "receipt_created_at": item["created_at"]})
+    seen_comment_ids = set()
+    # Match the gate's bounded-to-exhaustion policy instead of treating a
+    # full first page as permanently unanswerable. A 100-record page is
+    # incomplete evidence until its successor is read, even when it already
+    # contains the desired result.
+    for page in range(1, MAX_COMMENT_PAGES + 1):
+        listing = api(
+            "GET",
+            f"/issues/{number}/comments?per_page={COMMENT_PAGE_SIZE}&since={since}&page={page}",
+            token,
+        )
+        if (type(listing) is not list or len(listing) > COMMENT_PAGE_SIZE
+                or any(not isinstance(item, dict) for item in listing)):
+            raise RevalidationBlocked("result-provenance-unverified")
+        for item in listing:
+            # Duplicate server IDs across pages indicate an unstable view;
+            # never accept one receipt on a possibly incomplete traversal.
+            comment_id = item.get("id")
+            if type(comment_id) is not int or comment_id <= 0 or comment_id in seen_comment_ids:
+                raise RevalidationBlocked("result-provenance-unverified")
+            seen_comment_ids.add(comment_id)
+            if item.get("user", {}).get("id") != BOT_ID:
+                continue
+            if not _unedited_comment(item):
+                continue
+            try:
+                result = parse_ckr6_result_comment(item.get("body"))
+            except (ValueError, TypeError):
+                continue
+            if (result.get("request_comment_id") != request_id
+                    or result.get("issue_number") != number
+                    or result.get("repository") != REPO):
+                continue
+            if item["created_at"] < comment["created_at"]:
+                continue
+            matching.append({**result, "receipt_created_at": item["created_at"]})
+        if len(listing) < COMMENT_PAGE_SIZE:
+            break
+    else:
+        raise RevalidationBlocked("result-provenance-unverified")
     if len(matching) != 1:
         raise RevalidationBlocked(
             "result-not-returned" if not matching else "result-provenance-unverified"
