@@ -41,6 +41,7 @@ from .lesson_preflight import (
     MAX_LESSON_RECORDS,
     LessonPreflightResult,
     LessonRecordEvidence,
+    LessonRetrievalStatus,
     consume_lesson_preflight,
     plan_lesson_preflight,
 )
@@ -421,6 +422,7 @@ def _bound_relevant_lessons_with_order(
         # overlap before the five-ID cut; the total ID order breaks ties and
         # is the whole order when nothing overlaps. Buckets never mix.
         reordered: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
+        prior_ordered: list[LessonRecordEvidence] = []
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
             # Score equal normalized records once, while retaining the
             # original rows for raw counts and revision-conflict checks.
@@ -432,6 +434,7 @@ def _bound_relevant_lessons_with_order(
             )
             order = sorted(range(len(group)), key=lambda index: (-scores[index], group[index][1]))
             ordered = [group[index] for index in order]
+            prior_ordered.extend(item[2] for item in ordered)
             coverage_order = required_library_coverage_order(
                 request, (_as_selection_candidate(item[2]) for item in ordered)
             )
@@ -443,6 +446,24 @@ def _bound_relevant_lessons_with_order(
         chosen = _take_distinct_ids([item[2] for item in ranked])
         ranked_ids = tuple(dict.fromkeys(item.lesson_id for item in chosen))
         selected_ids = set(ranked_ids)
+        prior_ids = tuple(dict.fromkeys(
+            item.lesson_id for item in _take_distinct_ids(prior_ordered)
+        ))
+        prior_member_set = set(prior_ids)
+        if selected_ids != prior_member_set:
+            prior_bounded = tuple(
+                lesson for lesson in lessons if lesson.lesson_id in prior_member_set
+            )
+            # Coverage may repair a library omission, not remove a refusal
+            # by evicting the identity that caused it. Reuse the canonical
+            # bounded checks and original rank rather than recomputing scores
+            # or copying provenance, eligibility and conflict policy here.
+            prior = consume_lesson_preflight(request, prior_bounded, _ranked_order=prior_ids)
+            if (
+                prior.lesson_retrieval_status is not LessonRetrievalStatus.SUFFICIENT
+                and prior.selection_reason_codes != ("required-library-uncovered",)
+            ):
+                return prior_bounded, prior_ids
         return (
             tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
             ranked_ids,
