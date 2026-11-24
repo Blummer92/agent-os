@@ -572,6 +572,37 @@ def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
         ) from exc
 
 
+def read_bounded_comment_pages(
+    fetch_page: Callable[[int], object],
+    *,
+    require_unique_ids: bool = False,
+) -> list[dict[str, object]]:
+    """Exhaust a bounded GitHub comment population; never admit a partial page.
+
+    The gate reads the entire thread, while postback revalidation applies a
+    GitHub server-side `since` filter. Both consume this same completeness
+    rule without duplicating pagination or changing either query's scope.
+    """
+    records: list[dict[str, object]] = []
+    seen_ids: set[int] = set()
+    for page in range(1, _MAX_COMMENT_PAGES + 1):
+        batch = fetch_page(page)
+        if (type(batch) is not list or len(batch) > _COMMENT_PAGE_SIZE
+                or any(not isinstance(item, Mapping) for item in batch)):
+            raise ValueError("comment-population-incomplete")
+        if require_unique_ids:
+            for item in batch:
+                comment_id = item.get("id")
+                if (type(comment_id) is not int or comment_id <= 0
+                        or comment_id in seen_ids):
+                    raise ValueError("comment-population-incomplete")
+                seen_ids.add(comment_id)
+        records.extend(dict(item) for item in batch)
+        if len(batch) < _COMMENT_PAGE_SIZE:
+            return records
+    raise ValueError("comment-population-incomplete")
+
+
 class PaginatedIssueCommentReader:
     """Completeness-checked trusted reads for the gate's decision inputs.
 
@@ -659,19 +690,18 @@ class PaginatedIssueCommentReader:
             )
         if type(issue_number) is not int or isinstance(issue_number, bool) or issue_number < 1:
             raise ValueError("issue_number must be a positive integer")
-        records: list[dict[str, object]] = []
-        for page in range(1, _MAX_COMMENT_PAGES + 1):
-            batch = self._get_json_list(
-                f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
-                f"/comments?per_page={_COMMENT_PAGE_SIZE}&page={page}"
+        try:
+            return read_bounded_comment_pages(
+                lambda page: self._get_json_list(
+                    f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
+                    f"/comments?per_page={_COMMENT_PAGE_SIZE}&page={page}"
+                )
             )
-            records.extend(dict(item) for item in batch)
-            if len(batch) < _COMMENT_PAGE_SIZE:
-                return records
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-unexpected-response",
-            "comment pagination exceeds the bounded page count",
-        )
+        except ValueError:
+            raise GitHubIssueCommentReadUnavailable(
+                "github-api-unexpected-response",
+                "comment pagination population incomplete",
+            ) from None
 
     def read_head_observed_at(
         self, repository: str, branch: str, head_sha: str, pr_number: int
