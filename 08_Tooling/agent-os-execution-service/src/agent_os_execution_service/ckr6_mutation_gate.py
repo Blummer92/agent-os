@@ -24,9 +24,10 @@ Semantics (fail closed):
   identity: an account rename could reuse it), whose body is a canonical
   CKR6 command envelope parsed by the ingress's own parser, whose envelope
   repository and issue number match the thread it was posted on.
-- Producer result records are held to the SAME unedited proof: a producer
-  record whose ``updated_at`` is missing or differs from ``created_at`` is
-  not evidence and is excluded before result selection.
+- Producer result records are held to the SAME unedited proof by the shared
+  R07 consumer (``select_ckr6_result_comment``): a producer record whose
+  ``updated_at`` is missing or differs from ``created_at`` is not evidence
+  and is excluded before result selection and ambiguity counting.
 - For a gated PR, consider only owner requests addressed to that exact PR:
   the parent issue's task_reference must name one matching PR number, while a
   request on the PR's own thread inherits its target from the trusted thread.
@@ -84,15 +85,11 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Sequence
 
 from .ckr6_github_bridge import (
-    CKR6_PRODUCER_ACCOUNT_ID,
-    CKR6_PRODUCER_LOGIN,
     COMMAND_PREFIX,
     MAX_COMMENT_BYTES,
     ckr6_result_admits_boundary,
@@ -107,6 +104,10 @@ from .ckr6_github_reader import (
     ALLOWED_REPOSITORY,
     GITHUB_API_BASE_URL,
     GitHubIssueCommentReadUnavailable,
+    _urllib_http_get,
+    _MAX_RESPONSE_BYTES,
+    _READ_HEADERS as _SHARED_READ_HEADERS,
+    GitHubIssueCommentReader,
 )
 
 DEFAULT_ALLOWED_ACTOR = "Blummer92"
@@ -144,14 +145,7 @@ _MAX_COMMENT_PAGES = 50  # 5000 comments; deeper threads fail closed.
 _WORKFLOW_RUN_PAGE_SIZE = 100
 _MAX_WORKFLOW_RUN_PAGES = 10
 _CKR6_GATE_WORKFLOW_PATH = ".github/workflows/agent-os-ckr6-mutation-gate.yml"
-_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-_READ_TIMEOUT_SECONDS = 30
-_USER_AGENT = "agent-os-ckr6-mutation-gate"
-_READ_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "User-Agent": _USER_AGENT,
-    "X-GitHub-Api-Version": "2022-11-28",
-}
+_READ_HEADERS = _SHARED_READ_HEADERS | {"User-Agent": "agent-os-ckr6-mutation-gate"}
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _HEAD_SHA_RE = re.compile(r"(?i)^[0-9a-f]{40}$")
 # The canonical request's task_reference is free text, so accept only an
@@ -308,40 +302,6 @@ def _request_target_unambiguous(request: _TrustedRequest, pr_number: int) -> boo
     return references == {pr_number}
 
 
-def _drop_unproven_producer_records(
-    comments: Sequence[Mapping[str, object]],
-) -> list[Mapping[str, object]]:
-    """Exclude producer records that cannot prove they are unedited.
-
-    The R07 consumer rejects an EDITED result record (``updated_at`` present
-    and different) but accepts one with the field MISSING. The request side
-    of this gate requires the proof positively, so the same standard is
-    applied here before result selection: a trusted-producer record without
-    a present-and-equal ``updated_at`` is not evidence and does not
-    participate in selection, ambiguity, or admission.
-    """
-    kept: list[Mapping[str, object]] = []
-    for record in comments:
-        if isinstance(record, Mapping):
-            user = record.get("user")
-            if (
-                isinstance(user, Mapping)
-                and user.get("login") == CKR6_PRODUCER_LOGIN
-                and type(user.get("id")) is int
-                and user.get("id") == CKR6_PRODUCER_ACCOUNT_ID
-            ):
-                created_at = record.get("created_at")
-                updated_at = record.get("updated_at")
-                if (
-                    type(created_at) is not str
-                    or type(updated_at) is not str
-                    or updated_at != created_at
-                ):
-                    continue
-        kept.append(record)
-    return kept
-
-
 def _trusted_boundary_requests(
     comments: object,
     *,
@@ -470,7 +430,7 @@ def evaluate_mutation_boundary(
         raise ValueError("head_sha must be exact 40-hex text")
 
     requests = _trusted_boundary_requests(
-        _drop_unproven_producer_records(issue_comments),
+        issue_comments,
         repository=repository,
         thread_number=issue_number,
         target_kind="issue",
@@ -479,7 +439,7 @@ def evaluate_mutation_boundary(
     )
     if pr_number is not None:
         requests = requests + _trusted_boundary_requests(
-            _drop_unproven_producer_records(pr_comments),
+            pr_comments,
             repository=repository,
             thread_number=pr_number,
             target_kind="pr",
@@ -592,19 +552,25 @@ def evaluate_mutation_boundary(
 HttpGet = Callable[[str, dict[str, str]], "tuple[int, bytes]"]
 
 
-def _urllib_http_get(url: str, headers: dict[str, str]) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, method="GET", headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=_READ_TIMEOUT_SECONDS) as response:
-            return response.status, response.read(_MAX_RESPONSE_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-failure", f"GitHub API returned HTTP {exc.code}"
-        ) from exc
-    except Exception as exc:  # URLError, timeout, TLS failure: no read happened.
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-failure", f"GitHub API read failed: {type(exc).__name__}"
-        ) from exc
+
+def read_bounded_comment_pages(fetch_page, *, require_unique_ids=False):
+    """Exhaust bounded comment pages, refusing incomplete or unstable reads."""
+    records, seen = [], set()
+    for page in range(1, _MAX_COMMENT_PAGES + 1):
+        batch = fetch_page(page)
+        if (type(batch) is not list or len(batch) > _COMMENT_PAGE_SIZE
+                or any(not isinstance(item, Mapping) for item in batch)):
+            raise ValueError("comment-population-incomplete")
+        if require_unique_ids:
+            ids = [item.get("id") for item in batch]
+            if (any(type(value) is not int or value <= 0 for value in ids)
+                    or len(set(ids)) != len(ids) or seen.intersection(ids)):
+                raise ValueError("comment-population-incomplete")
+            seen.update(ids)
+        records.extend(dict(item) for item in batch)
+        if len(batch) < _COMMENT_PAGE_SIZE:
+            return records
+    raise ValueError("comment-population-incomplete")
 
 
 class PaginatedIssueCommentReader:
@@ -630,24 +596,10 @@ class PaginatedIssueCommentReader:
         self._http_get = http_get or _urllib_http_get
 
     def _token(self) -> str:
-        if self._token_provider is None:
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "no GitHub App installation-token provider is installed",
-            )
-        try:
-            token = self._token_provider.get_installation_token()
-        except Exception:
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "GitHub App installation token is unavailable",
-            ) from None
-        if type(token) is not str or not token.strip():
-            raise GitHubIssueCommentReadUnavailable(
-                "HOST_READ_PATH_UNAVAILABLE",
-                "no GitHub App installation token is available",
-            )
-        return token
+        return GitHubIssueCommentReader(
+            token_provider=self._token_provider,
+            http_get=self._http_get,
+        )._read_token()
 
     def _get_json_list(self, url: str) -> list[Mapping[str, object]]:
         status, body = self._http_get(
@@ -694,19 +646,18 @@ class PaginatedIssueCommentReader:
             )
         if type(issue_number) is not int or isinstance(issue_number, bool) or issue_number < 1:
             raise ValueError("issue_number must be a positive integer")
-        records: list[dict[str, object]] = []
-        for page in range(1, _MAX_COMMENT_PAGES + 1):
-            batch = self._get_json_list(
-                f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
-                f"/comments?per_page={_COMMENT_PAGE_SIZE}&page={page}"
+        try:
+            return read_bounded_comment_pages(
+                lambda page: self._get_json_list(
+                    f"{GITHUB_API_BASE_URL}/repos/{repository}/issues/{issue_number}"
+                    f"/comments?per_page={_COMMENT_PAGE_SIZE}&page={page}"
+                )
             )
-            records.extend(dict(item) for item in batch)
-            if len(batch) < _COMMENT_PAGE_SIZE:
-                return records
-        raise GitHubIssueCommentReadUnavailable(
-            "github-api-unexpected-response",
-            "comment pagination exceeds the bounded page count",
-        )
+        except ValueError:
+            raise GitHubIssueCommentReadUnavailable(
+                "github-api-unexpected-response",
+                "comment pagination population incomplete",
+            ) from None
 
     def read_head_observed_at(
         self, repository: str, branch: str, head_sha: str, pr_number: int

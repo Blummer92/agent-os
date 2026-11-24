@@ -174,23 +174,6 @@ def test_unverified_run_causes_no_post(monkeypatch):
     assert writes == []
 
 
-def test_live_workflow_has_no_status_creation_or_merge_rights():
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[3]
-    text = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
-    assert "issue_comment:" in text
-    assert "actions: write" in text
-    assert "persist-credentials: false" in text
-    assert "statuses: write" not in text
-    assert "checks: write" not in text
-    assert "contents: write" not in text
-    assert "pull-requests: write" not in text
-    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in text
-    assert "actions/checkout@v7" not in text
-    assert "actions/setup-python@v7" not in text
-    assert 'python3 -m venv "$RUNNER_TEMP/ckr6-venv"' in text
-
-
 # #3418 live 2026-11-14: learning requests must not census three legacy Draft PRs.
 def _event_for(data, *, issue_number=3418, pr_thread=False):
     import json
@@ -294,51 +277,6 @@ def test_missing_published_run_association_is_explicit_stop():
     with pytest.raises(r.RevalidationBlocked, match="gate-run-association-unverified"):
         r.select_run(pr(), data)
 
-
-
-@pytest.mark.parametrize("response_body", [
-    b"x" * (r._MAX_RESPONSE_BYTES + 1),
-    b"not-json",
-    bytes([255]),
-])
-def test_revalidation_get_refuses_oversized_or_malformed_json_without_leaking_token(
-    monkeypatch, response_body,
-):
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self, size=-1):
-            assert size == r._MAX_RESPONSE_BYTES + 1
-            return response_body[:size]
-
-    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
-    with pytest.raises(r.RevalidationBlocked, match="github-read-failed") as err:
-        r.api("GET", "/issues/3418/comments?per_page=100", "never-log-this-token")
-    assert "never-log-this-token" not in str(err.value)
-
-
-def test_revalidation_get_decodes_valid_bounded_json_and_preserves_post_semantics(monkeypatch):
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self, size=-1):
-            assert size == r._MAX_RESPONSE_BYTES + 1
-            return b'[{"id":1}]'
-
-    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
-    assert r.api("GET", "/issues/3418/comments?per_page=100", "token") == [{"id": 1}]
 
 def test_real_api_permission_denial_does_not_log_body(monkeypatch):
     from urllib.error import HTTPError
@@ -554,22 +492,24 @@ def test_postback_immediate_completion_never_sleeps(monkeypatch):
     assert not any(x[0] == "POST" for x in calls)
 
 
-def test_producer_postback_job_separates_actions_write_from_notion_secret():
+def test_only_producer_postback_revalidates_under_bounded_permissions():
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
+    assert not (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").exists()
     workflow = (root / ".github/workflows/agent-os-ckr6.yml").read_text()
-    old = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
-    new_job = workflow.split("  revalidate-after-postback:", 1)[1].split("  report-failure:", 1)[0]
-    assert "needs: [classify, execute]" in new_job
-    assert "actions: write" in new_job
-    assert "--postback-complete" in new_job
-    assert "NOTION_TOKEN" not in new_job
-    assert "contents: write" not in new_job
-    assert "pull-requests: write" not in new_job
-    assert "github.event.comment.user.id == 32861845" not in old
-    assert "if: ${{ false }}" in old
-    assert "github.event.comment.user.id == 41898282" not in old
-
+    job = workflow.split("  revalidate-after-postback:", 1)[1].split("  report-failure:", 1)[0]
+    assert "needs: [classify, execute]" in job
+    assert "actions: write" in job
+    assert "persist-credentials: false" in job
+    assert "ref: ${{ github.event.repository.default_branch }}" in job
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in job
+    assert 'python3 -m venv "$RUNNER_TEMP/ckr6-revalidation-venv"' in job
+    assert "ckr6_gate_revalidate --postback-complete" in job
+    assert "NOTION_TOKEN" not in job
+    assert all(
+        f"{permission}: write" not in job
+        for permission in ("statuses", "checks", "contents", "pull-requests")
+    )
 
 
 def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(monkeypatch):
@@ -609,7 +549,9 @@ def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(mo
     monkeypatch.setattr(r, "api", fake)
     with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
         r._completed_result_for_owner(event, "unused")
-    assert len(calls) == 1
+    # The fake repeats the same server IDs on page two: fail closed on
+    # an unstable population, not after burning the entire page budget.
+    assert len(calls) == 2
     assert all(method != "POST" for method, _ in calls)
 
     state["count"] = 99
@@ -618,6 +560,96 @@ def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(mo
     assert result["request_comment_id"] == event["comment"]["id"]
     assert result["status"] == "insufficient"
     assert len(calls) == 1
+    assert all(method != "POST" for method, _ in calls)
+
+
+def test_postback_result_on_second_page_is_verified_without_mutation(monkeypatch):
+    from agent_os_execution_service.ckr6_github_bridge import serialize_ckr6_result_comment
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    result = {
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "status": "insufficient", "attempt_id": "one",
+        "selected_lesson_ids": [], "mutation_admissible": False,
+    }
+    receipt = {
+        "id": 9000, "user": {"id": r.BOT_ID},
+        "created_at": "2026-11-14T15:57:08Z",
+        "updated_at": "2026-11-14T15:57:08Z",
+        "body": serialize_ckr6_result_comment(
+            result, request_comment_id=event["comment"]["id"]
+        ),
+    }
+    filler = [
+        {"id": 300 + i, "user": {"id": 12345},
+         "created_at": "2026-11-14T15:56:09Z",
+         "updated_at": "2026-11-14T15:56:09Z", "body": "irrelevant"}
+        for i in range(r.COMMENT_PAGE_SIZE)
+    ]
+    calls = []
+    pages = {1: filler, 2: [receipt]}
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        assert "/comments?per_page=100&since=" in path
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+    monkeypatch.setattr(r, "api", fake)
+    got = r._completed_result_for_owner(event, "unused")
+    assert got["request_comment_id"] == event["comment"]["id"]
+    assert got["receipt_created_at"] == receipt["created_at"]
+    assert len(calls) == 2
+    assert all(method != "POST" for method, _ in calls)
+
+
+@pytest.mark.parametrize("bad_second_page", [
+    [{"id": 300, "user": {"id": 12345}, "body": "duplicate id"}],
+    [{"id": 9001, "user": None, "body": "malformed author"}],
+    [{"id": 9001, "user": {"id": 12345}, "body": "irrelevant"}] * 101,
+])
+def test_postback_pagination_invalid_second_page_fails_closed(monkeypatch, bad_second_page):
+    event = _event_for({
+        "operation": "issue-start", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+    })
+    first = [
+        {"id": 300 + i, "user": {"id": 12345}, "body": "noise"}
+        for i in range(r.COMMENT_PAGE_SIZE)
+    ]
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        return first if path.endswith("&page=1") else bad_second_page
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r._completed_result_for_owner(event, "unused")
+    assert len(calls) == 2
+    assert all(method != "POST" for method, _ in calls)
+
+
+def test_postback_full_page_budget_fails_closed(monkeypatch):
+    event = _event_for({
+        "operation": "issue-start", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+    })
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        page = int(path.rsplit("page=", 1)[1])
+        return [
+            {"id": page * 1000 + i, "user": {"id": 12345}, "body": "noise"}
+            for i in range(r.COMMENT_PAGE_SIZE)
+        ]
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r._completed_result_for_owner(event, "unused")
+    assert len(calls) == r.MAX_COMMENT_PAGES
     assert all(method != "POST" for method, _ in calls)
 
 
@@ -747,3 +779,115 @@ def test_revalidation_job_install_pins_full_runtime_graph_in_isolated_venv():
     assert 'ckr6-revalidation-venv/bin/python" -m pip install' in bounded
     # The step that runs the verifier must use that same isolated interpreter.
     assert "ckr6-revalidation-venv/bin/python" in block.split("Verify completed result", 1)[1]
+
+
+# --- Single target grammar (#3690 audit): revalidation reruns the gate, so it
+# must interpret PR/head targets with the gate's own grammar, never a copy.
+from agent_os_execution_service import ckr6_github_bridge as _bridge  # noqa: E402
+from agent_os_execution_service import ckr6_mutation_gate as _gate  # noqa: E402
+
+
+def test_revalidation_reuses_gate_target_grammar_and_identities():
+    assert r.PR_REFERENCE is _gate._PR_TARGET_RE
+    assert r.SHA_REFERENCE is _gate._HEAD_REFERENCE_RE
+    assert r.MUTATION_OPERATIONS is _gate.BOUNDARY_OPERATIONS
+    assert r.OWNER_ID == _gate.DEFAULT_ALLOWED_ACTOR_ID
+    assert r.BOT_ID == _bridge.CKR6_PRODUCER_ACCOUNT_ID
+    assert r.RESULT_MARKER == _bridge.CKR6_RESULT_MARKER
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["PR # 4105 head", "PR\n#4105", "ÆPR#4105", "PR #4105 and PR #4106",
+     "https://github.com/Blummer92/agent-os/pull/4105"],
+)
+def test_revalidation_and_gate_agree_on_pr_targets(reference):
+    def numbers(regex):
+        return {int(m.group(1) or m.group(2)) for m in regex.finditer(reference)}
+    assert numbers(r.PR_REFERENCE) == numbers(_gate._PR_TARGET_RE)
+
+
+@pytest.mark.parametrize("response_body", [
+    b"x" * (r._MAX_RESPONSE_BYTES + 1),
+    b"not-json",
+    bytes([255]),
+])
+def test_revalidation_get_refuses_oversized_or_malformed_json_without_leaking_token(
+    monkeypatch, response_body,
+):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            assert size == r._MAX_RESPONSE_BYTES + 1
+            return response_body[:size]
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(r.RevalidationBlocked, match="github-read-failed") as err:
+        r.api("GET", "/issues/3418/comments?per_page=100", "never-log-this-token")
+    assert "never-log-this-token" not in str(err.value)
+
+
+def test_revalidation_get_decodes_valid_bounded_json_and_preserves_post_semantics(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            assert size == r._MAX_RESPONSE_BYTES + 1
+            return b'[{"id":1}]'
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    assert r.api("GET", "/issues/3418/comments?per_page=100", "token") == [{"id": 1}]
+
+
+def test_revalidation_get_accepts_valid_json_at_the_exact_byte_limit(monkeypatch):
+    limit = 64
+    monkeypatch.setattr(r, "_MAX_RESPONSE_BYTES", limit)
+    payload = b'[{"id":1}]'.ljust(limit, b" ")
+    responses = iter((payload, payload + b" "))
+    calls = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            assert size == limit + 1
+            return next(responses)[:size]
+
+    def read_only(request, *, timeout):
+        calls.append(request.method)
+        assert request.method == "GET"
+        return Response()
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", read_only)
+    path = "/issues/3418/comments?per_page=100"
+    assert r.api("GET", path, "offline-fixture") == [{"id": 1}]
+    with pytest.raises(r.RevalidationBlocked, match="^github-read-failed$"):
+        r.api("GET", path, "offline-fixture")
+    assert calls == ["GET", "GET"]
+
+
+def test_select_run_picks_latest_exact_match_regardless_of_list_order():
+    listing = runs()
+    older = listing["workflow_runs"][0]
+    later = {**older, "id": 89, "created_at": "2026-11-14T04:01:00Z"}
+    assert r.select_run(pr(), {"total_count": 2, "workflow_runs": [later, older]}) == 89
+    assert r.select_run(pr(), {"total_count": 2, "workflow_runs": [older, later]}) == 89

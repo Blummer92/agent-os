@@ -572,6 +572,26 @@ def test_p1_consume_rejects_result_edited_after_creation():
         _consume(_comment(_result(), updated_at="2026-11-11T11:00:00Z"))
 
 
+def test_p1_consume_rejects_result_without_updated_at():
+    # The shared consumer is the single owner of producer-record unedited
+    # proof: an absent updated_at cannot prove the record is unedited.
+    record = _comment(_result())
+    record.pop("updated_at", None)
+    with pytest.raises(ValueError, match="edited after creation"):
+        _consume(record)
+
+
+def test_p1_select_excludes_result_without_updated_at_before_ambiguity():
+    # A record that cannot prove it is unedited neither answers the request
+    # nor forces an ambiguity against a valid record.
+    valid = _comment(_result())
+    unproven = _comment(_result(status="manual-review"), comment_id=valid["id"] + 1)
+    unproven.pop("updated_at", None)
+    assert _select([valid, unproven]) == _consume(valid)
+    with pytest.raises(ValueError, match="not returned"):
+        _select([unproven])
+
+
 @pytest.mark.parametrize("field", ["id", "body", "user", "created_at"])
 def test_p1_consume_rejects_missing_metadata(field):
     record = _comment(_result())

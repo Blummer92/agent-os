@@ -807,3 +807,37 @@ def test_4011_direct_summary_refuses_untrusted_reason_counters_and_extra_fields(
     assert CURSOR not in expected
     assert SENSITIVE_SAMPLE not in expected
 
+
+
+def test_summary_records_cursor_presence_as_a_separate_finite_field(tmp_path):
+    diagnostic = bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": {
+            "incomplete_reason_code": "row-bound-exceeded",
+            "terminal_query_bucket": "workspace",
+            "terminal_page_row_count_bucket": "100",
+            "terminal_page_has_more": "true",
+            "terminal_page_cursor_present": True,
+        },
+        "selection_reason_codes": ["lesson-read-incomplete"],
+    })
+    summary = tmp_path / "summary.md"
+    assert bridge.write_retrieval_diagnostics_summary(
+        diagnostic, {"GITHUB_STEP_SUMMARY": str(summary)}
+    )
+    assert "- terminal_page_cursor_present: `True`" in summary.read_text().splitlines()
+
+
+def test_summary_appends_and_preserves_unrelated_existing_content(tmp_path):
+    diagnostic = bridge.retrieval_diagnostics_projection({
+        "retrieval_diagnostics": {"read_count": 2},
+        "selection_reason_codes": [],
+    })
+    summary = tmp_path / "summary.md"
+    prior = "Prior validation report remains available.\n"
+    summary.write_text(prior, encoding="utf-8")
+    assert bridge.write_retrieval_diagnostics_summary(
+        diagnostic, {"GITHUB_STEP_SUMMARY": str(summary)}
+    )
+    report = summary.read_text(encoding="utf-8")
+    assert report.startswith(prior)
+    assert "- read_count: `2`" in report.splitlines()

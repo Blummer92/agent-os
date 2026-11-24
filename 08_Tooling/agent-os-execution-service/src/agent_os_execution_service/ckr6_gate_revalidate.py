@@ -9,29 +9,35 @@ import argparse
 import datetime
 import json
 import os
-import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from .ckr6_github_bridge import envelope_from_event, parse_ckr6_result_comment
-from .ckr6_mutation_gate import _linked_issue_from_pr_body
+from .ckr6_github_bridge import (
+    CKR6_PRODUCER_ACCOUNT_ID as BOT_ID,
+    CKR6_RESULT_MARKER as RESULT_MARKER,
+    envelope_from_event,
+    parse_ckr6_result_comment,
+)
 from .ckr6_github_reader import _MAX_RESPONSE_BYTES
 
-REPO = "Blummer92/agent-os"
-OWNER_ID = 32861845
-BOT_ID = 41898282
-WORKFLOW = "agent-os-ckr6-mutation-gate.yml"
-RESULT_MARKER = "<!-- agent-os-ckr6-result:v1 -->"
-MUTATION_OPERATIONS = frozenset({"issue-start", "failed-repair"})
-PR_REFERENCE = re.compile(
-    r"(?<!\w)PR\s*#([1-9][0-9]{0,6})(?!\d)"
-    r"|https://github\.com/Blummer92/agent-os/pull/([1-9][0-9]{0,6})(?!\d)",
-    re.IGNORECASE,
+# Target interpretation is owned by the gate this lane reruns; never keep a
+# second, divergent PR/head grammar here.
+from .ckr6_mutation_gate import (
+    BOUNDARY_OPERATIONS as MUTATION_OPERATIONS,
+    DEFAULT_ALLOWED_ACTOR_ID as OWNER_ID,
+    _HEAD_REFERENCE_RE as SHA_REFERENCE,
+    _PR_TARGET_RE as PR_REFERENCE,
+    _COMMENT_PAGE_SIZE as COMMENT_PAGE_SIZE,
+    _MAX_COMMENT_PAGES as MAX_COMMENT_PAGES,
+    read_bounded_comment_pages,
+    _linked_issue_from_pr_body,
 )
-SHA_REFERENCE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
+
+REPO = "Blummer92/agent-os"
+WORKFLOW = "agent-os-ckr6-mutation-gate.yml"
 ISSUE_URL = "https://api.github.com/repos/" + REPO + "/issues/"
 
 
@@ -88,8 +94,6 @@ def api(method, endpoint, token):
                 if response.status != 201:
                     raise RevalidationBlocked("rerun-request-failed")
                 return None
-            # Bound GET bodies before JSON parsing; a full/oversized response
-            # is never evidence that a CKR6 request or run is valid.
             raw = response.read(_MAX_RESPONSE_BYTES + 1)
             if len(raw) > _MAX_RESPONSE_BYTES:
                 raise RevalidationBlocked("github-read-failed")
@@ -247,14 +251,22 @@ def _completed_result_for_owner(event, token):
     request_id = comment["id"]
     number = event["issue"]["number"]
     since = urllib.parse.quote(comment["created_at"], safe="")
-    listing = api("GET", f"/issues/{number}/comments?per_page=100&since={since}", token)
-    if not isinstance(listing, list) or len(listing) >= 100:
-        raise RevalidationBlocked("result-provenance-unverified")
+    def fetch_page(page):
+        return api(
+            "GET",
+            f"/issues/{number}/comments?per_page={COMMENT_PAGE_SIZE}&since={since}&page={page}",
+            token,
+        )
+    try:
+        listing = read_bounded_comment_pages(fetch_page, require_unique_ids=True)
+    except ValueError:
+        raise RevalidationBlocked("result-provenance-unverified") from None
     matching = []
     for item in listing:
-        if not isinstance(item, dict) or item.get("user", {}).get("id") != BOT_ID:
-            continue
-        if not _unedited_comment(item):
+        user = item.get("user")
+        if not isinstance(user, dict) or type(user.get("id")) is not int:
+            raise RevalidationBlocked("result-provenance-unverified")
+        if user["id"] != BOT_ID or not _unedited_comment(item):
             continue
         try:
             result = parse_ckr6_result_comment(item.get("body"))
