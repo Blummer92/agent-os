@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
-RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_HELPERS = ("agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py", "agent_os_ci_junit_subtest_receipt.py", "agent_os_ci_evidence_health.py")
 
 
 def _write_test(path: Path) -> None:
