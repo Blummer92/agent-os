@@ -535,6 +535,61 @@ def _knowledge_not_needed(request: CodingKnowledgeRequest) -> bool:
     )
 
 
+# A finite, affirmative mechanism signature. Neither caller prose nor a
+# lesson ID establishes relevance. In particular, do not search the Guardrail
+# (the second Notion use_when entry) for positive evidence.
+_LIBRARY_TIE_HINT_SETS = (
+    frozenset({"lesson-selection", "library coverage"}),
+    # Literal production #4097 request before the lesson was registered.
+    frozenset({"deterministic lesson ranking", "explicit multi-library coverage",
+               "bounded candidate selection"}),
+)
+_LIBRARY_TIE_REASON = "library-tie-coverage-text-match"
+_LIBRARY_TIE_TITLE = re.compile(
+    r"(?:preserve|maintain) (?:explicitly )?requested library coverage "
+    r"within lesson[- ]ranking ties"
+    r"|(?:preserve|maintain) coverage (?:of|for|across) (?:explicitly )?requested libraries "
+    r"within lesson[- ]ranking ties"
+)
+_LIBRARY_TIE_GUIDANCE = re.compile(
+    r"within (?:a|the same) relevance bucket, (?:preserve|maintain) "
+    r"(?:the widest )?coverage (?:of|across) (?:explicitly )?requested libraries "
+    r"before (?:truncating|cutting the shortlist)\.?"
+    r"(?: keep the existing deterministic order when coverage is equal\.)?"
+)
+
+# A separate guardrail can explicitly contradict the affirmative instruction.
+# Limit this veto to the same action/object, not unrelated prohibitions (e.g.
+# "never bypass provenance" or "never promote a lower relevance bucket").
+_LIBRARY_TIE_CONTRADICTION = re.compile(
+    r"\b(?:(?:never|do not|must not|should not) (?:preserve|maintain)"
+    r"|avoid (?:preserving|maintaining)) "
+    r"(?:(?:explicitly )?requested library coverage|(?:the widest )?coverage "
+    r"(?:of|for|across) (?:explicitly )?requested libraries)\b"
+)
+
+
+def _library_tie_guidance(candidate: CodingKnowledgeCandidate) -> bool:
+    return (
+        candidate.source_system == "notion-lessons-learned"
+        and _norm(candidate.ecosystem) == "agent-os"
+        and bool(candidate.use_when)
+        and _LIBRARY_TIE_TITLE.fullmatch(" ".join(candidate.name.casefold().split())) is not None
+        and _LIBRARY_TIE_GUIDANCE.fullmatch(
+            " ".join(candidate.use_when[0].casefold().split())
+        ) is not None
+    )
+
+
+_PR_REFRESH_HINTS = frozenset({"branch refresh", "merge-tree fallback"})
+# The owner used this complete mechanism description on #3991 before #4091.
+# It must not reduce to generic Git, merge-tree, or conflict-detection hints.
+_PR_REFRESH_HISTORICAL_HINTS = frozenset({
+    "git branch refresh", "rebase rejection", "merge-tree conflict detection", "bounded recovery",
+})
+_PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
+
+
 def _deduplicate(
     candidates: tuple[CodingKnowledgeCandidate, ...],
 ) -> tuple[tuple[CodingKnowledgeCandidate, ...], bool]:
@@ -576,11 +631,25 @@ def _match_candidate(
         if path_match:
             reasons.append("target-path-match")
         return 3, tuple(reasons)
+    library_tie_request = "agent-os" in ecosystems and any(
+        hints <= capability_hints for hints in _LIBRARY_TIE_HINT_SETS
+    )
+    if library_tie_request or "testing" in capability_overlap:
+        library_tie_lesson = _library_tie_guidance(candidate)
+        if library_tie_request and library_tie_lesson and not any(
+            _LIBRARY_TIE_CONTRADICTION.search(" ".join(text.casefold().split()))
+            for text in candidate.use_when[1:]
+        ):
+            return 2, (_LIBRARY_TIE_REASON,)
+        if library_tie_request or library_tie_lesson:
+            # Testing alone neither answers this explicit mechanism request nor
+            # makes this mechanism-specific guidance applicable elsewhere.
+            capability_overlap.discard("testing")
+
     # Explicit CKR6 mutation-boundary requests may match a lesson's verified
     # title/guidance even when Notion's controlled vocabulary is generic.
     # Require BOTH distinctive tokens, as whole words, in the lesson-owned
     # text. This is relevance only, never eligibility or authorization.
-    import re
     ci_request = "ckr6 mutation boundary" in capability_hints
     if ci_request:
         lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
@@ -596,12 +665,17 @@ def _match_candidate(
     # the lesson itself. Free-form task_reference and generic "testing" never
     # activate this path. This is a relevance *text match* only; it does not
     # attest to lesson applicability, currentness, provenance, or write authority.
-    if (
-        "branch refresh" in capability_hints
-        and "merge-tree fallback" in capability_hints
-    ):
+    canonical_refresh = _PR_REFRESH_HINTS <= capability_hints
+    historical_refresh = "git" in ecosystems and _PR_REFRESH_HISTORICAL_HINTS <= capability_hints
+    if canonical_refresh or historical_refresh:
         title = candidate.name.casefold()
         guidance = " ".join(candidate.use_when).casefold()
+        if not canonical_refresh:
+            # Do not extend the old token matcher to a new request shape on
+            # the strength of a warning, or a negated instruction.
+            guidance = candidate.use_when[0].casefold() if candidate.use_when else ""
+            if re.search(r"\b(?:not|never|avoid|skip|cannot)\b", guidance):
+                guidance = ""
         if (
             re.search(r"(?<![a-z0-9])(?:prs?|pull requests?)(?![a-z0-9])", title)
             and re.search(r"(?<![a-z0-9])(?:reconciliation|reconciling)(?![a-z0-9])", title)
@@ -613,7 +687,7 @@ def _match_candidate(
             )
             and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
         ):
-            return 2, ("pr-refresh-reconciliation-text-match",)
+            return 2, (_PR_REFRESH_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)

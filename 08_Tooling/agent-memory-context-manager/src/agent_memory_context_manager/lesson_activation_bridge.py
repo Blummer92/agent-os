@@ -32,6 +32,8 @@ from .coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
+    _LIBRARY_TIE_REASON,
+    _PR_REFRESH_REASON,
     _match_candidate,
     _norm,
     contextual_tie_scores,
@@ -555,7 +557,9 @@ def describe_selection_basis(
         basis = "exact-library" if via_library_name else "title-echo"
     elif "verified-ckr6-mutation-context-match" in reasons:
         basis = "rule-ckr6-mutation-boundary"
-    elif reasons & _GENERIC_REASONS:
+    # These source-text matches use the existing conservative tie fallback.
+    # The exact mechanism reason travels on each selected lesson, not as a new basis.
+    elif reasons & (_GENERIC_REASONS | {_LIBRARY_TIE_REASON, _PR_REFRESH_REASON}):
         basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
     else:  # pragma: no cover - the matcher has no other reason vocabulary
         basis = "no-relevant-signal"

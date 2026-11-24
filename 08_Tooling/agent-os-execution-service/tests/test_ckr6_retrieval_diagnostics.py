@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -389,13 +390,13 @@ def _issue_start_envelope():
     })
 
 
-def _run_issue_start(monkeypatch, reader):
+def _run_issue_start(monkeypatch, reader, *, envelope=None):
     route = type("Route", (), {})()
     route.execute_read = reader
     monkeypatch.setattr(bridge, "resolve_lesson_read_route", lambda: route)
     sink: list = []
     result = bridge.execute_envelope(
-        _issue_start_envelope(), retrieval_required=True, diagnostics_sink=sink
+        envelope or _issue_start_envelope(), retrieval_required=True, diagnostics_sink=sink
     )
     return result, sink
 
@@ -423,6 +424,40 @@ def test_issue_start_normal_read_reaches_artifact_with_actual_counters(monkeypat
     assert data["normalized_rows"] == 3
     assert data["candidate_count"] == 3
     assert data["incomplete_reason_code"] == "none"
+
+
+def test_issue_start_library_tie_match_reaches_bounded_artifact(monkeypatch, tmp_path):
+    row = _row(95)
+    props = row["properties"]
+    props["Lesson Learned"]["title"][0]["plain_text"] = (
+        "Preserve explicitly requested library coverage within lesson-ranking ties"
+    )
+    props["Learning Type"]["select"]["name"] = "Testing lesson"
+    props["Applies To"]["multi_select"] = []
+    props["What To Do Next Time"] = _rt(
+        "Within the same relevance bucket, preserve the widest coverage "
+        "of explicitly requested libraries before truncating."
+    )
+    envelope = replace(
+        _issue_start_envelope(), ecosystem_hints=("agent-os",),
+        task_reference="Investigate tied rankings losing a requested library",
+        capability_keywords=("lesson-selection", "library coverage"),
+    )
+    reader = _counting({"results": [_row(1), row], "has_more": False})
+    result, sink = _run_issue_start(monkeypatch, reader, envelope=envelope)
+    assert result["status"] == "sufficient"
+    assert result["selected_lesson_ids"] == ["LL-95"]
+    assert result["selected_lessons"] == [{
+        "lesson_id": "LL-95", "source_revision": REVISION,
+        "selection_reason_codes": ["library-tie-coverage-text-match"],
+    }]
+    _assert_issue_start_governance(result)
+
+    target = tmp_path / "diagnostics.json"
+    assert bridge.write_retrieval_diagnostics_artifact(sink[0], target)
+    assert json.loads(target.read_text(encoding="utf-8"))["selection_basis"] == (
+        "generic-unique"
+    )
 
 
 def test_issue_start_incomplete_page_reaches_artifact_with_row_bound_and_read_count(monkeypatch, tmp_path):
