@@ -101,7 +101,7 @@ class TestLearning(unittest.TestCase):
     def test_positive_non_merge_push(self):
         reader = Reader([])
         def exact_get(path):
-            self.assertEqual(path, f"/commits/{MERGE}/pulls?per_page=100")
+            self.assertEqual(path, f"/commits/{SHA}/pulls?per_page=100")
             return []
         reader.get = exact_get
         self.assertEqual(report.build_report(reader, SHA, None, 100)["status"], "not-applicable")
