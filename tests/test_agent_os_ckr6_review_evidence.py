@@ -165,3 +165,73 @@ def test_no_match_request_side_library_hint_count_is_not_row_population():
     projected = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
     assert projected["retrieval"]["normalized_rows"] == 0
     assert projected["retrieval"]["miss_library_hints_not_named"] == 2
+
+
+@pytest.mark.parametrize("reason,expected", [
+    ("notion-timeout", "notion-timeout"),
+    ("notion-malformed-pagination", "notion-malformed-pagination"),
+    ("notion-http-429", "notion-http-429"),
+    ("notion-unrecognized-diagnostic", "unclassified-reason"),
+])
+def test_retrieval_reason_projects_only_known_metadata(reason, expected):
+    e, r, d = fixture()
+    d["retrieval_reason_code"] = reason
+    result = build_review_evidence(e, r, d, run_id=1, run_attempt=1)
+    assert result["retrieval"]["retrieval_reason_code"] == expected
+    assert result["merge_authorized"] is False
+
+
+@pytest.mark.parametrize("totals", [
+    {"normalized_rows": 86},
+    {"normalized_rows": 88},
+    {"normalized_rows": 87, "skipped_rows": 1},
+    {"normalized_rows": 85, "skipped_rows": 1, "incomplete_reason_code": "missing-cursor"},
+])
+def test_diagnostic_rows_cannot_disagree_with_normalization_ledger(totals):
+    event, result, diagnostics = fixture()
+    diagnostics.update(totals)
+    with pytest.raises(ValueError, match="^diagnostic-row-accounting$"):
+        build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+
+
+@pytest.mark.parametrize("incomplete", ["none", "missing-cursor"])
+def test_diagnostic_rows_preserve_mixed_totals_even_when_later_retrieval_stops(incomplete):
+    event, result, diagnostics = fixture()
+    diagnostics.update(incomplete_reason_code=incomplete, normalized_rows=82, skipped_rows=5)
+    projection = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert tuple(projection["retrieval"][name] for name in
+                 ("observed_rows", "normalized_rows", "skipped_rows")) == (87, 82, 5)
+    assert projection["execution_authorized"] is False
+
+
+def test_raw_result_needs_an_independent_request_run_artifact_join():
+    event, result, diagnostics = fixture()
+    assert "request_comment_id" not in result
+    first = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    other_event = {**event, "comment": {"id": event["comment"]["id"] + 1}}
+    second = build_review_evidence(other_event, result, diagnostics, run_id=2, run_attempt=2)
+    assert first["ckr6"] == second["ckr6"]
+    assert first["source"]["request_comment_id"] != second["source"]["request_comment_id"]
+    for bundle in (first, second):
+        assert bundle["source"]["request_run_artifact_association"] == "supplied-unverified"
+        assert "independently-verify-request-run-artifact-association" in bundle["review_requirements"]
+        assert bundle["execution_authorized"] is False
+        assert bundle["github_writes_authorized"] is False
+        assert bundle["merge_authorized"] is False
+        assert bundle["notion_writes_authorized"] is False
+
+
+@pytest.mark.parametrize("bound_id", [7102293340, None, True, "7102293341"])
+def test_optional_result_request_identity_cannot_contradict_event(bound_id):
+    event, result, diagnostics = fixture()
+    result["request_comment_id"] = bound_id
+    with pytest.raises(ValueError, match="^result-request-identity$"):
+        build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+
+
+def test_optional_matching_result_identity_is_still_only_supplied_metadata():
+    event, result, diagnostics = fixture()
+    result["request_comment_id"] = event["comment"]["id"]
+    projected = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert projected["source"]["request_run_artifact_association"] == "supplied-unverified"
+    assert projected["execution_authorized"] is False

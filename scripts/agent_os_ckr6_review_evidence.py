@@ -31,6 +31,12 @@ STATUSES = frozenset({
     "sufficient", "insufficient", "manual-review", "not-needed",
     "unavailable-safe-fallback", "rejected",
 })
+# Stable non-secret outcomes from the canonical Notion reader composition.
+NOTION_REASONS = frozenset({
+    "notion-connection-error", "notion-timeout", "notion-malformed-pagination",
+    "notion-malformed-response", "notion-adapter-contract-error",
+    "notion-read-failure", "notion-malformed-output",
+})
 CURRENTNESS = frozenset({"current", "stale", "unverifiable"})
 PROVENANCE = frozenset({
     "canonical-github-ref-present", "canonical-github-ref-missing-or-rejected",
@@ -81,6 +87,10 @@ def _finite_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]
     incomplete = diagnostics.get("incomplete_reason_code")
     if type(reason) is not str or (reason != "none" and reason not in REASONS and not re.fullmatch(r"notion-[a-z0-9-]{1,72}", reason)):
         raise ValueError("diagnostic-reason")
+    if (reason != "none" and reason not in REASONS and reason not in NOTION_REASONS
+            and not re.fullmatch(r"notion-http-[1-5][0-9]{2}", reason)):
+        # Preserve intake compatibility without projecting unknown strings.
+        reason = "unclassified-reason"
     if type(incomplete) is not str or incomplete not in {
         "none", "row-bound-exceeded", "page-bound-exceeded", "missing-cursor",
         "repeated-cursor", "read-budget-exceeded", "malformed-page",
@@ -97,6 +107,10 @@ def _finite_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]
     for field in count_fields:
         if field not in diagnostics or type(diagnostics[field]) is not int or not 0 <= diagnostics[field] <= 10_000:
             raise ValueError("diagnostic-count")
+    # The retrieval owner counts each processed row as normalized or skipped.
+    # Normalized duplicates still count here; selection deduplicates separately.
+    if diagnostics["observed_rows"] != diagnostics["normalized_rows"] + diagnostics["skipped_rows"]:
+        raise ValueError("diagnostic-row-accounting")
     # Each row metric counts at most once per distinct normalized record.
     # The final metric counts request library hints, not records.
     if has_miss_counters and any(
@@ -120,7 +134,7 @@ def build_review_evidence(
     run_id: int,
     run_attempt: int,
 ) -> dict[str, Any]:
-    """Strictly project existing trusted metadata; never infer live content."""
+    """Project supplied metadata without authenticating its request/run/artifact association."""
     repository = event.get("repository")
     issue = event.get("issue")
     comment = event.get("comment")
@@ -133,6 +147,13 @@ def build_review_evidence(
         raise ValueError("event-identity")
     if result.get("repository") != REPOSITORY or result.get("issue_number") != issue["number"]:
         raise ValueError("result-identity")
+    # The raw Actions result omits this field; a copied postback may carry it.
+    # A matching supplied ID is a consistency check, not provenance.
+    if "request_comment_id" in result and (
+        not _positive_int(result["request_comment_id"])
+        or result["request_comment_id"] != comment["id"]
+    ):
+        raise ValueError("result-request-identity")
     if result.get("operation") not in {"issue-start", "failed-repair"}:
         raise ValueError("operation")
     status = result.get("status")
@@ -180,6 +201,7 @@ def build_review_evidence(
             "request_comment_id": comment["id"],
             "run_id": run_id,
             "run_attempt": run_attempt,
+            "request_run_artifact_association": "supplied-unverified",
         },
         "ckr6": {"operation": result["operation"], "status": status,
                  "reason_codes": safe_reasons, "selected_lesson_ids": selected,
@@ -188,6 +210,7 @@ def build_review_evidence(
         "candidate_provenance": candidates,
         "review_requirements": [
             "qualified-independent-reviewer", "private-read-only-exact-revision",
+            "independently-verify-request-run-artifact-association",
             "source-owned-guidance-polarity", "status-surface-and-archive",
             "canonical-source-provenance", "unrelated-task-hard-negatives",
         ],
