@@ -564,7 +564,9 @@ def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(mo
     monkeypatch.setattr(r, "api", fake)
     with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
         r._completed_result_for_owner(event, "unused")
-    assert len(calls) == r.MAX_COMMENT_PAGES
+    # The fake repeats the same server IDs on page two: fail closed on
+    # an unstable population, not after burning the entire page budget.
+    assert len(calls) == 2
     assert all(method != "POST" for method, _ in calls)
 
     state["count"] = 99
@@ -642,6 +644,27 @@ def test_postback_pagination_invalid_second_page_fails_closed(monkeypatch, bad_s
     with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
         r._completed_result_for_owner(event, "unused")
     assert len(calls) == 2
+    assert all(method != "POST" for method, _ in calls)
+
+
+def test_postback_full_page_budget_fails_closed(monkeypatch):
+    event = _event_for({
+        "operation": "issue-start", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+    })
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        page = int(path.rsplit("page=", 1)[1])
+        return [
+            {"id": page * 1000 + i, "user": {"id": 12345}, "body": "noise"}
+            for i in range(r.COMMENT_PAGE_SIZE)
+        ]
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r._completed_result_for_owner(event, "unused")
+    assert len(calls) == r.MAX_COMMENT_PAGES
     assert all(method != "POST" for method, _ in calls)
 
 
