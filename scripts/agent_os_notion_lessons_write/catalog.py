@@ -646,6 +646,20 @@ LESSONS = MappingProxyType({
             ),
         }),
     }),
+    # #4026: reviewed tie-coverage candidate; creation requires a separate owner command.
+    "ckr2-explicit-library-tie-coverage": MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Guardrail": "Never promote a lower relevance bucket or bypass provenance to gain coverage. Keep the existing candidate and selection limits. If reordering changes which lesson IDs make the cutoff, replay the original shortlist in its original order. Keep any prior refusal unless missing required-library coverage was the only reason.",
+            "Learning Type": "Testing lesson",
+            "Lesson Learned": "Preserve explicitly requested library coverage within lesson-ranking ties",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
+            "What Happened": "Several tied lessons for one requested library can fill a bounded shortlist and displace the only equally relevant lesson for another requested library. Diagnosis: Selecting by tie order alone ignores distinct explicit-library coverage before the shortlist is cut.",
+            "What To Do Next Time": "Within the same relevance bucket, preserve the widest coverage of explicitly requested libraries before truncating. Keep the existing deterministic order when coverage is equal.",
+            "Area": "Governance",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/4097",),
+        }),
+    }),
 })
 
 
