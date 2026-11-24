@@ -553,8 +553,9 @@ class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
 
-    def read(self):
-        return json.dumps(self._payload).encode("utf-8")
+    def read(self, size=-1):
+        data = json.dumps(self._payload).encode("utf-8")
+        return data if size is None or size < 0 else data[:size]
 
     def __enter__(self):
         return self
@@ -827,7 +828,7 @@ def test_postback_dedupe_get_is_bounded_and_falls_back_to_post(
 
         def read(self, size=-1):
             calls.append(("read", size))
-            return self.body[:size]
+            return self.body if size is None or size < 0 else self.body[:size]
 
     def fake_urlopen(request, timeout=30):
         method = request.get_method()
