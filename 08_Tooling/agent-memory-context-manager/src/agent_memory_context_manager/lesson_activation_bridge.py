@@ -32,7 +32,6 @@ from .coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
-    _LIBRARY_TIE_REASON,
     _match_candidate,
     _norm,
     contextual_tie_scores,
@@ -494,7 +493,6 @@ SELECTION_BASIS_VALUES = frozenset({
     "title-echo",
     "exact-library",
     "rule-ckr6-mutation-boundary",
-    "rule-library-tie-coverage",
     "generic-unique",
     "generic-tie-lexical-cut",
     "not-evaluated",
@@ -559,8 +557,6 @@ def describe_selection_basis(
         basis = "rule-ckr6-mutation-boundary"
     elif reasons & _GENERIC_REASONS:
         basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
-    elif _LIBRARY_TIE_REASON in reasons:
-        basis = "rule-library-tie-coverage"
     else:  # pragma: no cover - the matcher has no other reason vocabulary
         basis = "no-relevant-signal"
     return SelectionBasis(basis=basis, best_bucket=best, tied_identities=len(tied))
