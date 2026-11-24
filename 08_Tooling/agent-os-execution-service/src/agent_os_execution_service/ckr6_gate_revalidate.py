@@ -100,7 +100,7 @@ def api(method, endpoint, token):
                 "rerun-permission-denied" if exc.code in (401, 403) else "rerun-request-failed"
             ) from None
         raise RevalidationBlocked("github-read-failed") from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeError):
         raise RevalidationBlocked("rerun-request-failed" if method == "POST" else "github-read-failed") from None
 
 
