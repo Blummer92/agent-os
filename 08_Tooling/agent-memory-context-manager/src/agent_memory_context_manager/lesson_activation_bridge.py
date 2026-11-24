@@ -473,6 +473,7 @@ SELECTION_BASIS_VALUES = frozenset({
 })
 _GENERIC_REASONS = frozenset({
     "keyword-overlap", "ecosystem-capability-match", "target-path-match",
+    "github-rest-evidence-text-match",
 })
 
 
