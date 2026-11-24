@@ -59,3 +59,11 @@ def test_focused_junit_requires_an_executed_body(tmp_path):
     )
     assert normal.returncode == 0  # Full suites retain their skip allowlist.
     assert focused.returncode == 2  # Explicit focus cannot be all skipped.
+
+
+def test_focused_runner_forwards_required_execution_flag():
+    """The shell wrapper must forward the flag, not merely mention it at callsite."""
+    source = (ROOT / "scripts" / "validate-all.sh").read_text(encoding="utf-8")
+    assert '"$PYTHON_BIN" scripts/agent_os_ci_junit_validate.py "$@"' in source
+    assert 'verify_junit "$focused_junit_path" --require-executed' in source
+    assert '"$PYTHON_BIN" scripts/agent_os_ci_junit_validate.py "$1"' not in source
