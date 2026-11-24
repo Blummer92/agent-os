@@ -12,37 +12,43 @@
       "id": "NC07",
       "issue": 3901,
       "negative": "tests/test_agent_os_ci_test_completeness.py::test_mandatory_skipped_test_cannot_pass",
-      "positive": "tests/test_agent_os_ci_test_completeness.py::test_allowlisted_skip_passes_complete"
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_allowlisted_skip_passes_complete",
+      "source": "https://github.com/Blummer92/agent-os/issues/3901"
     },
     {
       "id": "NC08",
       "issue": 3902,
       "negative": "tests/test_agent_os_ci_test_completeness.py::test_conftest_modifyitems_drop_is_caught",
-      "positive": "tests/test_agent_os_ci_test_completeness.py::test_conftest_marker_only_passes_complete"
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_conftest_marker_only_passes_complete",
+      "source": "https://github.com/Blummer92/agent-os/issues/3902"
     },
     {
       "id": "NC09",
       "issue": 3872,
       "negative": "tests/test_agent_os_ci_junit_diff.py::test_duplicate_nodes_and_count_mismatch_are_rejected",
-      "positive": "tests/test_agent_os_ci_junit_diff.py::test_mapped_replacement_is_machine_verified"
+      "positive": "tests/test_agent_os_ci_junit_diff.py::test_mapped_replacement_is_machine_verified",
+      "source": "https://github.com/Blummer92/agent-os/issues/3872"
     },
     {
       "id": "NC19",
       "issue": 3869,
       "negative": "tests/test_agent_os_aggregate_gate.py::test_nc19_skipped_aggregate_publishes_error_not_success",
-      "positive": "tests/test_agent_os_aggregate_gate.py::test_real_aggregate_success_publishes_success"
+      "positive": "tests/test_agent_os_aggregate_gate.py::test_real_aggregate_success_publishes_success",
+      "source": "https://github.com/Blummer92/agent-os/issues/3869"
     },
     {
       "id": "D07",
       "issue": 4056,
       "negative": "tests/test_agent_os_ci_validation.py::test_d07_focused_does_not_reuse_stale_passing_junit",
-      "positive": "tests/test_agent_os_ci_validation.py::test_d07_successful_child_requires_fresh_positive_case_evidence"
+      "positive": "tests/test_agent_os_ci_validation.py::test_d07_successful_child_requires_fresh_positive_case_evidence",
+      "source": "https://github.com/Blummer92/agent-os/issues/4056"
     },
     {
       "id": "NC-SELECT",
       "issue": 3816,
       "negative": "tests/test_agent_os_ci_test_completeness.py::test_configuration_narrowing_cannot_pass",
-      "positive": "tests/test_agent_os_ci_test_completeness.py::test_legitimate_suites_pass_complete"
+      "positive": "tests/test_agent_os_ci_test_completeness.py::test_legitimate_suites_pass_complete",
+      "source": "https://github.com/Blummer92/agent-os/issues/3816"
     }
   ],
   "cases": [
