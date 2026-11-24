@@ -12,7 +12,7 @@ import itertools
 import json
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from .models import (
     CLOUD_BUILD_EVIDENCE_SCHEMA_NAME,
@@ -121,6 +121,19 @@ def _bounded_candidates(
 
 
 def resolve_pull_request(
+    evidence: CloudBuildResultEvidence,
+    *,
+    authoritative_pr_number: int | None = None,
+    candidates: Sequence[PullRequestResolutionCandidate] = (),
+) -> PullRequestResolutionResult:
+    """Resolve and retain the repository/SHA context checked by the resolver."""
+    result = _resolve_pull_request(
+        evidence, authoritative_pr_number=authoritative_pr_number, candidates=candidates
+    )
+    return replace(result, repository=evidence.repository, tested_sha=evidence.tested_sha)
+
+
+def _resolve_pull_request(
     evidence: CloudBuildResultEvidence,
     *,
     authoritative_pr_number: int | None = None,
@@ -342,12 +355,14 @@ def render_comment_projection(
         reporting_status=reporting_status,
         manual_review_reasons=manual_review_reasons,
         rendered_body=rendered_body,
+        pull_request_number=resolution.pull_request_number,
     )
 
 
 def serialize_projection(projection: CloudBuildCommentProjection) -> str:
-    """Canonical, deterministic JSON serialization of a rendered projection."""
+    """Serialize the display-only projection, not publication evidence."""
     payload = asdict(projection)
+    payload.pop("pull_request_number")
     payload["manual_review_reasons"] = list(projection.manual_review_reasons)
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 

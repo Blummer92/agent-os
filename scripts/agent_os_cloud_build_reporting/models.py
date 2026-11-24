@@ -192,12 +192,23 @@ class PullRequestResolutionResult:
     status: ResolutionStatus
     pull_request_number: int | None
     reason_codes: tuple[str, ...]
+    repository: str | None = None
+    tested_sha: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ResolutionStatus):
             raise CloudBuildEvidenceError("status must be a ResolutionStatus")
+        if (self.repository is None) != (self.tested_sha is None):
+            raise CloudBuildEvidenceError("resolution identity must be complete")
+        if self.repository is not None:
+            repository = _check_bounded_str("repository", self.repository).lower()
+            if not _REPOSITORY_RE.fullmatch(repository):
+                raise CloudBuildEvidenceError("repository must be owner/name")
+            object.__setattr__(self, "repository", repository)
+            if not isinstance(self.tested_sha, str) or not _SHA40_RE.fullmatch(self.tested_sha):
+                raise CloudBuildEvidenceError("tested_sha must be a full lowercase SHA")
         if self.status == ResolutionStatus.RESOLVED:
             if self.pull_request_number is None:
                 raise CloudBuildEvidenceError("resolved status requires a pull_request_number")
@@ -233,6 +244,7 @@ class CloudBuildCommentProjection:
     reporting_status: str
     manual_review_reasons: tuple[str, ...]
     rendered_body: str
+    pull_request_number: int | None = None
     side_effects_performed: Literal[False] = field(default=False, init=False)
     execution_authorized: Literal[False] = field(default=False, init=False)
 
@@ -245,6 +257,12 @@ class CloudBuildCommentProjection:
         _check_bounded_str("failed_step", self.failed_step)
         _check_bounded_str("exit_code", self.exit_code)
         _check_bounded_str("reporting_status", self.reporting_status)
+        if self.pull_request_number is not None and (
+            not isinstance(self.pull_request_number, int)
+            or isinstance(self.pull_request_number, bool)
+            or self.pull_request_number <= 0
+        ):
+            raise CloudBuildEvidenceError("projection pull_request_number must be a positive int")
 
         reasons = tuple(self.manual_review_reasons)
         if len(reasons) > MAX_REASON_CODES:

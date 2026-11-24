@@ -31,6 +31,11 @@ A connected caller supplies:
 2. a complete bounded snapshot of current PR conversation comments;
 3. the result and complete canonical readback after any admitted mutation.
 
+The in-memory projection must come from the exact supplied PR resolution.
+Its display serialization and managed comment body are target-agnostic; they
+do not supply a publication-bound projection or authenticate the host's
+current comment snapshot. Rerender from checked inputs for a new plan.
+
 `plan_publication(...)` returns exactly one bounded action:
 
 - `create` when no managed marker exists;

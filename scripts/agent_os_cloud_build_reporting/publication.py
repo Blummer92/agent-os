@@ -26,6 +26,7 @@ from .models import (
     PullRequestResolutionResult,
     ResolutionStatus,
 )
+from .core import render_comment_projection
 
 MAX_COMMENT_SNAPSHOTS = 100
 
@@ -128,6 +129,10 @@ def plan_publication(
         return _manual_plan(evidence, projection, "publication.marker-missing")
     if resolution.status is not ResolutionStatus.RESOLVED or resolution.pull_request_number is None:
         return _manual_plan(evidence, projection, "publication.target-unresolved", *resolution.reason_codes)
+    if resolution.repository != evidence.repository or resolution.tested_sha != evidence.tested_sha:
+        return _manual_plan(evidence, projection, "publication.resolution-identity-mismatch")
+    if projection != render_comment_projection(evidence, resolution):
+        return _manual_plan(evidence, projection, "publication.projection-evidence-mismatch")
     if not comments_complete:
         return _manual_plan(evidence, projection, "publication.comment-readback-incomplete")
 
