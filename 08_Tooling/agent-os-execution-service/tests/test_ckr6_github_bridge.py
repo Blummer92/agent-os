@@ -553,8 +553,9 @@ class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
 
-    def read(self):
-        return json.dumps(self._payload).encode("utf-8")
+    def read(self, size=-1):
+        data = json.dumps(self._payload).encode("utf-8")
+        return data if size is None or size < 0 else data[:size]
 
     def __enter__(self):
         return self
@@ -799,6 +800,57 @@ def test_3951_postback_targets_issues_endpoint_for_pr_conversation(monkeypatch):
     assert parsed["request_comment_id"] == 777
     assert posted["posted_comment_id"] == 890
     assert posted["issue_number"] == 3951
+
+
+
+@pytest.mark.parametrize("dedupe_payload", [
+    b"x" * (bridge._MAX_RESPONSE_BYTES + 1),
+    b"not-json",
+    bytes([255]),
+])
+def test_postback_dedupe_get_is_bounded_and_falls_back_to_post(
+    monkeypatch, capsys, dedupe_payload,
+):
+    import urllib.request
+
+    calls = []
+    class Response:
+        status = 201
+
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            calls.append(("read", size))
+            return self.body if size is None or size < 0 else self.body[:size]
+
+    def fake_urlopen(request, timeout=30):
+        method = request.get_method()
+        calls.append(("method", method))
+        if method == "GET":
+            return Response(dedupe_payload)
+        return Response(b'{"id":891}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    event = _postback_event()
+    event["comment"]["created_at"] = "2026-11-13T00:49:54Z"
+    result = bridge.postback_result_comment(
+        event=event,
+        repository="Blummer92/agent-os",
+        result=_result(),
+        api_url="https://api.github.com",
+        token="never-log-this-token",
+    )
+    assert result["posted_comment_id"] == 891
+    assert [value for kind, value in calls if kind == "method"] == ["GET", "POST"]
+    assert ("read", bridge._MAX_RESPONSE_BYTES + 1) in calls
+    assert "never-log-this-token" not in capsys.readouterr().err
 
 
 def test_3951_dedupe_lookup_failure_is_diagnosed_and_post_still_attempted(

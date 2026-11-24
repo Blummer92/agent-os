@@ -295,6 +295,51 @@ def test_missing_published_run_association_is_explicit_stop():
         r.select_run(pr(), data)
 
 
+
+@pytest.mark.parametrize("response_body", [
+    b"x" * (r._MAX_RESPONSE_BYTES + 1),
+    b"not-json",
+    bytes([255]),
+])
+def test_revalidation_get_refuses_oversized_or_malformed_json_without_leaking_token(
+    monkeypatch, response_body,
+):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            assert size == r._MAX_RESPONSE_BYTES + 1
+            return response_body[:size]
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(r.RevalidationBlocked, match="github-read-failed") as err:
+        r.api("GET", "/issues/3418/comments?per_page=100", "never-log-this-token")
+    assert "never-log-this-token" not in str(err.value)
+
+
+def test_revalidation_get_decodes_valid_bounded_json_and_preserves_post_semantics(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size=-1):
+            assert size == r._MAX_RESPONSE_BYTES + 1
+            return b'[{"id":1}]'
+
+    monkeypatch.setattr(r.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    assert r.api("GET", "/issues/3418/comments?per_page=100", "token") == [{"id": 1}]
+
 def test_real_api_permission_denial_does_not_log_body(monkeypatch):
     from urllib.error import HTTPError
     def forbidden(*args, **kwargs):
