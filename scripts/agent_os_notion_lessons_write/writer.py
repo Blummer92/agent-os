@@ -14,7 +14,7 @@ from collections.abc import Mapping
 import re
 import unicodedata
 from .admission import AdmittedRequest, WriteBlocked, notion_id
-from .catalog import LESSON_ID, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
+from .catalog import LESSON_ID, MAX_SUPPORTING_REFS, NARRATIVE_TYPES, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
 
 
 def properties(request_id: str = REQUEST_ID) -> dict:
@@ -195,7 +195,80 @@ def _possible_same_lesson(title: str, other_title: str) -> bool:
     return shared >= 3 and 2 * shared >= min(len(left), len(right))
 
 
-def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[str, ...]:
+def _duplicate_evidence_review(row: Mapping, lesson: Mapping, lesson_id: str) -> dict:
+    """Bounded, read-only handoff; not a claim of verified evidence or identity.
+
+    Only reviewed catalog refs and field *names* enter the public receipt.
+    Provider-supplied narrative, URLs and private property values never do.
+    A reviewer must verify evidence and register a canonical Lesson-ID update
+    separately; an overlap match alone does not authorize any mutation.
+    """
+    candidate_refs = tuple(dict.fromkeys(
+        ([lesson["Source Link"]] if "Source Link" in lesson else [])
+        + list(lesson.get(SUPPORTING_SOURCE_LINKS, ()))
+    ))
+    review = {
+        "lesson_id": lesson_id,
+        "candidate_source_refs_to_verify": list(candidate_refs),
+        "new_source_refs_to_review": [],
+        "source_comparison": "unavailable",
+        "claim_fields_to_review": [],
+        "claim_comparison": "unavailable",
+        "review_action": "register-reviewed-lesson-id-update",
+        "automatic_update_authorized": False,
+    }
+    try:
+        current = _values(row, ("Source Link", SUPPORTING_SOURCE_LINKS))
+        current_refs = set(current[SUPPORTING_SOURCE_LINKS])
+        if current["Source Link"]:
+            current_refs.add(current["Source Link"])
+        if (len(current[SUPPORTING_SOURCE_LINKS]) > MAX_SUPPORTING_REFS
+                or any(type(value) is not str or not value.strip() or len(value) > 512
+                       for value in current_refs)):
+            raise WriteBlocked("malformed-duplicate-source-state")
+        additional = [value for value in candidate_refs if value not in current_refs]
+        proposed = set(current[SUPPORTING_SOURCE_LINKS]) | set(additional)
+        review.update(
+            source_comparison="complete",
+            new_source_refs_to_review=additional,
+            supporting_source_capacity=("available" if len(proposed) <= MAX_SUPPORTING_REFS
+                                        else "limit-exceeded"),
+        )
+    except WriteBlocked:
+        # The duplicate still blocks create; never infer that missing source
+        # metadata means the candidate's references are novel or safe.
+        pass
+    try:
+        review["claim_fields_to_review"] = [
+            field for field in NARRATIVE_TYPES
+            if field in lesson and _values(row, (field,))[field] != lesson[field]
+        ]
+        review["claim_comparison"] = "text-difference-only"
+    except WriteBlocked:
+        # Semantic equivalence, contradiction and evidentiary weight require
+        # independent human/source review even when texts compare cleanly.
+        review["claim_fields_to_review"] = []
+    return review
+
+
+def _check_evidence_append(existing: Mapping, lesson: Mapping) -> tuple[str, ...] | None:
+    """An evidence-only patch may append, never erase old supporting sources.
+
+    Omitting Source Link preserves the primary source through the existing
+    non-routine-property readback guard. Existing broader source repairs that
+    deliberately replace Source Link remain separately reviewed operations.
+    """
+    if SUPPORTING_SOURCE_LINKS not in lesson or "Source Link" in lesson:
+        return None
+    old = _values(existing, (SUPPORTING_SOURCE_LINKS,))[SUPPORTING_SOURCE_LINKS]
+    wanted = lesson[SUPPORTING_SOURCE_LINKS]
+    if (len(old) > MAX_SUPPORTING_REFS or len(set(old)) != len(old)
+            or not set(old).issubset(wanted)):
+        raise WriteBlocked("supporting-evidence-would-be-lost")
+    return tuple(value for value in wanted if value not in old)
+
+
+def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[tuple[str, ...], list[dict]]:
     """Inspect one complete, capped canonical catalog snapshot; never mutate.
 
     Incomplete pagination, malformed identities, duplicates and schema drift
@@ -209,6 +282,7 @@ def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[
     if type(rows) is not list or len(rows) > _MAX_DUPLICATE_ROWS:
         raise WriteBlocked("incomplete-duplicate-scan")
     matches = set()
+    reviews = {}
     seen_page_ids = set()
     for row in rows:
         page_id = _page(row, source_id)
@@ -221,9 +295,11 @@ def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[
             if lesson_id is None or lesson_id in matches:
                 raise WriteBlocked("ambiguous-duplicate-scan")
             matches.add(lesson_id)
+            reviews[lesson_id] = _duplicate_evidence_review(row, lesson, lesson_id)
     if len(matches) > 10:
         raise WriteBlocked("ambiguous-duplicate-scan")
-    return tuple(sorted(matches, key=lambda value: int(value[3:])))
+    ordered = tuple(sorted(matches, key=lambda value: int(value[3:])))
+    return ordered, [reviews[lesson_id] for lesson_id in ordered]
 
 
 def _find_lesson_id(client, source_id: str, lesson_id: str) -> Mapping | None:
@@ -357,10 +433,10 @@ def execute(request: AdmittedRequest, client) -> dict:
         else:
             existing = _find_title(client, source_id, lesson)
             if existing is None:
-                possible = _find_semantic_duplicates(client, source_id, lesson)
+                possible, reviews = _find_semantic_duplicates(client, source_id, lesson)
                 if possible:
                     result.update(status="blocked", reason_code="possible-semantic-duplicate",
-                                  duplicate_lesson_ids=list(possible))
+                                  duplicate_lesson_ids=list(possible), duplicate_evidence_reviews=reviews)
                     return result
         page_id = None
         if existing is not None:
@@ -371,6 +447,7 @@ def execute(request: AdmittedRequest, client) -> dict:
                 raise WriteBlocked("lesson-identity-changed")
             result.update(page_id=page_id, lesson_id=_lesson_id(existing),
                           revision=existing["last_edited_time"])
+            added_supporting_refs = _check_evidence_append(existing, lesson) if target is not None else None
             if _values(existing, lesson) == lesson:
                 result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True,
                               activation_prerequisites=activation_prerequisites(existing))
@@ -395,10 +472,10 @@ def execute(request: AdmittedRequest, client) -> dict:
         elif target is None:
             # Close the read-only pre-reservation window; an ambiguous page
             # must never be resolved by POST or a force-rearmed tag.
-            possible = _find_semantic_duplicates(client, source_id, lesson)
+            possible, reviews = _find_semantic_duplicates(client, source_id, lesson)
             if possible:
                 result.update(status="blocked", reason_code="possible-semantic-duplicate",
-                              duplicate_lesson_ids=list(possible))
+                              duplicate_lesson_ids=list(possible), duplicate_evidence_reviews=reviews)
                 return result
         intended = properties(request.request_id)
         if page_id is None:
@@ -472,6 +549,15 @@ def execute(request: AdmittedRequest, client) -> dict:
                       readback_verified=True, lesson_id=_lesson_id(readback),
                       revision=readback["last_edited_time"],
                       activation_prerequisites=activation_prerequisites(readback))
+        if target is not None and added_supporting_refs is not None:
+            # This is a writer readback receipt, not proof of independent
+            # verification or of the credibility of the new evidence.
+            result["evidence_update"] = {
+                "target_lesson_id": target,
+                "added_supporting_source_links": list(added_supporting_refs),
+                "primary_source_preserved": True,
+                "independent_verification_required": True,
+            }
     except WriteBlocked as exc:
         result["reason_code"] = str(exc)
     except Exception:
