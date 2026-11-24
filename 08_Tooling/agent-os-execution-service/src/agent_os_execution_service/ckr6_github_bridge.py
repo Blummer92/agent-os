@@ -583,6 +583,27 @@ def _optional_miss_counter_keys_valid(diagnostics: Mapping[str, object]) -> bool
     )
 
 
+
+def _exportable_retrieval_diagnostics(
+    diagnostics: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    """Require one exact finite schema for both observational export paths."""
+    if not isinstance(diagnostics, Mapping) or not _optional_miss_counter_keys_valid(diagnostics):
+        return None
+    required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
+    if set(diagnostics) - {_OPTIONAL_BASIS_KEY, *_NO_MATCH_COUNTERS} not in (
+        required,
+        required | {"terminal_query_bucket"},
+        required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
+    ):
+        return None
+    projected = retrieval_diagnostics_projection({
+        "retrieval_diagnostics": diagnostics,
+        "selection_reason_codes": [diagnostics.get("retrieval_reason_code")],
+    })
+    return projected if projected == dict(diagnostics) else None
+
+
 def write_retrieval_diagnostics_summary(
     diagnostics: Mapping[str, object] | None,
     environ: Mapping[str, str] | None = None,
@@ -592,45 +613,8 @@ def write_retrieval_diagnostics_summary(
     Observational only: any failure is swallowed so it can never alter the
     already-written result, the exit status, or admission.
     """
-    if not isinstance(diagnostics, Mapping):
-        return False
-    # The summary is independently fail-closed on the new optional fields,
-    # even when a caller bypasses the usual finite projection.
-    page_keys_present = _TERMINAL_PAGE_KEYS & diagnostics.keys()
-    if page_keys_present:
-        if page_keys_present != _TERMINAL_PAGE_KEYS:
-            return False
-        if (
-            type(diagnostics["terminal_page_row_count_bucket"]) is not str
-            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
-            or type(diagnostics["terminal_page_has_more"]) is not str
-            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
-            or type(diagnostics["terminal_page_cursor_present"]) is not bool
-            or diagnostics.get("incomplete_reason_code") not in _INCOMPLETE_REASON_CODES
-        ):
-            return False
-    # The summary and artifact must enforce the same finite allowlist.
-    # Otherwise direct calls can expose hostile reason text or unbounded
-    # counters in the Actions summary despite strict artifact validation.
-    if not _optional_miss_counter_keys_valid(diagnostics):
-        return False
-    required = {"retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS}
-    if _OPTIONAL_BASIS_KEY in diagnostics and (
-        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
-        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
-    ):
-        return False
-    if set(diagnostics) - {_OPTIONAL_BASIS_KEY, *_NO_MATCH_COUNTERS} not in (
-        required,
-        required | {"terminal_query_bucket"},
-        required | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
-    ):
-        return False
-    finite = retrieval_diagnostics_projection({
-        "retrieval_diagnostics": diagnostics,
-        "selection_reason_codes": [diagnostics.get("retrieval_reason_code")],
-    })
-    if finite != dict(diagnostics):
+    diagnostics = _exportable_retrieval_diagnostics(diagnostics)
+    if diagnostics is None:
         return False
     target = (environ if environ is not None else os.environ).get("GITHUB_STEP_SUMMARY", "")
     if not target:
@@ -662,67 +646,9 @@ def write_retrieval_diagnostics_artifact(
     influences CKR6 admission, mutation, or execution status. Invalid values
     cannot be serialized or echoed, and artifact failures are non-blocking.
     """
-    if not isinstance(diagnostics, Mapping):
+    safe = _exportable_retrieval_diagnostics(diagnostics)
+    if safe is None:
         return False
-    if not _optional_miss_counter_keys_valid(diagnostics):
-        return False
-    expected_keys = {
-        "retrieval_reason_code", "incomplete_reason_code", *_RETRIEVAL_COUNTERS,
-    }
-    allowed_keys = (
-        expected_keys,
-        expected_keys | {"terminal_query_bucket"},
-        expected_keys | {"terminal_query_bucket"} | _TERMINAL_PAGE_KEYS,
-    )
-    if _OPTIONAL_BASIS_KEY in diagnostics and (
-        type(diagnostics[_OPTIONAL_BASIS_KEY]) is not str
-        or diagnostics[_OPTIONAL_BASIS_KEY] not in _SELECTION_BASIS_VALUES
-    ):
-        return False
-    if set(diagnostics) - {_OPTIONAL_BASIS_KEY, *_NO_MATCH_COUNTERS} not in allowed_keys:
-        return False
-    if _TERMINAL_PAGE_KEYS <= diagnostics.keys():
-        if (
-            type(diagnostics["terminal_page_row_count_bucket"]) is not str
-            or diagnostics["terminal_page_row_count_bucket"] not in _TERMINAL_PAGE_ROW_BUCKETS
-            or type(diagnostics["terminal_page_has_more"]) is not str
-            or diagnostics["terminal_page_has_more"] not in _TERMINAL_PAGE_HAS_MORE
-            or type(diagnostics["terminal_page_cursor_present"]) is not bool
-            or diagnostics.get("incomplete_reason_code") == "none"
-        ):
-            return False
-    bucket = diagnostics.get("terminal_query_bucket")
-    if "terminal_query_bucket" in diagnostics and (type(bucket) is not str or bucket not in _TERMINAL_QUERY_BUCKETS):
-        return False
-    reason = diagnostics.get("retrieval_reason_code")
-    if type(reason) is not str or not (
-        reason == "none" or reason in _RETRIEVAL_FINITE_REASONS
-        or _NOTION_REASON_RE.fullmatch(reason)
-    ):
-        return False
-    incomplete = diagnostics.get("incomplete_reason_code")
-    if type(incomplete) is not str or incomplete not in (_INCOMPLETE_REASON_CODES | {"none"}):
-        return False
-    if any(
-        type(diagnostics[name]) is not int
-        or not 0 <= diagnostics[name] <= _MAX_DIAGNOSTIC_COUNTER
-        for name in (*_RETRIEVAL_COUNTERS, *_NO_MATCH_COUNTERS)
-        if name in diagnostics
-    ):
-        return False
-    safe = {
-        "retrieval_reason_code": reason,
-        "incomplete_reason_code": incomplete,
-        **{name: diagnostics[name] for name in (*_RETRIEVAL_COUNTERS, *_NO_MATCH_COUNTERS)
-           if name in diagnostics},
-    }
-    if _OPTIONAL_BASIS_KEY in diagnostics:
-        safe[_OPTIONAL_BASIS_KEY] = diagnostics[_OPTIONAL_BASIS_KEY]
-    if "terminal_query_bucket" in diagnostics:
-        safe["terminal_query_bucket"] = bucket
-    for name in _TERMINAL_PAGE_KEYS:
-        if name in diagnostics:
-            safe[name] = diagnostics[name]
     try:
         path.write_text(
             json.dumps(safe, sort_keys=True, separators=(",", ":")) + "\n",
