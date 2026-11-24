@@ -63,9 +63,11 @@ def _positive_int(value: Any) -> bool:
 
 
 def _load(path: Path) -> Mapping[str, Any]:
-    if path.stat().st_size > MAX_INPUT_BYTES:
+    with path.open("rb") as source:
+        data = source.read(MAX_INPUT_BYTES + 1)
+    if len(data) > MAX_INPUT_BYTES:
         raise ValueError("oversized")
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(data.decode("utf-8"))
     if type(raw) is not dict:
         raise ValueError("invalid-json")
     return raw
@@ -145,7 +147,12 @@ def build_review_evidence(
         or not _positive_int(run_id) or not _positive_int(run_attempt)
     ):
         raise ValueError("event-identity")
-    if result.get("repository") != REPOSITORY or result.get("issue_number") != issue["number"]:
+    result_issue_number = result.get("issue_number")
+    if (
+        result.get("repository") != REPOSITORY
+        or not _positive_int(result_issue_number)
+        or result_issue_number != issue["number"]
+    ):
         raise ValueError("result-identity")
     # The raw Actions result omits this field; a copied postback may carry it.
     # A matching supplied ID is a consistency check, not provenance.

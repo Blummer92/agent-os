@@ -235,3 +235,93 @@ def test_optional_matching_result_identity_is_still_only_supplied_metadata():
     projected = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
     assert projected["source"]["request_run_artifact_association"] == "supplied-unverified"
     assert projected["execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("status_code", "preserved"), [(99, False), (100, True), (599, True), (600, False)])
+def test_provider_http_reason_uses_the_canonical_finite_status_range(status_code, preserved):
+    event, result, diagnostics = fixture()
+    reason = f"notion-http-{status_code:03d}"
+    diagnostics["retrieval_reason_code"] = reason
+    projection = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert projection["retrieval"]["retrieval_reason_code"] == (reason if preserved else "unclassified-reason")
+
+
+def test_retains_distinct_supplied_run_id_and_attempt():
+    event, result, diagnostics = fixture()
+    projection = build_review_evidence(event, result, diagnostics, run_id=710099, run_attempt=3)
+    source = projection["source"]
+    assert source["run_id"] == 710099
+    assert source["run_attempt"] == 3
+    assert source["request_comment_id"] == event["comment"]["id"]
+    assert source["request_run_artifact_association"] == "supplied-unverified"
+
+
+@pytest.mark.parametrize("kind", ["pr", "issue"])
+def test_preserves_declared_thread_kind_without_claiming_authentication(kind):
+    event, result, diagnostics = fixture()
+    if kind == "issue":
+        del event["issue"]["pull_request"]
+    projection = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert projection["source"]["thread_kind"] == kind
+    assert projection["source"]["request_run_artifact_association"] == "supplied-unverified"
+
+
+@pytest.mark.parametrize("same_value_wrong_json_type", [True, 1.0])
+def test_json_result_thread_id_must_be_a_positive_integer(same_value_wrong_json_type):
+    event, result, diagnostics = fixture()
+    event["issue"]["number"] = 1
+    result["issue_number"] = same_value_wrong_json_type
+    decoded = json.loads(json.dumps(result))
+    assert type(decoded["issue_number"]) is not int
+    with pytest.raises(ValueError, match="^result-identity$"):
+        build_review_evidence(event, decoded, diagnostics, run_id=1, run_attempt=1)
+
+
+@pytest.mark.parametrize("bytes_over_limit", [0, 1])
+def test_input_reader_exact_byte_boundary(tmp_path, bytes_over_limit):
+    from scripts.agent_os_ckr6_review_evidence import MAX_INPUT_BYTES, _load
+
+    payload = b"{}" + b" " * (MAX_INPUT_BYTES + bytes_over_limit - 2)
+    path = tmp_path / "input.json"
+    path.write_bytes(payload)
+    if bytes_over_limit:
+        with pytest.raises(ValueError, match="^oversized$"):
+            _load(path)
+    else:
+        assert _load(path) == {}
+
+
+def test_input_reader_does_not_trust_stale_size_metadata(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts.agent_os_ckr6_review_evidence import MAX_INPUT_BYTES, _load
+
+    path = tmp_path / "ordinary-larger-file.json"
+    path.write_bytes(b"{}" + b" " * (MAX_INPUT_BYTES - 1))
+    actual_stat = Path.stat
+
+    def stale_stat(item, **kwargs):
+        return SimpleNamespace(st_size=2) if item == path else actual_stat(item, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stale_stat)
+    with pytest.raises(ValueError, match="^oversized$"):
+        _load(path)
+
+
+def test_input_reader_requests_only_one_bounded_read():
+    from io import BytesIO
+    from scripts.agent_os_ckr6_review_evidence import MAX_INPUT_BYTES, _load
+
+    requests = []
+
+    class ObservedReader(BytesIO):
+        def read(self, size=-1):
+            requests.append(size)
+            return super().read(size)
+
+    class LocalSnapshot:
+        def open(self, mode):
+            assert mode == "rb"
+            return ObservedReader(b"{}")
+
+    assert _load(LocalSnapshot()) == {}
+    assert requests == [MAX_INPUT_BYTES + 1]
