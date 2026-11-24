@@ -278,7 +278,7 @@ junit_path_for() {
 # Independent JUnit evidence check for explicit focused tests and manifest rows.
 # Full suites retain their stronger reference-collection completeness check.
 verify_junit() {
-  "$PYTHON_BIN" scripts/agent_os_ci_junit_validate.py "$1" >/dev/null 2>&1
+  "$PYTHON_BIN" scripts/agent_os_ci_junit_validate.py "$@" >/dev/null 2>&1
 }
 
 # Refuse two distinct suite names resolving to the same lossy artifact key.
