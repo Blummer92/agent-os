@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: ["Agent OS Validation Gate"]
     types: [completed]
+  # Manual replay is bound to both the PR number and exact merge SHA.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -39,6 +40,8 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
         run: python -m unittest discover -s tests/agent_os_post_merge_learning -p 'test_*.py' -v
+      # Manual review exits 2 by design: an incomplete report is never green.
+      # The always-run upload step preserves the bounded JSON receipt.
       - name: Read-only exact-merge analysis
         env:
           PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
@@ -72,4 +75,4 @@ jobs:
         with:
           name: post-merge-learning-${{ github.run_id }}
           path: ${{ runner.temp }}/post-merge-learning/report.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
