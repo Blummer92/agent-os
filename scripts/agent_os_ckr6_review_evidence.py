@@ -44,6 +44,12 @@ COUNTERS = (
     "read_count", "observed_rows", "normalized_rows", "skipped_rows",
     "candidate_count", "best_bucket_tied_identities",
 )
+# Optional complete no-match bundle from CKR6's artifact writer (#4026).
+NO_MATCH_ROW_COUNTERS = (
+    "miss_ecosystem_rows", "miss_capability_rows", "miss_exact_library_rows",
+    "miss_target_path_rows",
+)
+NO_MATCH_COUNTERS = (*NO_MATCH_ROW_COUNTERS, "miss_library_hints_not_named")
 
 
 def _positive_int(value: Any) -> bool:
@@ -63,13 +69,11 @@ def _finite_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]
     if not isinstance(diagnostics, Mapping):
         return {"available": False}
     allowed = {"retrieval_reason_code", "incomplete_reason_code", "selection_basis", *COUNTERS,
+               *NO_MATCH_COUNTERS,
                "terminal_query_bucket", "terminal_page_row_count_bucket",
                "terminal_page_has_more", "terminal_page_cursor_present"}
     if set(diagnostics) - allowed:
         raise ValueError("diagnostic-schema")
-    for field in COUNTERS:
-        if field not in diagnostics or type(diagnostics[field]) is not int or not 0 <= diagnostics[field] <= 10_000:
-            raise ValueError("diagnostic-count")
     basis = diagnostics.get("selection_basis")
     if basis is not None and (type(basis) is not str or basis not in BASES):
         raise ValueError("diagnostic-basis")
@@ -83,12 +87,28 @@ def _finite_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]
         "malformed-pagination", "unknown-incomplete",
     }:
         raise ValueError("diagnostic-incomplete")
+    has_miss_counters = any(field in diagnostics for field in NO_MATCH_COUNTERS)
+    if has_miss_counters and (
+        basis != "no-relevant-signal" or incomplete != "none"
+        or not all(field in diagnostics for field in NO_MATCH_COUNTERS)
+    ):
+        raise ValueError("diagnostic-miss-counter-shape")
+    count_fields = (*COUNTERS, *NO_MATCH_COUNTERS) if has_miss_counters else COUNTERS
+    for field in count_fields:
+        if field not in diagnostics or type(diagnostics[field]) is not int or not 0 <= diagnostics[field] <= 10_000:
+            raise ValueError("diagnostic-count")
+    # Each row metric counts at most once per distinct normalized record.
+    # The final metric counts request library hints, not records.
+    if has_miss_counters and any(
+        diagnostics[field] > diagnostics["normalized_rows"] for field in NO_MATCH_ROW_COUNTERS
+    ):
+        raise ValueError("diagnostic-row-population")
     return {
         "available": True,
         "selection_basis": basis if basis is not None else "not-evaluated",
         "retrieval_reason_code": reason,
         "incomplete_reason_code": incomplete,
-        **{name: diagnostics[name] for name in COUNTERS},
+        **{name: diagnostics[name] for name in count_fields},
     }
 
 

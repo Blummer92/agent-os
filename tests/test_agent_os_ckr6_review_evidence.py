@@ -97,3 +97,71 @@ def test_cli_never_prints_raw_exception_or_writes_on_bad_input(tmp_path):
     assert completed.stdout.strip() == "ckr6-review-evidence-unavailable"
     assert completed.stderr == ""
     assert not output.exists()
+
+
+MISS_COUNTERS = {
+    "miss_ecosystem_rows": 3,
+    "miss_capability_rows": 2,
+    "miss_exact_library_rows": 0,
+    "miss_target_path_rows": 1,
+    "miss_library_hints_not_named": 0,
+}
+
+
+def test_completed_no_match_diagnostics_keep_all_bounded_counters():
+    event, result, diagnostics = fixture()
+    diagnostics.update(MISS_COUNTERS)
+    report = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert {key: report["retrieval"][key] for key in MISS_COUNTERS} == MISS_COUNTERS
+    assert report["ckr6"]["selected_lesson_ids"] == []
+    assert report["ckr6"]["selection_is_applicability_proof"] is False
+    assert report["execution_authorized"] is False
+    assert report["github_writes_authorized"] is False
+    assert report["merge_authorized"] is False
+    assert report["notion_writes_authorized"] is False
+
+
+@pytest.mark.parametrize(("update", "expected"), [
+    (lambda d: d.pop("miss_target_path_rows"), "diagnostic-miss-counter-shape"),
+    (lambda d: d.update(selection_basis="exact-library"), "diagnostic-miss-counter-shape"),
+    (lambda d: d.update(incomplete_reason_code="missing-cursor"), "diagnostic-miss-counter-shape"),
+    (lambda d: d.update(miss_ecosystem_rows=True), "diagnostic-count"),
+    (lambda d: d.update(miss_capability_rows=10_001), "diagnostic-count"),
+    (lambda d: d.update(miss_exact_library_rows=-1), "diagnostic-count"),
+    (lambda d: d.update(miss_target_path_rows="PRIVATE SENTINEL"), "diagnostic-count"),
+])
+def test_no_match_counter_signature_refused_when_incomplete_or_invalid(update, expected):
+    event, result, diagnostics = fixture()
+    diagnostics.update(MISS_COUNTERS)
+    update(diagnostics)
+    with pytest.raises(ValueError, match=f"^{expected}$"):
+        build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+
+
+@pytest.mark.parametrize("field", [
+    "miss_ecosystem_rows", "miss_capability_rows",
+    "miss_exact_library_rows", "miss_target_path_rows",
+])
+def test_no_match_per_row_counter_cannot_exceed_normalized_population(field):
+    event, result, diagnostics = fixture()
+    diagnostics.update(MISS_COUNTERS)
+    diagnostics[field] = diagnostics["normalized_rows"] + 1
+    with pytest.raises(ValueError, match="^diagnostic-row-population$"):
+        build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+
+
+def test_no_match_ecosystem_row_counter_can_match_entire_population():
+    event, result, diagnostics = fixture()
+    diagnostics.update(dict.fromkeys(MISS_COUNTERS, 0), miss_ecosystem_rows=87)
+    projected = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert projected["retrieval"]["miss_ecosystem_rows"] == 87
+
+
+def test_no_match_request_side_library_hint_count_is_not_row_population():
+    event, result, diagnostics = fixture()
+    diagnostics.update(dict.fromkeys(MISS_COUNTERS, 0),
+                       observed_rows=0, normalized_rows=0, candidate_count=0)
+    diagnostics["miss_library_hints_not_named"] = 2
+    projected = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert projected["retrieval"]["normalized_rows"] == 0
+    assert projected["retrieval"]["miss_library_hints_not_named"] == 2
