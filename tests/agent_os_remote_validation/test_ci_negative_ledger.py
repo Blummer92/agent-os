@@ -130,10 +130,9 @@ def test_legacy_negative_controls_remain_executable_and_ledger_linked() -> None:
         "NC07", "NC08", "NC09", "NC19", "D07", "NC-SELECT"
     }
     for entry in controls:
-        source_issue_ids = {
-            int(case["source"].rsplit("/", 1)[-1]) for case in CASES
-        }
-        assert entry["issue"] in source_issue_ids or entry["id"] == "NC-SELECT"
+        assert entry["source"] == (
+            f"https://github.com/{LEDGER['repository']}/issues/{entry['issue']}"
+        )
         for role in ("negative", "positive"):
             path, separator, test_name = entry[role].partition("::")
             assert separator and test_name.startswith("test_")
