@@ -171,7 +171,9 @@ def github_api_transport(token: str | None) -> Transport:
         except GitHubRequestError as exc:
             if type(exc.status) is int:
                 return exc.status, {}
-            if exc.kind == "transport-unavailable":
+            if exc.kind == "transport-unavailable" or method in {"PATCH", "POST", "DELETE"}:
+                # A status-less requester failure may follow a committed write,
+                # including malformed response headers. Readback decides; never retry.
                 raise ConnectionError("github-transport-unavailable") from exc
             raise RuntimeError(f"github-transport-failed:{exc.kind}") from exc
 
@@ -424,16 +426,17 @@ def _reconcile_closed_items(
         try:
             if stale_ready:
                 writer.remove_label(repository, issue_number, label="status:ready")
+            intended_comment = _completion_comment(
+                repository=repository,
+                issue_number=issue_number,
+                evidence_id=request.acceptance.evidence_id,
+                evaluator_id=request.acceptance.evaluator_id,
+                receipt_id=record["receipt_id"] if isinstance(record["receipt_id"], str) else None,
+            )
             writer.post_comment(
                 repository,
                 issue_number,
-                body=_completion_comment(
-                    repository=repository,
-                    issue_number=issue_number,
-                    evidence_id=request.acceptance.evidence_id,
-                    evaluator_id=request.acceptance.evaluator_id,
-                    receipt_id=record["receipt_id"] if isinstance(record["receipt_id"], str) else None,
-                ),
+                body=intended_comment,
             )
             after = reader.read_issue_readback(repository, issue_number)
             if after.snapshot.issue_state != "closed" or after.state_reason != "completed":
@@ -443,12 +446,10 @@ def _reconcile_closed_items(
             if not stale_ready and "status:ready" in after.snapshot.lifecycle_labels:
                 # A label that appeared between reads is not silently ignored.
                 raise RuntimeError("reconciliation readback carries status:ready")
-            # Verify the posted comment is present by receipt id, when known.
-            receipt_id = record["receipt_id"]
-            if isinstance(receipt_id, str):
-                bodies = writer.list_comment_bodies(repository, issue_number)
-                if receipt_id not in " ".join(bodies):
-                    raise RuntimeError("reconciliation comment not found in readback")
+            # A receipt citation in unrelated prose is not this evidence comment.
+            bodies = writer.list_comment_bodies(repository, issue_number)
+            if intended_comment not in bodies:
+                raise RuntimeError("reconciliation comment not found in readback")
             # After successful reconciliation the label requirement is
             # discharged: the status no longer claims it is required.
             record["status"] = (
