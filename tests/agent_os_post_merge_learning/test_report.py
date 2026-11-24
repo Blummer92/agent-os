@@ -34,8 +34,10 @@ class Reader:
         if path == "/actions/runs/100": return self.validation
         if path == f"/commits/{SHA}/pulls?per_page=100": return [self.metadata]
         if "/reviews?" in path or "/comments?" in path: return []
-        if path.endswith("/check-runs?per_page=100"):
+        if "/check-runs?filter=all&per_page=100&page=" in path:
             return {"total_count": 0, "check_runs": []}
+        if "/statuses?per_page=100&page=" in path: return []
+        if "/timeline?per_page=100&page=" in path: return []
         raise AssertionError(path)
 
 class TestLearning(unittest.TestCase):
@@ -158,7 +160,7 @@ class TestLearning(unittest.TestCase):
         reader = Reader([commit(1, "fix(api): repair")])
         original = reader.get
         def get(path):
-            if path.endswith("/check-runs?per_page=100"):
+            if "/check-runs?filter=all&per_page=100&page=" in path:
                 return {"total_count": 2, "check_runs": [
                     {"conclusion": "failure", "html_url": None},
                     {"conclusion": "failure", "html_url": "https://example.org/other"}]}
@@ -172,7 +174,7 @@ class TestLearning(unittest.TestCase):
         reader = Reader([commit(1, "fix(api): repair")])
         original = reader.get
         def get(path):
-            if path.endswith("/check-runs?per_page=100"):
+            if "/check-runs?filter=all&per_page=100&page=" in path:
                 return {"total_count": 32, "check_runs": [
                     {"conclusion": "failure", "html_url": "https://github.com/Blummer92/agent-os/runs/123"}] * 32}
             return original(path)
