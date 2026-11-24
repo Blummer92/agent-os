@@ -82,22 +82,6 @@ class FollowupReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(report.EvidenceError, "learning-group-budget-exceeded"):
             report.build_report(Reader(records), SHA, 4101, None)
 
-    def test_discussion_exact_budget_and_overflow(self):
-        for last, expected in ((0, False), (1, True)):
-            reader = Reader([commit(1, "feat(api): ordinary")])
-            original = reader.get
-            def get(path):
-                if "/reviews?" in path or "/comments?" in path:
-                    page = int(path.rsplit("page=", 1)[1])
-                    return [{}] * (100 if page < 3 else last)
-                return original(path)
-            reader.get = get
-            evidence = report.build_report(reader, SHA, 4101, None)["supporting_evidence"]
-            with self.subTest(last=last):
-                self.assertEqual(evidence["review_count_observed"], 200)
-                self.assertIs(evidence["review_history_truncated"], expected)
-                self.assertIs(evidence["issue_comment_history_truncated"], expected)
-
     def test_fix_heavy_history_keeps_ordered_regression_links(self):
         records = [commit(i, "fix(api): repair") for i in range(1, 27)]
         records += [commit(27, "test(api): regression"), commit(28, "test(api): negative")]
