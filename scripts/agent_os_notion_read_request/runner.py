@@ -186,7 +186,7 @@ def run_notion_read_request(
 
 def _classify_runner_exception(exc: BaseException, *, phase: str) -> str:
     """Map an exception to a closed-vocabulary receipt reason code."""
-    if isinstance(exc, json.JSONDecodeError):
+    if phase == "transport" and isinstance(exc, json.JSONDecodeError):
         return RECEIPT_REASON_TRANSPORT_INVALID_JSON
     if isinstance(exc, UnicodeDecodeError) and phase == "transport":
         return RECEIPT_REASON_TRANSPORT_INVALID_ENCODING

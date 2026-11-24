@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from scripts.agent_os_notion_read_request.models import (
     SCHEMA_VERSION,
@@ -148,6 +149,7 @@ def test_refused_request_keeps_success_receipt_shape(tmp_path, capsys) -> None:
     assert "failure" not in receipt
     reject_credential_keys(receipt, "evidence")
 
+
 def test_transport_invalid_utf8_has_bounded_decode_reason(tmp_path, capsys) -> None:
     code, receipt = _run_main(tmp_path, b"\xff", capsys)
     assert code == 1
@@ -197,7 +199,18 @@ def test_transport_actual_byte_bound_does_not_trust_stat(tmp_path, capsys) -> No
         ("visual-assets", "execute_admitted_notion_read"),
     ],
 )
-def test_explicit_failed_executor_is_never_stamped_completed(request_class, executor_name) -> None:
+@pytest.mark.parametrize(
+    ("outcome", "reason"),
+    [
+        ({"status": "failed"}, "execution-returned-non-success"),
+        ({"status": "success", "error": "synthetic-error"}, "execution-returned-non-success"),
+        (None, "execution-return-contract-invalid"),
+    ],
+    ids=("failed-status", "error-despite-success", "not-a-mapping"),
+)
+def test_explicit_failed_executor_is_never_stamped_completed(
+    request_class, executor_name, outcome, reason
+) -> None:
     from scripts.agent_os_notion_read_request.runner import run_notion_read_request
 
     class Admission:
@@ -213,11 +226,34 @@ def test_explicit_failed_executor_is_never_stamped_completed(request_class, exec
         return_value=Admission(),
     ), patch(
         "scripts.agent_os_notion_read_request.runner." + executor_name,
-        return_value={"status": "failed", "error": "sensitive-provider-error"},
+        return_value=outcome,
     ):
-        with pytest.raises(NotionReadRequestError, match="execution-returned-non-success"):
+        with pytest.raises(NotionReadRequestError, match=reason):
             run_notion_read_request(
                 {}, expected_repository=REPO, expected_actor=ACTOR,
                 generated_at=GENERATED_AT, catalog=object(),
                 scheduler_task_executor_factory=lambda: None,
             )
+
+
+def test_malformed_runner_catalog_is_not_a_transport_failure(tmp_path, capsys) -> None:
+    from scripts.agent_os_notion_read_request import catalog
+
+    catalog_path = tmp_path / "catalog.json"
+    synthetic_private = "synthetic-local-catalog-detail"
+    catalog_path.write_text("{" + synthetic_private, encoding="utf-8")
+    with patch.object(catalog, "CATALOG_PATH", catalog_path):
+        code, receipt = _run_main(tmp_path, b"{}", capsys)
+    assert code == 1
+    _assert_failure_shape(receipt, "unhandled-runner-exception")
+    assert receipt["failure"]["phase"] == "run"
+    assert receipt["failure"]["error_class"] == "JSONDecodeError"
+    assert receipt["failure"]["detail"] is None
+    assert synthetic_private not in json.dumps(receipt)
+
+
+def test_transport_accepts_exactly_its_byte_limit(tmp_path, capsys) -> None:
+    code, receipt = _run_main(tmp_path, b"{}" + b" " * (MAX_TRANSPORT_BYTES - 2), capsys)
+    assert code == 0
+    assert receipt["dispatch_status"] == "blocked"
+    assert "failure" not in receipt
