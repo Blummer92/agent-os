@@ -481,6 +481,86 @@ class SemanticDuplicateCreateTests(unittest.TestCase):
         self.assertNotIn("write", client.calls)
 
 
+
+class DuplicateEvidenceReviewTests(unittest.TestCase):
+    """A duplicate is a review handoff, never implicit permission to PATCH."""
+
+    def _duplicate_client(self, *, supporting=()):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        duplicate = page()
+        duplicate["properties"]["Lesson ID"]["unique_id"]["number"] = 82
+        duplicate["properties"]["Lesson Learned"] = _prop(
+            "Lesson Learned",
+            "Native execution hosts must enforce continuation; emitted continuation metadata alone is insufficient",
+        )
+        duplicate["properties"]["Source Link"] = _prop(
+            "Source Link", "https://github.com/Blummer92/agent-os/issues/3690"
+        )
+        duplicate["properties"]["Supporting Source Links"] = {
+            "type": "rich_text", "rich_text": [
+                {"type": "text", "plain_text": value, "text": {"content": value}}
+                for value in supporting
+            ],
+        }
+        client = Client()
+        client.rows = [duplicate]
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
+        return client, CONTINUATION_CONSUMER_REQUEST_ID
+
+    def test_duplicate_reports_only_reviewed_sources_and_changed_field_names(self):
+        client, request_id = self._duplicate_client()
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["duplicate_lesson_ids"], ["LL-82"])
+        review, = result["duplicate_evidence_reviews"]
+        self.assertEqual(review["lesson_id"], "LL-82")
+        self.assertEqual(review["source_comparison"], "complete")
+        self.assertEqual(review["new_source_refs_to_review"], [])
+        self.assertEqual(review["claim_comparison"], "text-difference-only")
+        self.assertIn("Lesson Learned", review["claim_fields_to_review"])
+        self.assertFalse(review["automatic_update_authorized"])
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertNotIn("write", client.calls)
+        self.assertNotIn("Earlier context", str(review))
+
+    def test_incomplete_source_metadata_does_not_infer_novel_evidence(self):
+        client, request_id = self._duplicate_client()
+        del client.rows[0]["properties"]["Supporting Source Links"]
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        review, = result["duplicate_evidence_reviews"]
+        self.assertEqual(review["source_comparison"], "unavailable")
+        self.assertEqual(review["new_source_refs_to_review"], [])
+        self.assertNotIn("write", client.calls)
+
+    def test_evidence_append_cannot_drop_existing_supporting_source(self):
+        from scripts.agent_os_notion_lessons_write.writer import _check_evidence_append
+        from scripts.agent_os_notion_lessons_write.catalog import SUPPORTING_SOURCE_LINKS
+        old = "https://github.com/Blummer92/agent-os/issues/3485"
+        current = page()
+        current["properties"][SUPPORTING_SOURCE_LINKS] = {
+            "type": "rich_text", "rich_text": [
+                {"type": "text", "plain_text": old, "text": {"content": old}}
+            ],
+        }
+        with self.assertRaisesRegex(WriteBlocked, "supporting-evidence-would-be-lost"):
+            _check_evidence_append(current, {SUPPORTING_SOURCE_LINKS: (
+                "https://github.com/Blummer92/agent-os/pull/3670",
+            )})
+        self.assertEqual(_check_evidence_append(current, {SUPPORTING_SOURCE_LINKS: (
+            old, "https://github.com/Blummer92/agent-os/pull/3670",
+        )}), ("https://github.com/Blummer92/agent-os/pull/3670",))
+
+    def test_duplicate_with_source_limit_stays_review_only(self):
+        client, request_id = self._duplicate_client(supporting=tuple(
+            f"https://github.com/Blummer92/agent-os/issues/{number}"
+            for number in range(3485, 3490)
+        ))
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertNotIn("write", client.calls)
+
+
 class RunnerTests(unittest.TestCase):
     def test_admission_has_no_provider_import_or_construction(self):
         env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
