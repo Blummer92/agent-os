@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
-RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py", "agent_os_ci_junit_subtest_receipt.py", "agent_os_ci_evidence_health.py")
 PYTEST_VERSION = tuple(int(part) for part in pytest.__version__.split(".")[:2])
 
 PASSING = "def test_{}():\n    assert True\n"
@@ -197,8 +197,17 @@ def test_configuration_narrowing_cannot_pass(
         # the suite row from EXECUTED_PASS to TEST_COLLECTION_ERROR as well;
         # the runner's exit 0 is preserved in the row, only its status fails.
         assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
+    elif any(
+        "--collect-only" in contents
+        for name, contents in files.items()
+        if name.endswith("pytest.ini")
+    ):
+        # The independent JUnit validator now rejects pytest's successful
+        # --collect-only exit as no executed test evidence.  The suite must
+        # be FAIL/TEST_COLLECTION_ERROR even before NC08's completeness veto.
+        assert rows["root"][2:5] == ("FAIL", "0", "TEST_COLLECTION_ERROR")
     else:
-        assert rows["root"][4] == "EXECUTED_PASS"  # the suite passed on what it ran; the gate is the completeness row
+        assert rows["root"][4] == "EXECUTED_PASS"  # actual run completed; completeness check still vetoes omissions
     row = _completeness(junit_dir)
     classification = {"INCOMPLETE": "TEST_SELECTION_INCOMPLETE", "ERROR": "TEST_COLLECTION_ERROR"}[expected]
     assert row[2:5] == ("FAIL", "1" if expected == "INCOMPLETE" else "2", classification)
