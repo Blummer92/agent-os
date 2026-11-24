@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
-RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py")
+RUNNER_FILES = ("validate-all.sh", "agent_os_ci_test_completeness.py", "agent_os_ci_junit_diff.py", "agent_os_ci_junit_validate.py", "agent_os_ci_junit_subtest_receipt.py", "agent_os_ci_evidence_health.py")
 PYTEST_VERSION = tuple(int(part) for part in pytest.__version__.split(".")[:2])
 
 PASSING = "def test_{}():\n    assert True\n"
