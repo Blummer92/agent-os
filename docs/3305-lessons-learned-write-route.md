@@ -65,34 +65,41 @@ Area=Governance, Learning Type=Mistake, Applies To=Notion, Source Link=#3305).
 Executing the latter still requires the owner's per-action command and does not
 set Status or Surface Before Work?.
 
-## #3690 continuation consumer lesson candidate (2026-10-30)
+## #3690 continuation consumer lesson candidate (2026-10-30) - RETIRED 2026-11-23
 
-The reviewed catalog request `continuation-live-consumer-2026-10-30` records
-previously merged continuation repairs (#2175, #2213, #2263, #2494, #3670)
-and owner-reported October 30 Cloud Shell test outcomes on main bb43fc08:
-109 focused, 12 reconstructed and 30 MCP integration tests passed. The nested
-52-test regression execution overlaps the other checks; independent QA did not
-reproduce these different-head test runs. These are not exact-PR-head test results.
-Native ChatGPT structured-payload consumption, next-dispatch and asynchronous
-re-entry remain unverified; current `chatgpt-governance` publication excludes
-the continuation tools. Existing #3559 owns any separately authorized host
-attachment/allowlist expansion; this lesson does not authorize one.
+The reviewed create candidate `continuation-live-consumer-2026-10-30` was
+retired without publication. The #3417 evidence log (2026-11-24) found it a
+likely semantic duplicate of the existing LL-82 ("Native execution hosts must
+enforce continuation; emitted continuation metadata alone is insufficient"):
+an exact-title absence is not proof of non-duplication, and a create entry
+cannot refine LL-82. Its historical record: previously merged continuation
+repairs (#2175, #2213, #2263, #2494, #3670) and owner-reported October 30
+Cloud Shell test outcomes on main bb43fc08: 109 focused, 12 reconstructed and
+30 MCP integration tests passed. Independent QA did not reproduce those
+different-head test runs. Native ChatGPT structured-payload consumption,
+next-dispatch and asynchronous re-entry remain unverified; current
+`chatgpt-governance` publication excludes the continuation tools.
 
-This is one **create proposal**, not a new Notion lesson until a current owner
-command completes with exact Notion readback. The existing writer checks the
-exact title for duplicates; semantically similar or retitled lessons require
-human reconciliation rather than automatic creation. Do not run the command
-until this catalog revision is merged and the owner explicitly invokes it:
+The replacement is the reviewed update entry
+`ll-82-continuation-refinement-2026-11-23`: it targets LL-82 by stable Lesson
+ID, corrects provenance to incident #3485 with implementation lineage PR
+#3670 (#3690 principally concerns governance simplification), refines the
+narrative around the requested/dispatched/verified distinction, and corrects
+Learning Type to `Mistake` so CKR2 surfaces the lesson for failure-avoidance
+coding requests (the live `Testing lesson` value never selected for them).
+The live Applies To [`Dashboard`] false positive on dashboard-keyword tasks
+is not fixable inside the reviewed-entry contract (no empty multi_select)
+and remains a separate owner decision. Execution still requires the owner's
+per-action command binding the exact live LL-82 revision:
 
 ```text
-/agent-os notion-write continuation-live-consumer-2026-10-30
+/agent-os notion-write ll-82-continuation-refinement-2026-11-23 LL-82 <exact-last-edited-time>
 ```
 
-The entry supplies only four narrative fields, Area, Learning Type and the
-canonical #3690 Source Link. It deliberately omits `Status`,
-`Surface Before Work?` and unverified live multi-select options. Catalog
-registration, the command and persistence do not activate CKR6 eligibility.
-The current lesson identity/revision must be obtained from live readback
+The entry deliberately omits `Status`, `Surface Before Work?` and
+`Applies To`. Catalog registration, the command and persistence do not
+activate CKR6 eligibility. The current lesson identity/revision must be
+obtained from live readback
 before any follow-up, with independent QA and no duplicate writes.
 
 ## Execution and failure behavior

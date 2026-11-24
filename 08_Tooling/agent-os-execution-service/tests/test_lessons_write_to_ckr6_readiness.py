@@ -137,9 +137,33 @@ def ckr6_lookup(notion, lesson_id):
     )
 
 
-CREATE_WITH_METADATA = catalog.CONTINUATION_CONSUMER_REQUEST_ID
+# Synthetic create-with-metadata fixture. The shipped create candidate
+# continuation-live-consumer-2026-10-30 was retired as a semantic duplicate
+# of LL-82 (#3417); no shipped create entry carries metadata now, so this
+# test registers a local reviewed-shape entry instead of a shipped one.
+CREATE_WITH_METADATA = "fixture-create-with-metadata-2026-11-23"
 CREATE_WITHOUT_METADATA = catalog.REQUEST_ID
 UPDATE_METADATA = catalog.LL93_METADATA_REQUEST_ID
+
+_CREATE_WITH_METADATA_ENTRY = {
+    "target_lesson_id": None,
+    "properties": {
+        "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
+        "What Happened": "Native host next-dispatch remains unverified. Owner-reported Cloud Shell runs: 30 MCP tests passed.",
+        "What To Do Next Time": "Trace producer -> payload -> live host consumer -> next admitted dispatch -> exact receipt.",
+        "Guardrail": "Emitted agent_os_continuation does not prove automatic host dispatch.",
+        "Area": "Governance",
+        "Learning Type": "Mistake",
+        "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
+    },
+}
+
+
+@pytest.fixture(autouse=True)
+def _create_with_metadata_fixture(monkeypatch):
+    lessons = dict(catalog.LESSONS)
+    lessons[CREATE_WITH_METADATA] = _CREATE_WITH_METADATA_ENTRY
+    monkeypatch.setattr(catalog, "LESSONS", lessons)
 
 
 def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner_activation():
@@ -312,7 +336,7 @@ METADATA_ENTRIES = sorted(
 
 
 def test_the_metadata_guard_is_not_vacuous():
-    assert {CREATE_WITH_METADATA, UPDATE_METADATA} <= set(METADATA_ENTRIES)
+    assert {UPDATE_METADATA, catalog.LL82_CONTINUATION_REFINEMENT_REQUEST_ID} <= set(METADATA_ENTRIES)
 
 
 @pytest.mark.parametrize("request_id", METADATA_ENTRIES)

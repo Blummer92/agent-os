@@ -11,8 +11,8 @@ import re
 REQUEST_ID = "ckr6-execution-path-2026-10-05"
 LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
-CONTINUATION_CONSUMER_REQUEST_ID = "continuation-live-consumer-2026-10-30"
 CKR6_SELECTION_SUFFICIENCY_REQUEST_ID = "ckr6-selection-sufficiency-2026-11-18"
+LL82_CONTINUATION_REFINEMENT_REQUEST_ID = "ll-82-continuation-refinement-2026-11-23"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -109,38 +109,54 @@ LESSONS = MappingProxyType({
             "Source Link": "https://github.com/Blummer92/agent-os/issues/3305",
         }),
     }),
-    # #3690: reviewed continuation integration lesson, proposal only until
-    # an owner-issued one-time #3417 command and exact Notion readback.
-    CONTINUATION_CONSUMER_REQUEST_ID: MappingProxyType({
-        "target_lesson_id": None,
+    # #3417 (evidence log 2026-11-24): the create candidate
+    # continuation-live-consumer-2026-10-30 is RETIRED as a likely semantic
+    # duplicate of the existing LL-82. It is replaced by this reviewed,
+    # Lesson-ID-addressed update of LL-82 with corrected provenance:
+    # incident #3485 + implementation PR #3670, not #3690 (governance
+    # simplification). Proposal only until an owner-issued one-time #3417
+    # command binds the exact live LL-82 revision and readback verifies.
+    LL82_CONTINUATION_REFINEMENT_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": "LL-82",
         "properties": MappingProxyType({
-            "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
+            "Lesson Learned": "Native execution hosts must enforce continuation; emitted continuation metadata alone is insufficient",
             "What Happened": (
-                "Agent OS repaired continuation boundaries in merged PRs #2175 (Claude Stop hook), "
-                "#2213 (MCP reachability), #2263 (false stall), #2494 (batch cursor), and "
-                "#3670 (missing MCP payloads). Owner-reported Cloud Shell runs on "
-                "2026-10-30 at main bb43fc08: 109 focused, 12 reconstructed, and "
-                "30 MCP tests passed; QA did not independently reproduce those runs. "
-                "Native host next-dispatch remains unverified. The approved five-tool "
-                "chatgpt-governance profile excludes all continuation-named tools."
+                "Issue #3485 (2026-10-09): the native execution host stopped authorized finite "
+                "missions after intermediate repository operations. PR #3670 (merged 2026-10-20) "
+                "repaired canonical agent_os_continuation payload emission in the MCP facade "
+                "tools; host consumption of that payload and next-operation dispatch remain "
+                "unverified. Owner-reported 2026-10-30 Cloud Shell counts (109 focused, 12 "
+                "reconstructed, 30 MCP) were not independently reproduced."
             ),
             "What To Do Next Time": (
-                "Trace producer -> canonical payload -> registered MCP tool -> approved "
-                "publication allowlist -> live host consumer -> next admitted dispatch -> "
-                "exact receipt. Reuse existing driver, hooks and governed ingress; repair "
-                "only the first proven disconnected boundary. Evaluate same-turn continuation "
-                "and asynchronous post-stop re-entry as separate acceptance cases."
+                "Treat continuation as three distinct states: requested (payload emitted), "
+                "dispatched (a host consumed it and initiated the next operation), verified "
+                "(an execution receipt confirms the operation occurred). For native-host "
+                "integration, autonomous execution loops, continuation dispatch, orchestration, "
+                "or completion assertions, require an explicit host-consumer integration "
+                "contract and test both payload emission and actual host consumption."
             ),
             "Guardrail": (
-                "Registration, a green test, emitted agent_os_continuation or a successful "
-                "same-turn read does not prove automatic host dispatch. Do not widen the "
-                "five-tool allowlist without a separate owner decision or treat a Notion "
-                "lesson as execution authority. Keep source/head, issue/PR lineage, "
-                "currentness, bounded stops and no-duplicate-mutation checks explicit."
+                "Do not declare continuation repaired because agent_os_continuation was emitted "
+                "or a subordinate mutation succeeded: PR #3670 proves payload emission, not host "
+                "next-dispatch. Require observable dispatch evidence or an equivalent execution "
+                "receipt, and a native-host canary showing the parent mission continues without "
+                "an unnecessary user prompt."
             ),
-            "Area": "Governance",
+            "Area": "Automation",
+            # Relevance correction: CKR2 surfaces "Mistake" lessons for
+            # failure-avoidance coding requests; the live "Testing lesson"
+            # value never selects for them. The live Applies To ["Dashboard"]
+            # still false-positives on unrelated dashboard tasks: the catalog
+            # contract admits no empty multi_select, so clearing that value is
+            # a separate owner decision, not part of this entry.
             "Learning Type": "Mistake",
-            "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3485",
+            "Supporting Source Links": (
+                "https://github.com/Blummer92/agent-os/pull/3670",
+                "https://github.com/Blummer92/agent-os/issues/2230",
+                "https://github.com/Blummer92/agent-os/issues/2093",
+            ),
         }),
     }),
     # Full-database repair 2026-11-14: 61 reviewed update entries.

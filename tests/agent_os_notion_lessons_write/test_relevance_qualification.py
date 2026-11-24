@@ -123,12 +123,33 @@ def test_no_raw_lesson_text_in_qualification_receipt():
     assert "continuation" not in str(outcome).casefold()
 
 
+def retired_continuation_entry():
+    """The retired continuation-live-consumer-2026-10-30 create values, as a fixture.
+
+    The duplicate create candidate was retired from the shipped catalog by the
+    LL-82 refinement (#3417); these values preserve the same review scenarios
+    against the same content shape without re-admitting the candidate.
+    """
+    return {
+        "target_lesson_id": None,
+        "properties": {
+            "Lesson Learned": "Connect continuation decisions to an actual host consumer before claiming automatic execution",
+            "What Happened": "Native host next-dispatch remains unverified. Owner-reported Cloud Shell runs: 30 MCP tests passed.",
+            "What To Do Next Time": "Trace producer -> payload -> live host consumer -> next admitted dispatch -> exact receipt.",
+            "Guardrail": "Emitted agent_os_continuation does not prove automatic host dispatch. Do not widen the five-tool allowlist without a separate owner decision.",
+            "Area": "Governance",
+            "Learning Type": "Mistake",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/3690",
+        },
+    }
+
+
 def test_actual_reviewed_continuation_entry_exposes_metadata_miss():
     """Narrative relevance is not a CKR2 match when taxonomy cannot surface it."""
-    outcome = qualify_reviewed_create(
-        catalog.CONTINUATION_CONSUMER_REQUEST_ID,
-        positive_requests=(request("native host continuation", task="trace the live host consumer"),),
-        hard_negative_requests=(request("testing", task="unrelated packaging test"),),
+    outcome = check(
+        retired_continuation_entry(),
+        (request("native host continuation", task="trace the live host consumer"),),
+        (request("testing", task="unrelated packaging test"),),
     )
     assert not outcome.qualified
     assert outcome.reason_codes == ("expected-task-not-selected",)
@@ -139,10 +160,10 @@ def test_actual_reviewed_continuation_entry_exposes_metadata_miss():
 
 def test_actual_reviewed_continuation_entry_rejects_generic_false_positive():
     """A broad governance signal matching an unrelated task must fail review."""
-    outcome = qualify_reviewed_create(
-        catalog.CONTINUATION_CONSUMER_REQUEST_ID,
-        positive_requests=(request("failure-avoidance", task="host consumer continuation failure"),),
-        hard_negative_requests=(request("failure-avoidance", task="unrelated wheel packaging failure"),),
+    outcome = check(
+        retired_continuation_entry(),
+        (request("failure-avoidance", task="host consumer continuation failure"),),
+        (request("failure-avoidance", task="unrelated wheel packaging failure"),),
     )
     assert not outcome.qualified
     assert outcome.reason_codes == ("positive-relevance-basis-unverified", "unrelated-task-false-positive")
