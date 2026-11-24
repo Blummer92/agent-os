@@ -79,6 +79,7 @@ from .closure_admission_actions import (
     ClosureAcceptanceEvidence,
     IssueClosureRequest,
     evaluate_issue_closure,
+    render_evidence_comment,
     verify_closure_admission_receipt,
 )
 from .lifecycle_mutation_authorization import (
@@ -287,31 +288,6 @@ def verify_qa_record(
         if other.verdict != "pass":
             return False, ("session-closure.qa-conflict",)
     return True, ()
-
-
-def render_evidence_comment(
-    *,
-    repository: str,
-    issue_number: int,
-    evidence_id: str,
-    evaluator_id: str,
-    receipt_id: str | None,
-) -> str:
-    """Deterministic evidence comment body (dispatcher format, by contract).
-
-    Verified facts only; no closing keyword, no other issue reference.
-    Must stay byte-identical to the dispatcher's completion comment for
-    the same inputs; the test suite asserts that equivalence.
-    """
-    return (
-        "Governed closure verified.\n"
-        f"Repository: {repository}\n"
-        f"Issue: {issue_number}\n"
-        "State: closed, reason completed.\n"
-        f"Acceptance evidence: {evidence_id} (evaluator {evaluator_id}).\n"
-        f"Admission receipt: {receipt_id or 'unavailable'}.\n"
-        "Verified by canonical post-write readback."
-    )
 
 
 def _trigger_hash(body: str) -> str:

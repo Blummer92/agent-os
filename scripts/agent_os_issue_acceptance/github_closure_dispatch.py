@@ -94,6 +94,7 @@ from .closure_admission_actions import (
     ClosureIssueReadback,
     ClosureWriteUncertain,
     IssueClosureRequest,
+    render_evidence_comment,
     run_closure_batch,
 )
 from .lifecycle_mutation_guard import LifecycleStateSnapshot
@@ -365,27 +366,6 @@ class GitHubClosureWriter:
         raise RuntimeError(f"github-issue-comment-failed:{status}")
 
 
-def _completion_comment(
-    *,
-    repository: str,
-    issue_number: int,
-    evidence_id: str,
-    evaluator_id: str,
-    receipt_id: str | None,
-) -> str:
-    # Deterministic, verified-facts-only body. No closing keyword, no
-    # host-invented claim about scope, and no other issue reference.
-    return (
-        "Governed closure verified.\n"
-        f"Repository: {repository}\n"
-        f"Issue: {issue_number}\n"
-        "State: closed, reason completed.\n"
-        f"Acceptance evidence: {evidence_id} (evaluator {evaluator_id}).\n"
-        f"Admission receipt: {receipt_id or 'unavailable'}.\n"
-        "Verified by canonical post-write readback."
-    )
-
-
 def _reconcile_closed_items(
     *,
     requests: tuple[IssueClosureRequest, ...],
@@ -427,7 +407,7 @@ def _reconcile_closed_items(
             writer.post_comment(
                 repository,
                 issue_number,
-                body=_completion_comment(
+                body=render_evidence_comment(
                     repository=repository,
                     issue_number=issue_number,
                     evidence_id=request.acceptance.evidence_id,

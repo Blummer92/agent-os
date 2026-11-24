@@ -28,9 +28,7 @@ from scripts.agent_os_issue_acceptance.closure_admission_actions import (
     ClosureAcceptanceEvidence,
     IssueClosureRequest,
     evaluate_issue_closure,
-)
-from scripts.agent_os_issue_acceptance.github_closure_dispatch import (
-    _completion_comment,
+    render_evidence_comment,
 )
 from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
     LifecycleStateSnapshot,
@@ -509,15 +507,35 @@ def test_entry_point_uses_canonical_admission():
     assert plan.receipt == direct
 
 
-def test_comment_byte_identical_to_dispatcher_oracle():
+def test_session_plan_uses_shared_comment_formatter():
     setup = Setup()
     plan = setup.make_plan()
-    oracle = _completion_comment(
+    assert adapter.render_evidence_comment is render_evidence_comment
+    assert plan.comment_body == render_evidence_comment(
         repository=REPO, issue_number=9876,
         evidence_id="qa-evidence-9876", evaluator_id="qa-test-agent",
         receipt_id=plan.receipt_id,
     )
-    assert plan.comment_body == oracle
+
+
+@pytest.mark.parametrize(
+    ("receipt_id", "receipt_bytes"),
+    [(None, b"unavailable"), ("", b"unavailable"), ("receipt-α", b"receipt-\xce\xb1")],
+)
+def test_comment_bytes_stay_stable(receipt_id, receipt_bytes):
+    body = render_evidence_comment(
+        repository="example/project", issue_number=42,
+        evidence_id="qa-evidence", evaluator_id="qa-reviewer", receipt_id=receipt_id,
+    )
+    assert body.encode("utf-8") == (
+        b"Governed closure verified.\n"
+        b"Repository: example/project\n"
+        b"Issue: 42\n"
+        b"State: closed, reason completed.\n"
+        b"Acceptance evidence: qa-evidence (evaluator qa-reviewer).\n"
+        b"Admission receipt: " + receipt_bytes + b".\n"
+        b"Verified by canonical post-write readback."
+    )
 
 
 def test_no_new_infrastructure_in_adapter():

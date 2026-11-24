@@ -111,6 +111,26 @@ POST_CLOSE_RECONCILIATION_CONTRACT = {
 }
 
 
+def render_evidence_comment(
+    *,
+    repository: str,
+    issue_number: int,
+    evidence_id: str,
+    evaluator_id: str,
+    receipt_id: str | None,
+) -> str:
+    """Render the fixed post-close comment from verified facts supplied by the caller."""
+    return (
+        "Governed closure verified.\n"
+        f"Repository: {repository}\n"
+        f"Issue: {issue_number}\n"
+        "State: closed, reason completed.\n"
+        f"Acceptance evidence: {evidence_id} (evaluator {evaluator_id}).\n"
+        f"Admission receipt: {receipt_id or 'unavailable'}.\n"
+        "Verified by canonical post-write readback."
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ClosureAcceptanceEvidence:
     """Independent acceptance judgment for one issue, supplied by QA.
