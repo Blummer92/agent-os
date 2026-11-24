@@ -130,11 +130,10 @@ def test_legacy_negative_controls_remain_executable_and_ledger_linked() -> None:
         "NC07", "NC08", "NC09", "NC19", "D07", "NC-SELECT"
     }
     for entry in controls:
-        assert f"/issues/{entry['issue']}" in next(
-            case["source"]
-            for case in CASES
-            if f"/issues/{entry['issue']}" in case["source"]
-        ) or entry["id"] == "NC-SELECT"
+        source_issue_ids = {
+            int(case["source"].rsplit("/", 1)[-1]) for case in CASES
+        }
+        assert entry["issue"] in source_issue_ids or entry["id"] == "NC-SELECT"
         for role in ("negative", "positive"):
             path, separator, test_name = entry[role].partition("::")
             assert separator and test_name.startswith("test_")
