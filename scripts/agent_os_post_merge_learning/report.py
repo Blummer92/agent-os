@@ -145,36 +145,66 @@ def _paged_discussion(reader: GitHubReader, path: str) -> tuple[list[dict[str, A
     return values[:MAX_DISCUSSION_ITEMS], True
 
 
+def _check_history(reader: GitHubReader, sha: str) -> list[dict[str, Any]]:
+    """Fetch all historical check runs, including reruns hidden by filter=latest."""
+    values: list[dict[str, Any]] = []
+    for page in range(1, 5):
+        response = reader.get(f"/commits/{sha}/check-runs?filter=all&per_page=100&page={page}")
+        if not isinstance(response, dict) or type(response.get("total_count")) is not int:
+            raise EvidenceError("check-run-evidence-malformed")
+        rows = response.get("check_runs")
+        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
+            raise EvidenceError("check-run-evidence-malformed")
+        values.extend(rows)
+        if len(values) > 300:
+            raise EvidenceError("check-run-evidence-incomplete")
+        if len(rows) < 100:
+            if len(values) != response["total_count"]:
+                raise EvidenceError("check-run-evidence-incomplete")
+            return values
+    raise EvidenceError("check-run-evidence-incomplete")
+
+
+def _legacy_statuses(reader: GitHubReader, sha: str) -> list[dict[str, Any]]:
+    values: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        rows = reader.get(f"/commits/{sha}/statuses?per_page=100&page={page}")
+        if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
+            raise EvidenceError("legacy-status-evidence-malformed")
+        values.extend(rows)
+        if len(rows) < 100:
+            return values
+    raise EvidenceError("legacy-status-evidence-incomplete")
+
+
 def _review_and_ci_evidence(reader: GitHubReader, number: int, commits: list[dict[str, Any]]) -> dict[str, Any]:
-    """Preserve review and per-commit check refs, never interpret prose as proof."""
     reviews, reviews_truncated = _paged_discussion(reader, f"/pulls/{number}/reviews")
     comments, comments_truncated = _paged_discussion(reader, f"/issues/{number}/comments")
-    review_changes_requested = []
-    for item in reviews:
-        if item.get("state") == "CHANGES_REQUESTED" and isinstance(item.get("html_url"), str):
-            review_changes_requested.append(item["html_url"])
-    check_totals = {"success": 0, "failure": 0, "other": 0, "missing": 0}
-    failed_checks = []
-    valid_failed_refs_seen = 0
-    missing_failed_refs = 0
+    inline, inline_truncated = _paged_discussion(reader, f"/pulls/{number}/comments")
+    timeline, timeline_truncated = _paged_discussion(reader, f"/issues/{number}/timeline")
+    force_push = any(item.get("event") == "head_ref_force_pushed" for item in timeline)
+    review_changes_requested = [item["html_url"] for item in reviews if item.get("state") == "CHANGES_REQUESTED" and isinstance(item.get("html_url"), str)]
+    inline_refs = [item["html_url"] for item in inline if isinstance(item.get("html_url"), str) and item["html_url"].startswith(f"https://github.com/{reader.repository}/")]
+    check_totals = {"success": 0, "failure": 0, "other": 0, "missing": 0, "attention": 0}
+    legacy_totals = {"success": 0, "failure": 0, "pending": 0, "error": 0, "other": 0}
+    failed_checks: list[dict[str, str]] = []
+    valid_failed_refs_seen = missing_failed_refs = 0
     for entry in commits:
         sha = entry["sha"]
-        result = reader.get(f"/commits/{sha}/check-runs?per_page=100")
-        if not isinstance(result, dict) or type(result.get("total_count")) is not int:
-            raise EvidenceError("check-run-evidence-malformed")
-        checks = result.get("check_runs")
-        if not isinstance(checks, list) or result["total_count"] != len(checks) or len(checks) > MAX_CHECKS_PER_COMMIT:
-            raise EvidenceError("check-run-evidence-incomplete")
+        checks = _check_history(reader, sha)
+        statuses = _legacy_statuses(reader, sha)
         if not checks:
             check_totals["missing"] += 1
         for check in checks:
-            if not isinstance(check, dict):
-                raise EvidenceError("check-run-evidence-malformed")
             outcome = check.get("conclusion")
             if outcome == "success":
                 check_totals["success"] += 1
             elif outcome == "failure":
                 check_totals["failure"] += 1
+            else:
+                check_totals["other"] += 1
+            if outcome not in ("success", "neutral", "skipped"):
+                check_totals["attention"] += 1
                 url = check.get("html_url")
                 if isinstance(url, str) and url.startswith(f"https://github.com/{reader.repository}/"):
                     valid_failed_refs_seen += 1
@@ -182,16 +212,24 @@ def _review_and_ci_evidence(reader: GitHubReader, number: int, commits: list[dic
                         failed_checks.append({"commit_sha": sha, "check_url": url})
                 else:
                     missing_failed_refs += 1
-            else:
-                check_totals["other"] += 1
-    return {"review_count_observed": len(reviews), "issue_comment_count_observed": len(comments),
-            "review_history_truncated": reviews_truncated,
-            "issue_comment_history_truncated": comments_truncated,
-            "change_request_refs": review_changes_requested,
-            "check_run_counts": check_totals, "failed_check_refs": failed_checks,
-            "failed_check_refs_unavailable": missing_failed_refs,
-            "failed_check_refs_truncated": valid_failed_refs_seen > MAX_FAILED_CHECK_REFS,
-            "independent_review_verified": False}
+        for status in statuses:
+            state = status.get("state")
+            legacy_totals[state if state in legacy_totals else "other"] += 1
+    return {
+        "review_count_observed": len(reviews), "issue_comment_count_observed": len(comments),
+        "inline_comment_count_observed": len(inline), "inline_comment_refs": inline_refs,
+        "review_history_truncated": reviews_truncated,
+        "issue_comment_history_truncated": comments_truncated,
+        "inline_comment_history_truncated": inline_truncated,
+        "timeline_history_truncated": timeline_truncated,
+        "rewritten_history_observed": force_push,
+        "change_request_refs": review_changes_requested,
+        "check_run_counts": check_totals, "legacy_status_counts": legacy_totals,
+        "failed_check_refs": failed_checks,
+        "failed_check_refs_unavailable": missing_failed_refs,
+        "failed_check_refs_truncated": valid_failed_refs_seen > MAX_FAILED_CHECK_REFS,
+        "independent_review_verified": False,
+    }
 
 
 def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> dict[str, Any] | None:
@@ -342,13 +380,20 @@ def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validati
     return {
         "schema_version": 1, "repository": repo, "pr_number": number,
         "merge_sha": sha, "pr_url": f"https://github.com/{repo}/pull/{number}",
-        "history_complete": True, "commit_count": expected_count,
+        "listed_commits_complete": True, "historical_head_coverage_complete": False,
+        "analyzer_sha": os.environ.get("GITHUB_SHA") or None,
+        "analyzer_workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF") or None,
+        "commit_count": expected_count,
         "all_commit_shas": [entry["sha"] for entry in commits],
         "commit_kind_counts": kinds, "validation": validation,
         "supporting_evidence": supporting,
         "review_leads": groups, "status": ("review-needed" if (groups or validation["state"] != "success"
-            or supporting["check_run_counts"]["failure"] or supporting["change_request_refs"]
+            or supporting["check_run_counts"]["attention"] or supporting["change_request_refs"]
+            or supporting["inline_comment_count_observed"] or supporting["rewritten_history_observed"]
+            or supporting["legacy_status_counts"]["failure"] or supporting["legacy_status_counts"]["error"]
+            or supporting["legacy_status_counts"]["pending"]
             or supporting["review_history_truncated"] or supporting["issue_comment_history_truncated"]
+            or supporting["inline_comment_history_truncated"] or supporting["timeline_history_truncated"]
             or supporting["failed_check_refs_unavailable"] or supporting["failed_check_refs_truncated"])
             else "no-repair-leads-observed"),
         "lesson_proposal": None, "existing_lesson_duplicate_review": "not-run",
