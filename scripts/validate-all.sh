@@ -282,7 +282,6 @@ verify_junit() {
 }
 
 # Refuse two distinct suite names resolving to the same lossy artifact key.
-junit_seen_names=()
 junit_seen_keys=()
 require_unique_junit_key() {
   local name="$1" key i
@@ -290,7 +289,6 @@ require_unique_junit_key() {
   for i in "${!junit_seen_keys[@]}"; do
     [ "${junit_seen_keys[$i]}" != "$key" ] || runner_error "colliding JUnit artifact keys: $key"
   done
-  junit_seen_names+=("$name")
   junit_seen_keys+=("$key")
 }
 
@@ -772,8 +770,8 @@ for index in "${schedule_indices[@]}"; do
   suite_name="${suite_names[$index]}"
   output_file="$parallel_tmp/output-$index"
   status_file="$parallel_tmp/status-$index"
+  rm -f "$(suite_junit_path_for "$suite_name")" || runner_error "cannot replace stale suite JUnit evidence"
   if [ -n "${CI_JUNIT_DIR:-}" ]; then
-    rm -f "$(suite_junit_path_for "$suite_name")" || runner_error "cannot replace stale suite JUnit evidence"
     rm -f "$CI_JUNIT_DIR/junit-subtest-receipt-$(junit_key "$suite_name").json" || runner_error "cannot replace stale subtest evidence"
   fi
   captured_commands[$index]="$(suite_command_text "$suite_dir" "$suite_name")"
