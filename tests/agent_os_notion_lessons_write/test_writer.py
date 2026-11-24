@@ -454,6 +454,9 @@ class SemanticDuplicateCreateTests(unittest.TestCase):
     def test_incomplete_duplicate_scan_blocks_before_reservation(self):
         client = Client()
         client.more = True
+        # Exact-title reconciliation is complete; only the new bounded scan
+        # is incomplete. Otherwise the older reconciliation guard wins first.
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
         result = execute(AdmittedRequest(100), client)
         self.assertEqual((result["status"], result["reason_code"]),
                          ("blocked", "incomplete-duplicate-scan"))
