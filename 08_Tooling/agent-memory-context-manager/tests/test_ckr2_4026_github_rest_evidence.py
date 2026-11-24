@@ -51,13 +51,22 @@ def test_strict_source_owned_positive(kind, hints):
 
 
 @pytest.mark.parametrize("hints", [
-    (), ("testing",), ("GitHub issue comment pagination",),
+    (), ("GitHub issue comment pagination",),
     ("duplicate record detection",), ("bounded HTTP GET response limits",),
     ("timestamp provenance",),
 ])
-def test_partial_or_generic_hints_cannot_select(hints):
+def test_partial_hints_cannot_select(hints):
     result = select_coding_knowledge(request(hints), (candidate(),))
     assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+
+
+def test_legacy_generic_testing_match_is_not_new_rest_mechanism():
+    # The pre-existing generic CKR2 capability match is unchanged. It is not
+    # evidence that the strict GitHub REST title/guidance matcher fired.
+    result = select_coding_knowledge(request(("testing",)), (candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("ecosystem-capability-match",)
+    assert "github-rest-evidence-text-match" not in result.selected[0].reason_codes
 
 
 @pytest.mark.parametrize("change", [
