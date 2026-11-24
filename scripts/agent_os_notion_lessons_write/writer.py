@@ -3,13 +3,16 @@
 The injected client owns credential/network capability. No raw response, private
 value, credential or provider diagnostic is emitted as public result evidence.
 
-Create entries reconcile by exact title. Update entries (#3417) address their
+Create entries reconcile by exact title and fail closed on a bounded semantic
+duplicate-candidate scan before reserving or creating. Update entries (#3417) address their
 reviewed target by canonical ``Lesson ID`` and require the owner command to bind
 the exact current revision; a stale revision is refused with zero writes.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
+import unicodedata
 from .admission import AdmittedRequest, WriteBlocked, notion_id
 from .catalog import LESSON_ID, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
 
@@ -144,6 +147,85 @@ def _find_title(client, source_id: str, lesson: Mapping) -> Mapping | None:
     return row
 
 
+# Bounded, deterministic duplicate *qualification*, not semantic equivalence proof.
+# Normalize common wording differences in lesson titles. A possible match is
+# sent to reviewed Lesson-ID update; it is never modified by a create entry.
+_DUPLICATE_WORDS = {
+    "hosts": "host", "consumer": "host", "consumers": "host",
+    "runtime": "host", "runtimes": "host", "runner": "host", "runners": "host",
+    "continuation": "continue", "continuations": "continue",
+    "continues": "continue", "continued": "continue",
+    "resumption": "continue", "resume": "continue", "resuming": "continue",
+    "execution": "execute", "executed": "execute", "executing": "execute",
+    "dispatch": "execute", "dispatched": "execute", "dispatching": "execute",
+    "automatic": "automate", "automatically": "automate", "automated": "automate",
+    "payload": "signal", "payloads": "signal", "metadata": "signal",
+    "decision": "signal", "decisions": "signal", "emitted": "signal",
+    "emits": "signal", "emit": "signal", "signal": "signal", "signals": "signal",
+}
+_DUPLICATE_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "before", "by", "do",
+    "for", "from", "in", "into", "is", "it", "must", "not", "of",
+    "on", "or", "only", "the", "to", "when", "with", "without",
+})
+_MAX_DUPLICATE_ROWS = 200
+
+
+def _title_terms(title: str) -> frozenset[str]:
+    if type(title) is not str or not title.strip() or len(title) > 2000:
+        raise WriteBlocked("malformed-duplicate-title")
+    tokens = re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", title).casefold())
+    return frozenset(_DUPLICATE_WORDS.get(token, token) for token in tokens
+                     if token not in _DUPLICATE_STOPWORDS)
+
+
+def _possible_same_lesson(title: str, other_title: str) -> bool:
+    """High-recall *review* signal, with shared concepts AND proportional overlap.
+
+    This heuristic intentionally does not claim that distinct phrasing is proof
+    of duplication. It only blocks risky automatic creation. Missing matches
+    remain possible and must be covered by the human catalog review.
+    """
+    left, right = _title_terms(title), _title_terms(other_title)
+    if not left or not right:
+        raise WriteBlocked("malformed-duplicate-title")
+    if left == right:
+        return True
+    shared = len(left & right)
+    return shared >= 3 and 2 * shared >= min(len(left), len(right))
+
+
+def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[str, ...]:
+    """Inspect one complete, capped canonical catalog snapshot; never mutate.
+
+    Incomplete pagination, malformed identities, duplicates and schema drift
+    all refuse before reservation. Returned IDs are canonical and bounded;
+    raw Notion content never enters public receipts.
+    """
+    result = client.find_create_candidates()
+    if not isinstance(result, Mapping) or result.get("has_more") is not False:
+        raise WriteBlocked("incomplete-duplicate-scan")
+    rows = result.get("results")
+    if type(rows) is not list or len(rows) > _MAX_DUPLICATE_ROWS:
+        raise WriteBlocked("incomplete-duplicate-scan")
+    matches = set()
+    seen_page_ids = set()
+    for row in rows:
+        page_id = _page(row, source_id)
+        if page_id in seen_page_ids:
+            raise WriteBlocked("ambiguous-duplicate-scan")
+        seen_page_ids.add(page_id)
+        row_title = _values(row, ("Lesson Learned",))["Lesson Learned"]
+        if _possible_same_lesson(lesson["Lesson Learned"], row_title):
+            lesson_id = _lesson_id(row)
+            if lesson_id is None or lesson_id in matches:
+                raise WriteBlocked("ambiguous-duplicate-scan")
+            matches.add(lesson_id)
+    if len(matches) > 10:
+        raise WriteBlocked("ambiguous-duplicate-scan")
+    return tuple(sorted(matches, key=lambda value: int(value[3:])))
+
+
 def _find_lesson_id(client, source_id: str, lesson_id: str) -> Mapping | None:
     match = LESSON_ID.fullmatch(lesson_id)
     if match is None:
@@ -274,6 +356,12 @@ def execute(request: AdmittedRequest, client) -> dict:
                 raise WriteBlocked("update-target-missing")
         else:
             existing = _find_title(client, source_id, lesson)
+            if existing is None:
+                possible = _find_semantic_duplicates(client, source_id, lesson)
+                if possible:
+                    result.update(status="blocked", reason_code="possible-semantic-duplicate",
+                                  duplicate_lesson_ids=list(possible))
+                    return result
         page_id = None
         if existing is not None:
             page_id = _page(existing, source_id)
@@ -304,6 +392,14 @@ def execute(request: AdmittedRequest, client) -> dict:
         elif _find_title(client, source_id, lesson) is not None:
             result.update(status="conflict", reason_code="lesson-appeared-before-create")
             return result
+        elif target is None:
+            # Close the read-only pre-reservation window; an ambiguous page
+            # must never be resolved by POST or a force-rearmed tag.
+            possible = _find_semantic_duplicates(client, source_id, lesson)
+            if possible:
+                result.update(status="blocked", reason_code="possible-semantic-duplicate",
+                              duplicate_lesson_ids=list(possible))
+                return result
         intended = properties(request.request_id)
         if page_id is None:
             # Durable, atomic create-once reservation BEFORE any Notion POST.
