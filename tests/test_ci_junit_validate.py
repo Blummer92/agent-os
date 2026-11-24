@@ -40,3 +40,22 @@ def test_junit_validator_missing_file_fails_closed(tmp_path):
         capture_output=True, text=True, check=False,
     )
     assert completed.returncode == 2
+
+
+def test_focused_junit_requires_an_executed_body(tmp_path):
+    report = tmp_path / "skipped.xml"
+    report.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="1">'
+        '<testcase classname="t" name="skipped"><skipped/></testcase></testsuite>',
+        encoding="utf-8",
+    )
+    normal = subprocess.run(
+        [sys.executable, str(SCRIPT), str(report)],
+        capture_output=True, check=False,
+    )
+    focused = subprocess.run(
+        [sys.executable, str(SCRIPT), str(report), "--require-executed"],
+        capture_output=True, check=False,
+    )
+    assert normal.returncode == 0  # Full suites retain their skip allowlist.
+    assert focused.returncode == 2  # Explicit focus cannot be all skipped.
