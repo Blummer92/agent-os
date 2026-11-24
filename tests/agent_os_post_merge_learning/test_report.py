@@ -92,7 +92,7 @@ class TestLearning(unittest.TestCase):
     def test_negative_check_page_incomplete(self):
         reader = Reader([commit(1, "fix(api): repair")])
         original = reader.get
-        reader.get = lambda p: {"total_count": 2, "check_runs": []} if p.endswith("/check-runs?per_page=100") else original(p)
+        reader.get = lambda p: {"total_count": 2, "check_runs": []} if "/check-runs?filter=all&per_page=100&page=" in p else original(p)
         with self.assertRaisesRegex(report.EvidenceError, "check-run-evidence-incomplete"):
             report.build_report(reader, SHA, 4101, 100)
 
