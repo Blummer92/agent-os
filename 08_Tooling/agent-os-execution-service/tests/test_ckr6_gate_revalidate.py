@@ -564,7 +564,7 @@ def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(mo
     monkeypatch.setattr(r, "api", fake)
     with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
         r._completed_result_for_owner(event, "unused")
-    assert len(calls) == 1
+    assert len(calls) == r.MAX_COMMENT_PAGES
     assert all(method != "POST" for method, _ in calls)
 
     state["count"] = 99
@@ -573,6 +573,75 @@ def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(mo
     assert result["request_comment_id"] == event["comment"]["id"]
     assert result["status"] == "insufficient"
     assert len(calls) == 1
+    assert all(method != "POST" for method, _ in calls)
+
+
+def test_postback_result_on_second_page_is_verified_without_mutation(monkeypatch):
+    from agent_os_execution_service.ckr6_github_bridge import serialize_ckr6_result_comment
+    event = _event_for({
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+        "attempt_id": "one", "failed_hypothesis": "h", "result_summary": "r",
+        "repair_context": "ci-diagnosis",
+    })
+    result = {
+        "operation": "failed-repair", "repository": REPO, "issue_number": 3418,
+        "status": "insufficient", "attempt_id": "one",
+        "selected_lesson_ids": [], "mutation_admissible": False,
+    }
+    receipt = {
+        "id": 9000, "user": {"id": r.BOT_ID},
+        "created_at": "2026-11-14T15:57:08Z",
+        "updated_at": "2026-11-14T15:57:08Z",
+        "body": serialize_ckr6_result_comment(
+            result, request_comment_id=event["comment"]["id"]
+        ),
+    }
+    filler = [
+        {"id": 300 + i, "user": {"id": 12345},
+         "created_at": "2026-11-14T15:56:09Z",
+         "updated_at": "2026-11-14T15:56:09Z", "body": "irrelevant"}
+        for i in range(r.COMMENT_PAGE_SIZE)
+    ]
+    calls = []
+    pages = {1: filler, 2: [receipt]}
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        assert "/comments?per_page=100&since=" in path
+        page = int(path.rsplit("page=", 1)[1])
+        return pages[page]
+    monkeypatch.setattr(r, "api", fake)
+    got = r._completed_result_for_owner(event, "unused")
+    assert got["request_comment_id"] == event["comment"]["id"]
+    assert got["receipt_created_at"] == receipt["created_at"]
+    assert len(calls) == 2
+    assert all(method != "POST" for method, _ in calls)
+
+
+@pytest.mark.parametrize("bad_second_page", [
+    [{"id": 300, "user": {"id": 12345}, "body": "duplicate id"}],
+    [{"id": 9001, "user": None, "body": "malformed author"}],
+    [{"id": 9001, "user": {"id": 12345}, "body": "irrelevant"}] * 101,
+])
+def test_postback_pagination_invalid_second_page_fails_closed(monkeypatch, bad_second_page):
+    event = _event_for({
+        "operation": "issue-start", "repository": REPO, "issue_number": 3418,
+        "task_reference": "PR #3824 exact head " + SHA,
+    })
+    first = [
+        {"id": 300 + i, "user": {"id": 12345}, "body": "noise"}
+        for i in range(r.COMMENT_PAGE_SIZE)
+    ]
+    calls = []
+    def fake(method, path, token):
+        calls.append((method, path))
+        assert method == "GET"
+        return first if path.endswith("&page=1") else bad_second_page
+    monkeypatch.setattr(r, "api", fake)
+    with pytest.raises(r.RevalidationBlocked, match="result-provenance-unverified"):
+        r._completed_result_for_owner(event, "unused")
+    assert len(calls) == 2
     assert all(method != "POST" for method, _ in calls)
 
 
