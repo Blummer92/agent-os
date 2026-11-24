@@ -38,6 +38,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, cast
 
 from .authorized_validation import (
     AuthorizedValidationAdmissionResult,
@@ -47,6 +48,16 @@ from .authorized_validation import (
 )
 from .execution_composition import ExecutionCompositionResult, ExecutionCompositionStatus
 from .models import parse_canonical_utc
+
+if TYPE_CHECKING:
+    # Static-analysis-only imports of the canonical Scheduler evidence types.
+    # The workflow-scheduler types stay lazily imported at runtime (the
+    # _pilot_result_type() etc. accessors below), so this block never executes
+    # and changes nothing about import timing or module reachability.
+    from workflow_scheduler.execution.quarantine_review import QuarantineEvidencePacket
+    from workflow_scheduler.execution.runtime_configuration import ConcreteRuntimeConfiguration
+    from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotResult
+    from workflow_scheduler.execution.workspace_state_evidence import WorkspaceLifecycleEvidence
 
 VALIDATION_LIFECYCLE_EVIDENCE_SCHEMA_VERSION = "1.0"
 
@@ -374,7 +385,8 @@ class ValidationLifecycleEvidenceBundle:
 
         availability: list[EvidenceAvailabilityRecord] = []
 
-        if self.execution_composition is None:
+        composition = self.execution_composition
+        if composition is None:
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="execution_composition",
@@ -383,9 +395,9 @@ class ValidationLifecycleEvidenceBundle:
                 )
             )
         else:
-            if type(self.execution_composition) is not ExecutionCompositionResult:
+            if type(composition) is not ExecutionCompositionResult:
                 raise TypeError("execution_composition must be exact ExecutionCompositionResult")
-            self._verify_execution_composition_join()
+            self._verify_execution_composition_join(composition)
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="execution_composition", availability=EvidenceAvailability.PRESENT
@@ -393,7 +405,8 @@ class ValidationLifecycleEvidenceBundle:
             )
 
         PilotResultType = _pilot_result_type()
-        if self.pilot_result is None:
+        pilot = self.pilot_result
+        if pilot is None:
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="pilot_result",
@@ -402,15 +415,16 @@ class ValidationLifecycleEvidenceBundle:
                 )
             )
         else:
-            if type(self.pilot_result) is not PilotResultType:
+            if type(pilot) is not PilotResultType:
                 raise TypeError("pilot_result must be exact SingleIssuePilotResult")
-            self._verify_pilot_result_join()
+            self._verify_pilot_result_join(pilot, composition)
             availability.append(
                 EvidenceAvailabilityRecord(field_name="pilot_result", availability=EvidenceAvailability.PRESENT)
             )
 
         WorkspaceLifecycleEvidenceType = _workspace_lifecycle_evidence_type()
-        if self.workspace_lifecycle_evidence is None:
+        evidence = self.workspace_lifecycle_evidence
+        if evidence is None:
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="workspace_lifecycle_evidence",
@@ -419,9 +433,9 @@ class ValidationLifecycleEvidenceBundle:
                 )
             )
         else:
-            if type(self.workspace_lifecycle_evidence) is not WorkspaceLifecycleEvidenceType:
+            if type(evidence) is not WorkspaceLifecycleEvidenceType:
                 raise TypeError("workspace_lifecycle_evidence must be exact WorkspaceLifecycleEvidence")
-            self._verify_workspace_lifecycle_evidence_join()
+            self._verify_workspace_lifecycle_evidence_join(evidence, pilot)
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="workspace_lifecycle_evidence", availability=EvidenceAvailability.PRESENT
@@ -432,7 +446,8 @@ class ValidationLifecycleEvidenceBundle:
         pilot_is_quarantined = (
             self.pilot_result is not None and getattr(self.pilot_result, "status", None) == "quarantined"
         )
-        if self.quarantine_packet is None:
+        quarantine = self.quarantine_packet
+        if quarantine is None:
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="quarantine_packet",
@@ -445,13 +460,15 @@ class ValidationLifecycleEvidenceBundle:
                 )
             )
         else:
-            if type(self.quarantine_packet) is not QuarantinePacketType:
+            if type(quarantine) is not QuarantinePacketType:
                 raise TypeError("quarantine_packet must be exact QuarantineEvidencePacket")
             if not pilot_is_quarantined:
                 raise ValidationLifecycleEvidenceError(
                     "quarantine_packet supplied without a quarantined pilot_result"
                 )
-            self._verify_quarantine_packet_join()
+            self._verify_quarantine_packet_join(
+                cast("QuarantineEvidencePacket", quarantine), cast("SingleIssuePilotResult", pilot)
+            )
             availability.append(
                 EvidenceAvailabilityRecord(
                     field_name="quarantine_packet", availability=EvidenceAvailability.PRESENT
@@ -475,8 +492,7 @@ class ValidationLifecycleEvidenceBundle:
 
     # -- join verification -------------------------------------------------
 
-    def _verify_execution_composition_join(self) -> None:
-        composition = self.execution_composition
+    def _verify_execution_composition_join(self, composition: ExecutionCompositionResult) -> None:
         authorization = self.admission_request.execution_authorization
         execution_stage = self.admission_request.execution_packet_stage
         if composition.request_fingerprint != authorization.request_fingerprint:
@@ -490,9 +506,9 @@ class ValidationLifecycleEvidenceBundle:
         if execution_stage.request is not None and composition.request_fingerprint != execution_stage.request_fingerprint:
             raise ValidationLifecycleEvidenceError("execution_composition/execution-packet request fingerprint drift")
 
-    def _verify_pilot_result_join(self) -> None:
-        pilot = self.pilot_result
-        composition = self.execution_composition
+    def _verify_pilot_result_join(
+        self, pilot: SingleIssuePilotResult, composition: ExecutionCompositionResult | None
+    ) -> None:
         authorization = self.admission_request.execution_authorization
         pilot_id_fn = _pilot_result_id_fn()
         # Reuses the canonical identity function; never re-derives the digest.
@@ -523,10 +539,15 @@ class ValidationLifecycleEvidenceBundle:
                 ):
                     raise ValidationLifecycleEvidenceError("pilot_result.validation_passed drift")
 
-    def _verify_workspace_lifecycle_evidence_join(self) -> None:
-        evidence = self.workspace_lifecycle_evidence
+    def _verify_workspace_lifecycle_evidence_join(
+        self, evidence: WorkspaceLifecycleEvidence, pilot: SingleIssuePilotResult | None
+    ) -> None:
         execution_stage = self.admission_request.execution_packet_stage
-        runtime = execution_stage.runtime_configuration
+        # An accepted admission carries a complete execution packet, whose
+        # runtime configuration is always present (the dereferences below
+        # already depend on it). The cast is a runtime no-op; it only tells
+        # static analysis the boundary is intentionally non-optional here.
+        runtime = cast("ConcreteRuntimeConfiguration", execution_stage.runtime_configuration)
         authorization = self.admission_request.execution_authorization
         for observation in (evidence.initial, evidence.final):
             if observation.repository_owner.casefold() != runtime.repository_identity.owner.casefold():
@@ -537,17 +558,17 @@ class ValidationLifecycleEvidenceBundle:
                 raise ValidationLifecycleEvidenceError("workspace evidence expected_sha identity mismatch")
         if evidence.validation_only is not True:
             raise ValidationLifecycleEvidenceError("workspace evidence must be validation-only for this lifecycle")
-        if self.pilot_result is not None:
+        if pilot is not None:
             observed = evidence.final.all_changed_paths
-            claimed = frozenset(self.pilot_result.changed_paths)
+            claimed = frozenset(pilot.changed_paths)
             if observed != claimed:
                 raise ValidationLifecycleEvidenceError(
                     "pilot_result.changed_paths does not match #760 final changed-path evidence"
                 )
 
-    def _verify_quarantine_packet_join(self) -> None:
-        packet = self.quarantine_packet
-        pilot = self.pilot_result
+    def _verify_quarantine_packet_join(
+        self, packet: QuarantineEvidencePacket, pilot: SingleIssuePilotResult
+    ) -> None:
         serializer = _quarantine_packet_serializer()
         packet_id_fn = _quarantine_packet_id_fn()
         # Reuses the canonical serializer, which itself re-verifies packet_id.
@@ -574,12 +595,15 @@ class ValidationLifecycleEvidenceBundle:
         payload["execution_composition_evidence_id"] = (
             self.execution_composition.evidence_id if self.execution_composition is not None else None
         )
-        payload["pilot_result_id"] = self.pilot_result.result_id if self.pilot_result is not None else None
+        pilot = self.pilot_result
+        payload["pilot_result_id"] = cast("SingleIssuePilotResult", pilot).result_id if pilot is not None else None
+        workspace = self.workspace_lifecycle_evidence
         payload["workspace_lifecycle_id"] = (
-            self.workspace_lifecycle_evidence.lifecycle_id if self.workspace_lifecycle_evidence is not None else None
+            cast("WorkspaceLifecycleEvidence", workspace).lifecycle_id if workspace is not None else None
         )
+        quarantine = self.quarantine_packet
         payload["quarantine_packet_id"] = (
-            self.quarantine_packet.packet_id if self.quarantine_packet is not None else None
+            cast("QuarantineEvidencePacket", quarantine).packet_id if quarantine is not None else None
         )
         return payload
 
@@ -666,9 +690,9 @@ def _post_admission_predicates(
     else in this module branches on status per-field.
     """
 
-    pilot = bundle.pilot_result
+    pilot = cast("SingleIssuePilotResult | None", bundle.pilot_result)
     composition = bundle.execution_composition
-    workspace = bundle.workspace_lifecycle_evidence
+    workspace = cast("WorkspaceLifecycleEvidence | None", bundle.workspace_lifecycle_evidence)
     quarantine_packet = bundle.quarantine_packet
 
     missing_required = tuple(

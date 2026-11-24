@@ -979,3 +979,125 @@ def test_module_source_never_calls_subprocess_or_open_for_write() -> None:
     source = source_path.read_text(encoding="utf-8")
     for forbidden in ("subprocess.", "os.system", "os.fork", "os.exec", "socket.socket"):
         assert forbidden not in source
+
+
+# ---------------------------------------------------------------------------
+# #3602 type-narrowing regression coverage
+#
+# The repair re-signatures the four `_verify_*_join` helpers to take typed
+# parameters and narrows the optional slots at the `__post_init__` call-site
+# boundaries with explicit `cast` -- the exact `type(x) is not T` runtime
+# checks, the lazy imports, and every authorization/evidence contract are
+# untouched. These tests pin the narrowed boundaries.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "tampered_value", "message"),
+    (
+        ("command_plan_id", "command-plan:tampered", "command_plan_id identity mismatch"),
+        ("repository", "evil/other", "repository identity mismatch"),
+        ("expected_sha", "f" * 40, "expected_sha identity mismatch"),
+    ),
+)
+def test_execution_composition_join_identity_checks_survive_narrowing(
+    tmp_path, field, tampered_value, message
+) -> None:
+    """The narrowed composition join still rejects substituted identities."""
+    request, admission = _accepted_admission(tmp_path)
+    composition = _execution_composition(
+        request,
+        validation_result=_validation_result(request, passed=True),
+        status=ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING,
+    )
+    tampered = replace(composition, **{field: tampered_value})
+    with pytest.raises(ValidationLifecycleEvidenceError, match=message):
+        build_validation_lifecycle_evidence_bundle(
+            evaluated_at=_EVALUATED_AT,
+            admission_request=request,
+            admission_result=admission,
+            execution_composition=tampered,
+        )
+
+
+def test_optional_slot_ledger_unchanged(tmp_path) -> None:
+    """None-handling at the new typed boundary still derives the ledger."""
+    request, admission = _accepted_admission(tmp_path)
+    bare = build_validation_lifecycle_evidence_bundle(
+        evaluated_at=_EVALUATED_AT, admission_request=request, admission_result=admission
+    )
+    assert any(
+        item.field_name == "execution_composition"
+        and item.availability is EvidenceAvailability.MISSING_REQUIRED
+        for item in bare.evidence_availability
+    )
+    full = _clean_bundle(tmp_path)
+    assert {
+        (item.field_name, item.availability)
+        for item in full.evidence_availability
+        if item.field_name != "quarantine_packet"
+    } == {
+        ("execution_composition", EvidenceAvailability.PRESENT),
+        ("pilot_result", EvidenceAvailability.PRESENT),
+        ("workspace_lifecycle_evidence", EvidenceAvailability.PRESENT),
+    }
+
+
+@pytest.mark.parametrize(
+    ("slot", "message"),
+    (
+        ("pilot_result", "pilot_result must be exact SingleIssuePilotResult"),
+        ("workspace_lifecycle_evidence", "workspace_lifecycle_evidence must be exact WorkspaceLifecycleEvidence"),
+        ("quarantine_packet", "quarantine_packet must be exact QuarantineEvidencePacket"),
+    ),
+)
+def test_exact_type_checks_preserved(tmp_path, slot, message) -> None:
+    """Wrong-typed optionals still raise TypeError before any helper runs."""
+    request, admission = _accepted_admission(tmp_path)
+    composition = _execution_composition(
+        request,
+        validation_result=_validation_result(request, passed=True),
+        status=ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING,
+    )
+    kwargs = {
+        "evaluated_at": _EVALUATED_AT,
+        "admission_request": request,
+        "admission_result": admission,
+        "execution_composition": composition,
+        "pilot_result": _pilot_result(request),
+        "workspace_lifecycle_evidence": _workspace_lifecycle_evidence(request),
+        slot: object(),
+    }
+    with pytest.raises(TypeError, match=message):
+        build_validation_lifecycle_evidence_bundle(**kwargs)
+
+
+def test_quarantine_guard_preserved(tmp_path) -> None:
+    """A packet without a quarantined pilot still fails closed."""
+    request, admission = _accepted_admission(tmp_path)
+    composition = _execution_composition(
+        request,
+        validation_result=_validation_result(request, passed=True),
+        status=ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING,
+    )
+    quarantined_pilot = _pilot_result(
+        request,
+        status="quarantined",
+        validation_passed=True,
+        reason_codes=("workspace.filesystem-cleanup-failed",),
+        workspace_filesystem_cleaned=False,
+    )
+    packet = build_quarantine_evidence_packet(quarantined_pilot)
+    with pytest.raises(
+        ValidationLifecycleEvidenceError,
+        match="quarantine_packet supplied without a quarantined pilot_result",
+    ):
+        build_validation_lifecycle_evidence_bundle(
+            evaluated_at=_EVALUATED_AT,
+            admission_request=request,
+            admission_result=admission,
+            execution_composition=composition,
+            pilot_result=_pilot_result(request),
+            workspace_lifecycle_evidence=_workspace_lifecycle_evidence(request),
+            quarantine_packet=packet,
+        )
