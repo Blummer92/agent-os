@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .coding_knowledge_selection import (
     MAX_GUIDANCE_TEXT_CHARS,
@@ -423,34 +423,23 @@ def _bound_relevant_lessons_with_order(
         # #4026: inside each relevance bucket, order by exact request-context
         # overlap before the five-ID cut; the total ID order breaks ties and
         # is the whole order when nothing overlaps. Buckets never mix.
-        reordered: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
-        prior_ordered: list[LessonRecordEvidence] = []
+        prior_ordered: list[str] = []
+        reordered: list[str] = []
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
-            # Score equal normalized records once, while retaining the
-            # original rows for raw counts and revision-conflict checks.
-            group = list(dict.fromkeys(
-                item for item in ranked if item[0] == bucket
-            ))
-            scores = contextual_tie_scores(
-                request, (_as_selection_candidate(item[2]) for item in group)
-            )
-            order = sorted(range(len(group)), key=lambda index: (-scores[index], group[index][1]))
-            ordered = [group[index] for index in order]
-            prior_ordered.extend(item[2] for item in ordered)
-            coverage_order = required_library_coverage_order(
-                request, (_as_selection_candidate(item[2]) for item in ordered)
-            )
-            reordered.extend(ordered[index] for index in coverage_order)
-        ranked = reordered
-        # Rank identities, not individual revisions. A second revision of
-        # a selected ID may be unranked, but must still reach CKR2's
-        # fail-closed duplicate-identity conflict check.
-        chosen = _take_distinct_ids([item[2] for item in ranked])
-        ranked_ids = tuple(dict.fromkeys(item.lesson_id for item in chosen))
+            # Score equal rows once. The original rows are retained below.
+            group = list(dict.fromkeys(item for item in ranked if item[0] == bucket))
+            candidates = [_as_selection_candidate(item[2]) for item in group]
+            scores = contextual_tie_scores(request, candidates)
+            order = sorted(range(len(group)), key=lambda i: (-scores[i], group[i][1]))
+            ordered_ids = [group[i][2].lesson_id for i in order]
+            prior_ordered.extend(ordered_ids)
+            coverage_order = required_library_coverage_order(request, (candidates[i] for i in order))
+            reordered.extend(ordered_ids[i] for i in coverage_order)
+        # Bound identities first, then retain every original record for those
+        # identities, including otherwise unranked conflicting revisions.
+        ranked_ids = _bounded_identity_order(reordered)
         selected_ids = set(ranked_ids)
-        prior_ids = tuple(dict.fromkeys(
-            item.lesson_id for item in _take_distinct_ids(prior_ordered)
-        ))
+        prior_ids = _bounded_identity_order(prior_ordered)
         prior_member_set = set(prior_ids)
         if selected_ids != prior_member_set:
             prior_bounded = tuple(
@@ -471,8 +460,8 @@ def _bound_relevant_lessons_with_order(
             ranked_ids,
         )
     unranked.sort(key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
-    chosen = _take_distinct_ids(unranked)
-    return chosen, tuple(dict.fromkeys(item.lesson_id for item in chosen))
+    ids = _bounded_identity_order(lesson.lesson_id for lesson in unranked)
+    return tuple(lesson for lesson in unranked if lesson.lesson_id in ids), ids
 
 
 def _bound_relevant_lessons(
@@ -566,22 +555,8 @@ def describe_selection_basis(
     return SelectionBasis(basis=basis, best_bucket=best, tied_identities=len(tied))
 
 
-def _take_distinct_ids(
-    ordered: Sequence[LessonRecordEvidence],
-) -> tuple[LessonRecordEvidence, ...]:
-    """First MAX_LESSON_RECORDS distinct lesson IDs, with every record of
-    each bounded identity included."""
-    seen: set[str] = set()
-    kept: list[LessonRecordEvidence] = []
-    for lesson in ordered:
-        if lesson.lesson_id in seen:
-            kept.append(lesson)
-            continue
-        if len(seen) >= MAX_LESSON_RECORDS:
-            continue
-        seen.add(lesson.lesson_id)
-        kept.append(lesson)
-    return tuple(kept)
+def _bounded_identity_order(ordered: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(ordered))[:MAX_LESSON_RECORDS]
 
 
 def orchestrate_lesson_activation(

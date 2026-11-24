@@ -286,58 +286,43 @@ def required_library_coverage_order(
     request: CodingKnowledgeRequest,
     ordered: Any,
 ) -> list[int]:
-    """Optimize explicit library coverage inside one already-ranked bucket.
-
-    The existing deterministic relevance/context order is authoritative for
-    ties in coverage. Only a better selection of up to MAX_SELECTED distinct
-    library hints can reorder candidates; this never changes their buckets,
-    eligibility, provenance, or the fail-closed currentness checks.
-    """
+    """Maximize tied-bucket coverage; keep original order on equal coverage."""
     candidates = tuple(ordered)
-    indices = list(range(len(candidates)))
-    selection_size = min(MAX_SELECTED, len(indices))
-    required = {_norm(value) for value in request.library_hints}
+    indices = range(len(candidates))
+    required = frozenset(map(_norm, request.library_hints))
     if len(required) < 2 or len(indices) <= MAX_SELECTED:
-        return indices
+        return list(indices)
 
-    coverage = []
-    for candidate in candidates:
-        aliases = {_norm(candidate.name)}
-        if candidate.library_name:
-            aliases.add(_norm(candidate.library_name))
-        coverage.append(required & aliases)
-    max_coverage = len(set().union(*coverage))
-    if max_coverage < 2:
-        return indices
+    coverage = [
+        required.intersection((_norm(item.name), _norm(item.library_name or "")))
+        for item in candidates
+    ]
 
-    best = tuple(indices[:selection_size])
-    best_count = len(set().union(*(coverage[index] for index in best)))
-    if best_count == max_coverage:
-        return indices
-    # Equal coverage is interchangeable for this objective. A subset uses
-    # at most selection_size of any signature, so any later equivalent
-    # position can be exchanged for an earlier unused one and improve the
-    # original lexicographic tie-break. Keep all indices in the returned tail.
-    signature_count: dict[frozenset[str], int] = {}
-    search_indices = []
-    for index, covered in enumerate(coverage):
-        signature = frozenset(covered)
-        count = signature_count.get(signature, 0)
-        if count < selection_size:
-            signature_count[signature] = count + 1
-            search_indices.append(index)
+    def score(subset):
+        return len(set().union(*(coverage[i] for i in subset)))
 
-    for subset in combinations(search_indices, selection_size):
-        count = len(set().union(*(coverage[index] for index in subset)))
-        if count > best_count:
+    best = tuple(indices[:MAX_SELECTED])
+    best_count = score(best)
+    # The row union and the largest per-row contributions both upper-bound
+    # coverage. Only an actual subset reaching that bound can stop the search.
+    upper = min(score(indices), sum(sorted(map(len, coverage), reverse=True)[:MAX_SELECTED]))
+    if upper < 2 or best_count == upper:
+        return list(indices)
+
+    # At most MAX_SELECTED equivalent rows can contribute. Retain their
+    # earliest positions in the search, but keep the entire output tail.
+    counts: dict[frozenset[str], int] = {}
+    search = []
+    for i, signature in enumerate(coverage):
+        if (count := counts.get(signature, 0)) < MAX_SELECTED:
+            counts[signature] = count + 1
+            search.append(i)
+    for subset in combinations(search, MAX_SELECTED):
+        if (count := score(subset)) > best_count:
             best, best_count = subset, count
-            # Global union is an upper bound. Combinations are lexicographic,
-            # so the first subset reaching it also wins the existing tie.
-            if count == max_coverage:
+            if count == upper:
                 break
-
-    retained = set(best)
-    return [*best, *(index for index in indices if index not in retained)]
+    return [*best, *(i for i in indices if i not in best)]
 
 
 def select_coding_knowledge(
