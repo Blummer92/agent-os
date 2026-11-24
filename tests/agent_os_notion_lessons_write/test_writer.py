@@ -561,6 +561,79 @@ class DuplicateEvidenceReviewTests(unittest.TestCase):
         self.assertNotIn("write", client.calls)
 
 
+
+class DirectDuplicateReuseTests(unittest.TestCase):
+    """Identical lesson => follow canonical ID, no Notion mutation or fake use."""
+
+    def _candidate(self, *, changed_guidance=False, extra_source=False):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        reviewed = dict(lesson_for(CONTINUATION_CONSUMER_REQUEST_ID))
+        existing = page(metadata={
+            "Area": reviewed["Area"],
+            "Learning Type": reviewed["Learning Type"],
+            "Source Link": reviewed["Source Link"],
+        })
+        existing["properties"]["Lesson ID"]["unique_id"]["number"] = 82
+        for field in NARRATIVE_TYPES:
+            value = reviewed[field]
+            if field == "Lesson Learned":
+                value = "Native execution hosts must enforce continuation; emitted continuation metadata alone is insufficient"
+            if field == "Guardrail" and changed_guidance:
+                value = "Opposite guardrail requiring review"
+            existing["properties"][field] = _prop(field, value)
+        if extra_source:
+            existing["properties"]["Source Link"] = _prop(
+                "Source Link", "https://github.com/Blummer92/agent-os/issues/3485"
+            )
+        existing["properties"]["Supporting Source Links"] = {
+            "type": "rich_text", "rich_text": [],
+        }
+        client = Client(existing)
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
+        return client, CONTINUATION_CONSUMER_REQUEST_ID
+
+    def test_exact_substance_and_evidence_reuses_ll82_without_write(self):
+        client, request_id = self._candidate()
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("unchanged", "direct-duplicate-reused"))
+        self.assertEqual(result["lesson_id"], "LL-82")
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertTrue(result["readback_verified"])
+        self.assertTrue(result["follow_existing_lesson"])
+        self.assertFalse(result["reuse_log"]["counted_as_applied"])
+        self.assertTrue(result["reuse_log"]["application_receipt_required"])
+        self.assertNotIn("write", client.calls)
+
+    def test_changed_guardrail_cannot_be_auto_reused(self):
+        client, request_id = self._candidate(changed_guidance=True)
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "possible-semantic-duplicate"))
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+    def test_new_source_cannot_be_mistaken_for_direct_duplicate(self):
+        client, request_id = self._candidate(extra_source=True)
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["duplicate_evidence_reviews"][0]["source_comparison"], "complete")
+        self.assertEqual(result["duplicate_evidence_reviews"][0]["new_source_refs_to_review"],
+                         ["https://github.com/Blummer92/agent-os/issues/3690"])
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+    def test_reuse_refuses_changed_revision_between_scan_and_readback(self):
+        client, request_id = self._candidate()
+        client.stale = True
+        client.reads = 1
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("conflict", "duplicate-changed-before-reuse"))
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+
 class RunnerTests(unittest.TestCase):
     def test_admission_has_no_provider_import_or_construction(self):
         env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],
