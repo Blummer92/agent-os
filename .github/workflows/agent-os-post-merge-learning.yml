@@ -1,6 +1,11 @@
 name: Agent OS Post-Merge Learning Review
 
 on:
+  pull_request:
+    paths:
+      - "scripts/agent_os_post_merge_learning/**"
+      - "tests/agent_os_post_merge_learning/**"
+      - ".github/workflows/agent-os-post-merge-learning.yml"
   workflow_run:
     workflows: ["Agent OS Validation Gate"]
     types: [completed]
@@ -25,6 +30,22 @@ permissions:
   checks: read
 
 jobs:
+  premerge_tests:
+    name: Post-merge learning positive and negative tests
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Run exact PR revision regression suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
+        run: python -m unittest discover -s tests/agent_os_post_merge_learning -p 'test_*.py' -v
+
   review:
     name: Post-merge learning evidence (read only)
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
