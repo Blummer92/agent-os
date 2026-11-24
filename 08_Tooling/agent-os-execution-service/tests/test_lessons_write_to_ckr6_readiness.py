@@ -74,6 +74,7 @@ class FakeNotion:
         self.number = new_lesson_number
         self.sent = []
         self.create_reservations = []
+        self.create_candidate_scans = 0
         schema = {name: {"type": kind} for name, kind in
                   {**catalog.WRITABLE_TYPES, "Lesson ID": "unique_id", "Status": "select"}.items()}
         for name, options in OPTIONS.items():
@@ -95,6 +96,11 @@ class FakeNotion:
 
     def find_exact(self, title):
         return {"results": [deepcopy(self.page)] if self.page else [], "has_more": False}
+
+    def find_create_candidates(self):
+        self.create_candidate_scans += 1
+        return {"results": [deepcopy(self.page)] if self.page else [],
+                "has_more": False, "next_cursor": None}
 
     def find_lesson(self, number):
         return {"results": [deepcopy(self.page)] if self.page else [], "has_more": False}
@@ -148,6 +154,7 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
 
     assert result["status"] == "persisted" and result["readback_verified"] is True
     assert notion.create_reservations == [CREATE_WITH_METADATA]
+    assert notion.create_candidate_scans == 2
     assert result["create_reservation_acquired"] is True
     assert result["lesson_id"] == "LL-101"
     assert result["activation_prerequisites"] == {
@@ -172,6 +179,7 @@ def test_reviewed_create_with_metadata_becomes_ckr6_retrievable_only_after_owner
     rerun = execute(AdmittedRequest(101, issue_number=3417, request_id=CREATE_WITH_METADATA), notion)
     assert rerun["status"] == "unchanged"
     assert notion.create_reservations == [CREATE_WITH_METADATA]
+    assert notion.create_candidate_scans == 2
     assert rerun["activation_prerequisites"] == {
         "required_fields_present": True, "missing_owner_activation": [], "missing_reviewed_metadata": [],
     }
@@ -183,6 +191,7 @@ def test_reviewed_create_without_area_is_reported_unretrievable_and_owner_activa
 
     assert result["status"] == "persisted"
     assert notion.create_reservations == [CREATE_WITHOUT_METADATA]
+    assert notion.create_candidate_scans == 2
     assert result["create_reservation_acquired"] is True
     assert result["activation_prerequisites"] == {
         "required_fields_present": False,
@@ -205,6 +214,7 @@ def test_reviewed_metadata_update_of_existing_lesson_reaches_retrieval_after_own
 
     assert result["status"] == "persisted" and result["lesson_id"] == "LL-93"
     assert notion.create_reservations == []  # updates never claim a create key
+    assert notion.create_candidate_scans == 0
     assert result["activation_prerequisites"]["missing_reviewed_metadata"] == []
     assert result["activation_prerequisites"]["missing_owner_activation"] == ["Status", "Surface Before Work?"]
     assert set(notion.sent[0]) == set(catalog.lesson_for(UPDATE_METADATA))

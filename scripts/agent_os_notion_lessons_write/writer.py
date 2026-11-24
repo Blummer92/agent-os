@@ -203,23 +203,32 @@ def _find_semantic_duplicates(client, source_id: str, lesson: Mapping) -> tuple[
     raw Notion content never enters public receipts.
     """
     result = client.find_create_candidates()
-    if not isinstance(result, Mapping) or result.get("has_more") is not False:
+    if (
+        not isinstance(result, Mapping)
+        or result.get("has_more") is not False
+        or result.get("next_cursor") is not None
+    ):
         raise WriteBlocked("incomplete-duplicate-scan")
     rows = result.get("results")
     if type(rows) is not list or len(rows) > _MAX_DUPLICATE_ROWS:
         raise WriteBlocked("incomplete-duplicate-scan")
     matches = set()
     seen_page_ids = set()
+    seen_lesson_ids = set()
     for row in rows:
         page_id = _page(row, source_id)
-        if page_id in seen_page_ids:
+        row_title = _values(row, ("Lesson Learned",))["Lesson Learned"]
+        lesson_id = _lesson_id(row)
+        if (
+            page_id in seen_page_ids
+            or lesson_id is None
+            or LESSON_ID.fullmatch(lesson_id) is None
+            or lesson_id in seen_lesson_ids
+        ):
             raise WriteBlocked("ambiguous-duplicate-scan")
         seen_page_ids.add(page_id)
-        row_title = _values(row, ("Lesson Learned",))["Lesson Learned"]
+        seen_lesson_ids.add(lesson_id)
         if _possible_same_lesson(lesson["Lesson Learned"], row_title):
-            lesson_id = _lesson_id(row)
-            if lesson_id is None or lesson_id in matches:
-                raise WriteBlocked("ambiguous-duplicate-scan")
             matches.add(lesson_id)
     if len(matches) > 10:
         raise WriteBlocked("ambiguous-duplicate-scan")
