@@ -67,6 +67,15 @@ def test_exact_mechanism_match_requires_lesson_owned_title_guidance_and_controll
     assert result.canonical_github_refs == SOURCE
 
 
+def test_affirmative_readback_instrument_binds_to_persisted_state():
+    lesson = candidate(use_when=(
+        "After a Notion write, confirm the saved revision with an independent read-back.",
+    ))
+    result = select_coding_knowledge(request(), (lesson,))
+    assert result.selected[0].reason_codes == ("notion-writer-readback-text-match",)
+    assert result.authority_created is False
+
+
 @pytest.mark.parametrize("hints", [
     (), ("Notion writer",), ("persistence readback",),
     ("Notion writer", "persistence readback"),
@@ -88,6 +97,21 @@ def test_partial_or_generic_request_hints_cannot_select(hints):
     {"use_when": ("A readback of a GitHub workflow proves the workflow finished.",)},
     {"use_when": ("A Notion workspace can display a writer's notes.",)},
     {"use_when": ("After a Notion write, trust the immediate response.",)},
+    {"use_when": (
+        "After a Notion write, the HTTP success response proves persistence; "
+        "independent readback verifies display formatting only.",
+    )},
+    {"use_when": (
+        "After a Notion write, use independent readback to verify display formatting.",
+    )},
+    {"use_when": (
+        "After a Notion write, perform an independent readback.",
+        "Use the status response to verify the persisted revision.",
+    )},
+    {"use_when": (
+        "After a Notion write, verify the persisted revision with the HTTP receipt; "
+        "perform an independent readback to confirm rendering.",
+    )},
     {"use_when": ("Unrelated Notion writer readback instructions.",)},
     {"use_when": ("After a Notion write, never use readback to verify persisted state.",)},
     {"use_when": ("After a Notion write, do not use readback to verify persisted state.",)},

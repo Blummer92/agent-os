@@ -586,14 +586,25 @@ def _match_candidate(
             and whole(negation, avoidance)
         )
 
+        readback = r"(?:an? )?independent read[ -]?back"
+        persisted_state = r"(?:the )?(?:persisted|saved) (?:state|revision|changes)"
+        # Require an explicit verification purpose or instrument in one
+        # guidance element, not a bag of related words across statements.
+        confirms_persistence = any(
+            whole(
+                rf"(?:use|perform) {readback} to (?:verify|confirm) {persisted_state}"
+                rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}",
+                item.casefold(),
+            )
+            for item in candidate.use_when
+        )
+
         if (
             whole("notion", title)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", title)
             and whole("notion", guidance)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
-            and whole("readback|read.back|verif(?:y|ied|ication)", guidance)
-            # Reject ambiguous/negative guidance, rather than promote a
-            # lexical mention of readback to affirmative advice.
+            and confirms_persistence
             and not whole(negation, title + " " + guidance)
             and not readback_warning
         ):
