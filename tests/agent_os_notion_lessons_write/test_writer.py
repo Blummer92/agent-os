@@ -634,6 +634,96 @@ class DirectDuplicateReuseTests(unittest.TestCase):
         self.assertNotIn("write", client.calls)
 
 
+    def _exact_candidate(self):
+        client, request_id = self._candidate()
+        reviewed = lesson_for(request_id)
+        client.page["properties"]["Lesson Learned"] = _prop(
+            "Lesson Learned", reviewed["Lesson Learned"])
+        client.rows = [deepcopy(client.page)]
+        client.find_exact = Client.find_exact.__get__(client)
+        return client, request_id
+
+    def test_exact_title_refuses_revision_drift_before_reuse(self):
+        client, request_id = self._exact_candidate()
+        client.stale = True
+        client.reads = 1
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("conflict", "duplicate-changed-before-reuse"))
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+    def test_exact_title_refuses_disagreement_between_query_and_scan(self):
+        client, request_id = self._exact_candidate()
+        exact_row = deepcopy(client.page)
+        client.page["last_edited_time"] = "2026-10-06T21:00:00.000Z"
+        client.rows = [deepcopy(client.page)]
+        client.find_exact = lambda _title: {"results": [exact_row], "has_more": False}
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("conflict", "duplicate-changed-before-reuse"))
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("get", client.calls)
+        self.assertNotIn("write", client.calls)
+
+    def test_exact_title_refuses_missing_or_noncanonical_lesson_id(self):
+        for number in (None, 0, -1, 10**9):
+            with self.subTest(number=number):
+                client, request_id = self._exact_candidate()
+                identity = client.page["properties"]["Lesson ID"]["unique_id"]
+                identity["number"] = number
+                client.rows = [deepcopy(client.page)]
+                result = execute(AdmittedRequest(100, request_id=request_id), client)
+                self.assertNotIn("follow_existing_lesson", result)
+                self.assertNotIn("reuse_log", result)
+                self.assertNotIn("write", client.calls)
+
+    def test_exact_title_does_not_hide_second_potential_duplicate(self):
+        client, request_id = self._exact_candidate()
+        second, _ = self._candidate()
+        sibling = second.page
+        sibling["id"] = "00000000-0000-0000-0000-000000000003"
+        sibling["properties"]["Lesson ID"]["unique_id"]["number"] = 83
+        exact_query = client.find_exact
+        client.find_exact = lambda title: {
+            **exact_query(title), "results": [deepcopy(client.page)],
+        }
+        client.rows.append(sibling)
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "possible-semantic-duplicate"))
+        self.assertEqual(result["duplicate_lesson_ids"], ["LL-82", "LL-83"])
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+    def test_reviewed_primary_evidence_must_not_be_confused_with_support(self):
+        client, request_id = self._candidate(extra_source=True)
+        approved_primary = lesson_for(request_id)["Source Link"]
+        client.page["properties"]["Supporting Source Links"] = _prop(
+            "Supporting Source Links", approved_primary)
+        client.rows = [deepcopy(client.page)]
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "possible-semantic-duplicate"))
+        self.assertNotIn("reuse_log", result)
+        self.assertNotIn("write", client.calls)
+
+    def test_stable_exact_title_has_one_readback_and_no_application_or_reservation(self):
+        client, request_id = self._exact_candidate()
+        client.reserve_create = lambda _request_id: client.calls.append("reservation")
+        result = execute(AdmittedRequest(100, request_id=request_id), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("unchanged", "direct-duplicate-reused"))
+        self.assertEqual(result["reuse_log"], {
+            "event": "direct-duplicate-encountered", "lesson_id": "LL-82",
+            "source_revision": REVISION, "counted_as_applied": False,
+            "application_receipt_required": True,
+        })
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertEqual(client.calls.count("get"), 1)
+        self.assertNotIn("reservation", client.calls)
+        self.assertNotIn("write", client.calls)
+
 class RunnerTests(unittest.TestCase):
     def test_admission_has_no_provider_import_or_construction(self):
         env = {"GITHUB_EVENT_NAME": CONTEXT["event_name"], "GITHUB_REF": CONTEXT["ref"],

@@ -14,7 +14,7 @@ from collections.abc import Mapping
 import re
 import unicodedata
 from .admission import AdmittedRequest, WriteBlocked, notion_id
-from .catalog import LESSON_ID, MAX_SUPPORTING_REFS, NARRATIVE_TYPES, PROTECTED_FIELDS, REQUEST_ID, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
+from .catalog import LESSON_ID, MAX_SUPPORTING_REFS, NARRATIVE_TYPES, PROTECTED_FIELDS, REQUEST_ID, SOURCE_LINK, SUPPORTING_SOURCE_LINKS, WRITABLE_TYPES, entry_for, lesson_for
 
 
 def properties(request_id: str = REQUEST_ID) -> dict:
@@ -282,17 +282,16 @@ def _direct_duplicate(row: Mapping, lesson: Mapping) -> bool:
                 continue
             if _values(row, (name,))[name] != lesson[name]:
                 return False
-        # A matching title cannot hide changes to lesson guidance.
-        for name in ("What Happened", "What To Do Next Time", "Guardrail"):
-            if _values(row, (name,))[name] != lesson[name]:
-                return False
         current = _values(row, ("Source Link", SUPPORTING_SOURCE_LINKS))
-        refs = set(current[SUPPORTING_SOURCE_LINKS])
-        if current["Source Link"]:
-            refs.add(current["Source Link"])
-        if "Source Link" in lesson and lesson["Source Link"] not in refs:
+        primary = current["Source Link"]
+        if type(primary) is not str or SOURCE_LINK.fullmatch(primary) is None:
             return False
-        if any(ref not in refs for ref in lesson.get(SUPPORTING_SOURCE_LINKS, ())):
+        if "Source Link" in lesson and lesson["Source Link"] != primary:
+            return False
+        refs = set(current[SUPPORTING_SOURCE_LINKS])
+        if (len(current[SUPPORTING_SOURCE_LINKS]) > MAX_SUPPORTING_REFS
+                or any(ref not in refs and ref != primary
+                       for ref in lesson.get(SUPPORTING_SOURCE_LINKS, ()))):
             return False
         return True
     except (WriteBlocked, TypeError, ValueError, KeyError):
@@ -310,11 +309,12 @@ def _reuse_duplicate(client, source_id: str, row: Mapping, lesson: Mapping,
     page_id = _page(row, source_id)
     current = client.get_page(page_id)
     _page(current, source_id, page_id)
+    lesson_id = _lesson_id(current)
     if (_page_state(current) != _page_state(row)
-            or _lesson_id(current) is None or not _direct_duplicate(current, lesson)):
+            or lesson_id is None or LESSON_ID.fullmatch(lesson_id) is None
+            or not _direct_duplicate(current, lesson)):
         result.update(status="conflict", reason_code="duplicate-changed-before-reuse")
         return result
-    lesson_id = _lesson_id(current)
     revision = current["last_edited_time"]
     result.update(
         status="unchanged", reason_code="direct-duplicate-reused",
@@ -501,13 +501,21 @@ def execute(request: AdmittedRequest, client) -> dict:
                 raise WriteBlocked("update-target-missing")
         else:
             existing = _find_title(client, source_id, lesson)
-            if existing is None:
+            # A title hit rules out create, but it is not sufficient proof
+            # that the complete bounded scan observed one stable duplicate.
+            if existing is None or _direct_duplicate(existing, lesson):
                 possible, reviews, direct_row = _find_semantic_duplicates(client, source_id, lesson)
                 if direct_row is not None:
+                    if existing is not None and _page_state(direct_row) != _page_state(existing):
+                        result.update(status="conflict", reason_code="duplicate-changed-before-reuse")
+                        return result
                     return _reuse_duplicate(client, source_id, direct_row, lesson, result)
                 if possible:
                     result.update(status="blocked", reason_code="possible-semantic-duplicate",
                                   duplicate_lesson_ids=list(possible), duplicate_evidence_reviews=reviews)
+                    return result
+                if existing is not None:
+                    result.update(status="conflict", reason_code="duplicate-changed-before-reuse")
                     return result
         page_id = None
         if existing is not None:
@@ -520,20 +528,6 @@ def execute(request: AdmittedRequest, client) -> dict:
                           revision=existing["last_edited_time"])
             added_supporting_refs = _check_evidence_append(existing, lesson) if target is not None else None
             if _values(existing, lesson) == lesson:
-                if target is None and _direct_duplicate(existing, lesson):
-                    result.update(
-                        status="unchanged", reason_code="direct-duplicate-reused",
-                        follow_existing_lesson=True,
-                        reuse_log={
-                            "event": "direct-duplicate-encountered",
-                            "lesson_id": _lesson_id(existing),
-                            "source_revision": existing["last_edited_time"],
-                            "counted_as_applied": False,
-                            "application_receipt_required": True,
-                        },
-                        readback_verified=True,
-                        activation_prerequisites=activation_prerequisites(existing))
-                    return result
                 result.update(status="unchanged", reason_code="identical-canonical-content", readback_verified=True,
                               activation_prerequisites=activation_prerequisites(existing))
                 return result
