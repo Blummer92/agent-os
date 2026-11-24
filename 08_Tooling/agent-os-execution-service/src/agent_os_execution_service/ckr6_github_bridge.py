@@ -452,6 +452,7 @@ _SELECTION_BASIS_VALUES = frozenset({
     "title-echo",
     "exact-library",
     "rule-ckr6-mutation-boundary",
+    "rule-library-tie-coverage",
     "generic-unique",
     "generic-tie-lexical-cut",
     "not-evaluated",
