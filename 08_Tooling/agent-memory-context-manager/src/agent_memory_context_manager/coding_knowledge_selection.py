@@ -484,6 +484,37 @@ def _deduplicate(
     return tuple(by_id[key] for key in sorted(by_id, key=lambda key: (key.casefold(), key))), False
 
 
+# A finite, affirmative mechanism signature. Neither caller prose nor a
+# lesson ID establishes relevance. In particular, do not search the Guardrail
+# (the second Notion use_when entry) for positive evidence.
+_LIBRARY_TIE_HINTS = frozenset({"lesson-selection", "library coverage"})
+_LIBRARY_TIE_REASON = "library-tie-coverage-text-match"
+_LIBRARY_TIE_TITLE = re.compile(
+    r"(?:preserve|maintain) (?:explicitly )?requested library coverage "
+    r"within lesson[- ]ranking ties"
+    r"|(?:preserve|maintain) coverage (?:of|for|across) (?:explicitly )?requested libraries "
+    r"within lesson[- ]ranking ties"
+)
+_LIBRARY_TIE_GUIDANCE = re.compile(
+    r"within (?:a|the same) relevance bucket, (?:preserve|maintain) "
+    r"(?:the widest )?coverage (?:of|across) (?:explicitly )?requested libraries "
+    r"before (?:truncating|cutting the shortlist)\.?"
+    r"(?: keep the existing deterministic order when coverage is equal\.)?"
+)
+
+
+def _library_tie_guidance(candidate: CodingKnowledgeCandidate) -> bool:
+    return (
+        candidate.source_system == "notion-lessons-learned"
+        and _norm(candidate.ecosystem) == "agent-os"
+        and bool(candidate.use_when)
+        and _LIBRARY_TIE_TITLE.fullmatch(" ".join(candidate.name.casefold().split())) is not None
+        and _LIBRARY_TIE_GUIDANCE.fullmatch(
+            " ".join(candidate.use_when[0].casefold().split())
+        ) is not None
+    )
+
+
 def _match_candidate(
     request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
@@ -513,11 +544,20 @@ def _match_candidate(
         if path_match:
             reasons.append("target-path-match")
         return 3, tuple(reasons)
+    library_tie_request = "agent-os" in ecosystems and _LIBRARY_TIE_HINTS <= capability_hints
+    if library_tie_request or "testing" in capability_overlap:
+        library_tie_lesson = _library_tie_guidance(candidate)
+        if library_tie_request and library_tie_lesson:
+            return 2, (_LIBRARY_TIE_REASON,)
+        if library_tie_request or library_tie_lesson:
+            # Testing alone neither answers this explicit mechanism request nor
+            # makes this mechanism-specific guidance applicable elsewhere.
+            capability_overlap.discard("testing")
+
     # Explicit CKR6 mutation-boundary requests may match a lesson's verified
     # title/guidance even when Notion's controlled vocabulary is generic.
     # Require BOTH distinctive tokens, as whole words, in the lesson-owned
     # text. This is relevance only, never eligibility or authorization.
-    import re
     ci_request = "ckr6 mutation boundary" in capability_hints
     if ci_request:
         lesson_text = " ".join((candidate.name, *candidate.use_when)).casefold()
