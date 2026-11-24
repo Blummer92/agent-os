@@ -650,7 +650,7 @@ LESSONS = MappingProxyType({
     "ckr2-explicit-library-tie-coverage": MappingProxyType({
         "target_lesson_id": None,
         "properties": MappingProxyType({
-            "Guardrail": "Never promote a lower relevance bucket or bypass provenance to gain coverage. Keep the existing candidate and selection limits.",
+            "Guardrail": "Never promote a lower relevance bucket or bypass provenance to gain coverage. Keep the existing candidate and selection limits. If reordering changes which lesson IDs make the cutoff, replay the original shortlist in its original order. Keep any prior refusal unless missing required-library coverage was the only reason.",
             "Learning Type": "Testing lesson",
             "Lesson Learned": "Preserve explicitly requested library coverage within lesson-ranking ties",
             "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
