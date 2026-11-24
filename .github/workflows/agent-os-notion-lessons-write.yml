@@ -63,6 +63,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP']) / 'agent-os-lessons-write'
           target = root / 'result.json'
@@ -83,16 +84,49 @@ jobs:
               verification = json.loads(verification_path.read_text()) if verification_path.exists() else {}
           except (OSError, ValueError):
               verification = {}
+          result = result if isinstance(result, dict) else {}
+          verification = verification if isinstance(verification, dict) else {}
+
+          def bounded_string(value, pattern):
+              return value if type(value) is str and len(value) <= 96 and re.fullmatch(pattern, value) else None
+
+          lesson_pattern = r'LL-[1-9][0-9]{0,8}'
+          source_pattern = r'https://github\.com/Blummer92/agent-os/(?:issues|pull)/[1-9][0-9]{0,6}'
+
+          def public_sources(values):
+              if type(values) is not list or len(values) > 6:
+                  return []
+              return list(dict.fromkeys(
+                  ref for value in values if (ref := bounded_string(value, source_pattern))
+              ))
+
+          lesson = bounded_string(result.get('lesson_id'), lesson_pattern)
+          revision = bounded_string(result.get('revision'), r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z')
+          status = bounded_string(result.get('status'), r'[a-z][a-z0-9-]{0,63}') or 'unavailable'
+          reason = bounded_string(result.get('reason_code'), r'[a-z][a-z0-9-]{0,63}')
+          attempts = result.get('write_attempts')
+          attempts = attempts if type(attempts) is int and attempts in (0, 1) else None
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-              summary.write('Agent OS Lessons Learned: ' + result.get('status', 'unavailable') + '\n\n')
-              for key in ('reason_code', 'recovery_reason', 'write_attempts',
-                          'readback_verified', 'page_id', 'lesson_id', 'revision',
-                          'create_reservation_acquired', 'create_receipt_recovered',
-                          'update_receipt_recovered'):
-                  summary.write(f'{key}: `{result.get(key)}`\n\n')
-              summary.write('independent_state_verification: `' + verification.get('status', 'not-run') + '`\n\n')
+              summary.write('Agent OS Lessons Learned: ' + status + '\n\n')
+              fields = {
+                  'reason_code': reason,
+                  'recovery_reason': bounded_string(result.get('recovery_reason'), r'[a-z][a-z0-9-]{0,63}'),
+                  'write_attempts': attempts,
+                  'page_id': bounded_string(result.get('page_id'), r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'),
+                  'lesson_id': lesson,
+                  'revision': revision,
+              }
+              for key in ('readback_verified', 'create_reservation_acquired',
+                          'create_receipt_recovered', 'update_receipt_recovered'):
+                  value = result.get(key)
+                  fields[key] = value if type(value) is bool else None
+              for key, value in fields.items():
+                  summary.write(f'{key}: `{value}`\n\n')
+              verification_status = bounded_string(verification.get('status'), r'[a-z][a-z0-9-]{0,63}') or 'not-run'
+              verification_reason = bounded_string(verification.get('reason_code'), r'[a-z][a-z0-9-]{0,63}') or 'not-run'
+              summary.write('independent_state_verification: `' + verification_status + '`\n\n')
               summary.write('persisted_state_verified: `' + str(verification.get('persisted_state_verified') is True) + '`\n\n')
-              summary.write('independent_reason_code: `' + verification.get('reason_code', 'not-run') + '`\n\n')
+              summary.write('independent_reason_code: `' + verification_reason + '`\n\n')
               summary.write('write_causality_established: `' + str(
                   verification.get('write_causality_established') is True
               ) + '`\n\n')
@@ -100,6 +134,63 @@ jobs:
                   summary.write('Operator action: inspect the canonical Notion destination '
                                 'before submitting any new create request. '
                                 'Never treat this outcome as authorization to retry.\n\n')
+              # Only finite IDs, reviewed repository references, and counts;
+              # never provider content, arbitrary links, or authority.
+              candidates = result.get('duplicate_lesson_ids')
+              reviews = result.get('duplicate_evidence_reviews')
+              reviews = reviews if type(reviews) is list and len(reviews) <= 10 else []
+              title_conflict = status == 'conflict' and reason in (
+                  'existing-lesson-requires-reviewed-update-entry', 'lesson-appeared-before-create'
+              )
+              if ((title_conflict or (status == 'blocked' and reason == 'possible-semantic-duplicate'))
+                  and attempts == 0
+                  and type(candidates) is list and 0 < len(candidates) <= 10
+                  and all(bounded_string(value, lesson_pattern) for value in candidates)
+                  and len(set(candidates)) == len(candidates)):
+                  summary.write(f'duplicate_candidates_for_review: `{candidates}`\n\n')
+                  for candidate in candidates:
+                      records = [review for review in reviews if type(review) is dict
+                                 and review.get('lesson_id') == candidate]
+                      if len(records) == 1:
+                          review = records[0]
+                          primary = review.get('primary_source_comparison')
+                          if primary in ('unavailable', 'not-proposed', 'same', 'different'):
+                              summary.write(f'{candidate} primary_source_comparison: `{primary}`\n\n')
+                          refs = public_sources(review.get('candidate_source_refs_to_verify'))
+                          if refs:
+                              summary.write(f'{candidate} candidate_sources_to_verify: `{refs}`\n\n')
+                              if review.get('source_comparison') == 'complete':
+                                  new_refs = public_sources(review.get('new_source_refs_to_review'))
+                                  delta = [ref for ref in new_refs if ref in refs]
+                                  if delta:
+                                      summary.write(f'{candidate} candidate_new_repository_sources_to_verify: `{delta}`\n\n')
+              reuse = result.get('reuse_log')
+              if (status == 'unchanged' and reason == 'direct-duplicate-reused' and attempts == 0
+                  and result.get('readback_verified') is True and result.get('follow_existing_lesson') is True
+                  and lesson is not None and revision is not None and type(reuse) is dict
+                  and reuse.get('event') == 'direct-duplicate-encountered'
+                  and reuse.get('lesson_id') == lesson and reuse.get('source_revision') == revision
+                  and reuse.get('counted_as_applied') is False
+                  and reuse.get('application_receipt_required') is True):
+                  summary.write(f'direct_duplicate_encountered: `{lesson}`\n\n')
+                  summary.write('duplicate_counted_as_applied: `False`\n\n')
+                  summary.write('separate_application_receipt_required: `True`\n\n')
+              update = result.get('evidence_update')
+              if (status == 'persisted' and reason == 'exact-canonical-readback-confirmed' and attempts == 1
+                  and result.get('readback_verified') is True and lesson is not None and type(update) is dict
+                  and update.get('target_lesson_id') == lesson and update.get('primary_source_preserved') is True
+                  and update.get('independent_verification_required') is True
+                  and verification_status == 'verified-current-state'
+                  and verification.get('persisted_state_verified') is True):
+                  links = update.get('added_supporting_source_links')
+                  if (type(links) is list and len(links) <= 5
+                      and all(type(link) is str and 0 < len(link) <= 512 for link in links)
+                      and len(set(links)) == len(links)):
+                      summary.write(f'supporting_sources_added: `{len(links)}`\n\n')
+                      summary.write('primary_source_preserved: `True`\n\n')
+                      refs = public_sources(links)
+                      if refs:
+                          summary.write(f'added_repository_supporting_sources: `{refs}`\n\n')
               prerequisites = result.get('activation_prerequisites')
               if isinstance(prerequisites, dict):
                   known = ('Area', 'Learning Type', 'Source Link', 'Status', 'Surface Before Work?')
