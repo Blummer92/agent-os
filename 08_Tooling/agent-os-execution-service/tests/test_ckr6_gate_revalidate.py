@@ -174,23 +174,6 @@ def test_unverified_run_causes_no_post(monkeypatch):
     assert writes == []
 
 
-def test_live_workflow_has_no_status_creation_or_merge_rights():
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[3]
-    text = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
-    assert "issue_comment:" in text
-    assert "actions: write" in text
-    assert "persist-credentials: false" in text
-    assert "statuses: write" not in text
-    assert "checks: write" not in text
-    assert "contents: write" not in text
-    assert "pull-requests: write" not in text
-    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in text
-    assert "actions/checkout@v7" not in text
-    assert "actions/setup-python@v7" not in text
-    assert 'python3 -m venv "$RUNNER_TEMP/ckr6-venv"' in text
-
-
 # #3418 live 2026-11-14: learning requests must not census three legacy Draft PRs.
 def _event_for(data, *, issue_number=3418, pr_thread=False):
     import json
@@ -509,22 +492,24 @@ def test_postback_immediate_completion_never_sleeps(monkeypatch):
     assert not any(x[0] == "POST" for x in calls)
 
 
-def test_producer_postback_job_separates_actions_write_from_notion_secret():
+def test_only_producer_postback_revalidates_under_bounded_permissions():
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
+    assert not (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").exists()
     workflow = (root / ".github/workflows/agent-os-ckr6.yml").read_text()
-    old = (root / ".github/workflows/agent-os-ckr6-comment-revalidation.yml").read_text()
-    new_job = workflow.split("  revalidate-after-postback:", 1)[1].split("  report-failure:", 1)[0]
-    assert "needs: [classify, execute]" in new_job
-    assert "actions: write" in new_job
-    assert "--postback-complete" in new_job
-    assert "NOTION_TOKEN" not in new_job
-    assert "contents: write" not in new_job
-    assert "pull-requests: write" not in new_job
-    assert "github.event.comment.user.id == 32861845" not in old
-    assert "if: ${{ false }}" in old
-    assert "github.event.comment.user.id == 41898282" not in old
-
+    job = workflow.split("  revalidate-after-postback:", 1)[1].split("  report-failure:", 1)[0]
+    assert "needs: [classify, execute]" in job
+    assert "actions: write" in job
+    assert "persist-credentials: false" in job
+    assert "ref: ${{ github.event.repository.default_branch }}" in job
+    assert "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" in job
+    assert 'python3 -m venv "$RUNNER_TEMP/ckr6-revalidation-venv"' in job
+    assert "ckr6_gate_revalidate --postback-complete" in job
+    assert "NOTION_TOKEN" not in job
+    assert all(
+        f"{permission}: write" not in job
+        for permission in ("statuses", "checks", "contents", "pull-requests")
+    )
 
 
 def test_postback_comment_population_boundary_100_fails_closed_99_is_complete(monkeypatch):
