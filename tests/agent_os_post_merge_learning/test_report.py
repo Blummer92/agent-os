@@ -89,13 +89,6 @@ class TestLearning(unittest.TestCase):
         self.assertEqual(result["commit_count"], 202)
         self.assertIn("/pulls/4101/commits?per_page=100&page=3", reader.requests)
 
-    def test_negative_check_page_incomplete(self):
-        reader = Reader([commit(1, "fix(api): repair")])
-        original = reader.get
-        reader.get = lambda p: {"total_count": 2, "check_runs": []} if "/check-runs?filter=all&per_page=100&page=" in p else original(p)
-        with self.assertRaisesRegex(report.EvidenceError, "check-run-evidence-incomplete"):
-            report.build_report(reader, SHA, 4101, 100)
-
     def test_negative_budget(self):
         with self.assertRaisesRegex(report.EvidenceError, "commit-count-out-of-bounds"):
             report.build_report(Reader([], metadata=pr(251)), SHA, 4101, 100)
@@ -140,48 +133,21 @@ class TestLearning(unittest.TestCase):
         with self.assertRaisesRegex(report.EvidenceError, "validation-run-evidence-missing"):
             report.build_report(reader, SHA, 4101, 100)
 
-    def test_discussion_truncation_is_visible(self):
-        reader = Reader([commit(1, "feat(api): normal")])
-        original = reader.get
-        def get(path):
-            if "/reviews?" in path or "/comments?" in path:
-                page = int(path.rsplit("page=", 1)[1])
-                return [{}] * (3 if page == 3 else 100)
-            return original(path)
-        reader.get = get
-        result = report.build_report(reader, SHA, 4101, None)
-        evidence = result["supporting_evidence"]
-        self.assertEqual(evidence["review_count_observed"], 200)
-        self.assertTrue(evidence["review_history_truncated"])
-        self.assertTrue(evidence["issue_comment_history_truncated"])
-        self.assertEqual(result["status"], "review-needed")
-
-    def test_failed_check_links_missing_is_not_truncation(self):
+    def test_no_historical_ci_or_discussion_fetch(self):
         reader = Reader([commit(1, "fix(api): repair")])
-        original = reader.get
-        def get(path):
-            if "/check-runs?filter=all&per_page=100&page=" in path:
-                return {"total_count": 2, "check_runs": [
-                    {"conclusion": "failure", "html_url": None},
-                    {"conclusion": "failure", "html_url": "https://example.org/other"}]}
-            return original(path)
-        reader.get = get
-        evidence = report.build_report(reader, SHA, 4101, None)["supporting_evidence"]
-        self.assertEqual(evidence["failed_check_refs_unavailable"], 2)
-        self.assertFalse(evidence["failed_check_refs_truncated"])
+        result = report.build_report(reader, SHA, 4101, 100)
+        self.assertFalse(result["historical_ci_or_review_examined"])
+        self.assertFalse(result["historical_head_coverage_complete"])
+        self.assertNotIn("supporting_evidence", result)
+        self.assertFalse(any("/check-runs" in path or "/statuses" in path
+                             or "/reviews" in path or "/timeline" in path
+                             or "/comments" in path for path in reader.requests))
 
-    def test_failed_check_budget_is_explicit(self):
+    def test_bad_commit_row_fails_closed(self):
         reader = Reader([commit(1, "fix(api): repair")])
-        original = reader.get
-        def get(path):
-            if "/check-runs?filter=all&per_page=100&page=" in path:
-                return {"total_count": 32, "check_runs": [
-                    {"conclusion": "failure", "html_url": "https://github.com/Blummer92/agent-os/runs/123"}] * 32}
-            return original(path)
-        reader.get = get
-        evidence = report.build_report(reader, SHA, 4101, None)["supporting_evidence"]
-        self.assertEqual(len(evidence["failed_check_refs"]), 30)
-        self.assertTrue(evidence["failed_check_refs_truncated"])
+        reader.records = ["not-a-commit"]
+        with self.assertRaisesRegex(report.EvidenceError, "commit-list-malformed"):
+            report.build_report(reader, SHA, 4101, 100)
 
     def test_uppercase_sha_normalizes(self):
         self.assertEqual(report._sha("F" * 40), SHA)
