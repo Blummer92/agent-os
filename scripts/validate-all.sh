@@ -379,7 +379,7 @@ run_focused_target() {
     focused_code=$?
   fi
   if [ "$focused_code" -eq 0 ] && [ -n "${CI_JUNIT_DIR:-}" ]; then
-    if ! verify_junit "$focused_junit_path"; then
+    if ! verify_junit "$focused_junit_path" --require-executed; then
       echo "focused JUnit missing, malformed or failed: $target" >&2
       check_results[${#check_results[@]}-1]="FAIL|focused: $target|$check_display|2"
       record_failure "focused: $target (JUnit evidence)" "$check_display" 2
