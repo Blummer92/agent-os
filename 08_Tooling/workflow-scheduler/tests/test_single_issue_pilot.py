@@ -3043,3 +3043,67 @@ def test_validation_partial_effects_are_not_dropped_from_receipt():
     result = _run_validation_only(validator=validator)
     assert result.status == "quarantined"
     assert result.possible_partial_effects
+
+
+@pytest.mark.parametrize("change", [
+    {"acquired": "false"},
+    {"lease_identity": "pilot-lease:" + "0" * 64},
+    {"generation": False},
+])
+def test_unbound_lease_grant_never_dispatches_or_releases(change):
+    from dataclasses import replace
+
+    class Lease(FakeLease):
+        def acquire(self, request):
+            return replace(super().acquire(request), **change)
+
+    lease, workspace, executor = Lease(), FakeWorkspace(), FakeExecutor()
+    result = _run(lease=lease, workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert result.lease_acquire_attempts == 1
+    assert not result.lease_acquired
+    assert result.lease_release_attempts == 0
+    assert not lease.release_calls
+    assert not workspace.create_calls and not executor.calls
+
+
+@pytest.mark.parametrize("change", [
+    {"created": "false"},
+    {"workspace_identity": "pilot-workspace:" + "0" * 64},
+])
+def test_unbound_workspace_never_dispatches_or_deletes(change):
+    from dataclasses import replace
+
+    class Workspace(FakeWorkspace):
+        def create(self, request):
+            return replace(super().create(request), **change)
+
+    workspace, executor = Workspace(), FakeExecutor()
+    result = _run(workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert result.workspace_create_attempts == 1
+    assert not result.workspace_created
+    assert not workspace.cleanup_calls and not executor.calls
+    assert result.lease_released  # independently bound lease, no worker dispatched
+
+
+@pytest.mark.parametrize("field", ["resolved", "clean"])
+def test_nonboolean_workspace_inspection_prevents_dispatch(field):
+    workspace = FakeWorkspace(inspection=_inspection(**{field: "false"}))
+    executor = FakeExecutor()
+    result = _run(workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert not result.workspace_safe and not executor.calls
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+
+
+def test_boolean_release_generation_does_not_count_as_generation_one():
+    from dataclasses import replace
+
+    class Lease(FakeLease):
+        def release(self, grant):
+            return replace(super().release(grant), generation=True)
+
+    result = _run(lease=Lease())
+    assert result.status == "quarantined"
+    assert not result.lease_released

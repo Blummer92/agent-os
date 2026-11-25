@@ -1649,6 +1649,14 @@ def _acquire_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
             reasons=("lease.acquisition-failed",),
             detail="lease-acquire:unsupported-observation",
         )
+    if not _exact_flags(grant.acquired):
+        state.possible_partial_effects = True
+        raise state.stop(
+            "quarantined",
+            reasons=("lease.acquisition-failed",),
+            detail="lease-acquire:unproven-acquisition",
+            quarantine=True,
+        )
     if not grant.acquired:
         raise state.stop(
             "blocked",
@@ -1657,37 +1665,37 @@ def _acquire_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
             error=grant.reason or "lease not acquired",
         )
 
-    state.lease_acquired = True
-    state.lease_grant = grant
-    state.lease_identity = grant.lease_identity
-    state.lease_holder_identity = grant.holder_identity
-    state.lease_generation = grant.generation
-
-    if grant.lease_identity != expected_identity:
+    # The finalizer may only receive a lease bound to this request.
+    if type(grant.lease_identity) is not str or grant.lease_identity != expected_identity:
+        state.possible_partial_effects = True
         raise state.stop(
             "quarantined",
             reasons=("lease.identity-mismatch",),
             detail="lease-acquire:identity-mismatch",
             quarantine=True,
         )
-    if grant.holder_identity != expected_holder:
+    if type(grant.holder_identity) is not str or grant.holder_identity != expected_holder:
+        state.possible_partial_effects = True
         raise state.stop(
             "quarantined",
             reasons=("lease.holder-drift",),
             detail="lease-acquire:holder-drift",
             quarantine=True,
         )
-    if (
-        not isinstance(grant.generation, int)
-        or isinstance(grant.generation, bool)
-        or grant.generation < 1
-    ):
+    if type(grant.generation) is not int or grant.generation < 1:
+        state.possible_partial_effects = True
         raise state.stop(
             "quarantined",
             reasons=("lease.generation-drift",),
             detail="lease-acquire:generation-not-observable",
             quarantine=True,
         )
+
+    state.lease_acquired = True
+    state.lease_grant = grant
+    state.lease_identity = grant.lease_identity
+    state.lease_holder_identity = grant.holder_identity
+    state.lease_generation = grant.generation
 
 
 # --------------------------------------------------------------------------
@@ -1732,6 +1740,14 @@ def _create_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) -
             reasons=("workspace.creation-failed",),
             detail="workspace-create:unsupported-observation",
         )
+    if not _exact_flags(handle.created):
+        state.possible_partial_effects = True
+        raise state.stop(
+            "quarantined",
+            reasons=("workspace.creation-failed",),
+            detail="workspace-create:unproven-creation",
+            quarantine=True,
+        )
     if not handle.created:
         raise state.stop(
             "blocked",
@@ -1740,16 +1756,17 @@ def _create_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) -
             error=handle.reason or "workspace not created",
         )
 
+    if type(handle.workspace_identity) is not str or handle.workspace_identity != expected_identity:
+        state.possible_partial_effects = True
+        raise state.stop(
+            "quarantined",
+            reasons=("workspace.unresolved",),
+            detail="workspace-create:identity-mismatch",
+            quarantine=True,
+        )
     state.workspace_created = True
     state.workspace_handle = handle
     state.workspace_identity = handle.workspace_identity
-
-    if handle.workspace_identity != expected_identity:
-        raise state.stop(
-            "blocked",
-            reasons=("workspace.unresolved",),
-            detail="workspace-create:identity-mismatch",
-        )
 
 
 def _inspect_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) -> None:
@@ -1773,6 +1790,17 @@ def _inspect_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
             "needs-decision",
             reasons=("workspace.unresolved",),
             detail="workspace-inspect:unsupported-observation",
+        )
+    if not _exact_flags(
+        inspection.resolved, inspection.clean, inspection.detached,
+        inspection.reused, inspection.locked, inspection.locked_expected,
+        inspection.missing, inspection.prunable,
+    ):
+        raise state.stop(
+            "quarantined",
+            reasons=("workspace.unresolved",),
+            detail="workspace-inspect:invalid-observation-flags",
+            quarantine=True,
         )
     state.workspace_inspected = True
 
@@ -2359,17 +2387,17 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
         return
-    if release.lease_identity != grant.lease_identity:
+    if type(release.lease_identity) is not str or release.lease_identity != grant.lease_identity:
         state.release_errors.append("lease-release:identity-mismatch")
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
         return
-    if release.holder_identity != grant.holder_identity:
+    if type(release.holder_identity) is not str or release.holder_identity != grant.holder_identity:
         state.release_errors.append("lease-release:holder-drift")
         state.reason_codes.add("lease.holder-drift")
         state.quarantined = True
         return
-    if release.generation != grant.generation:
+    if type(release.generation) is not int or release.generation != grant.generation:
         state.release_errors.append("lease-release:generation-drift")
         state.reason_codes.add("lease.generation-drift")
         state.quarantined = True
