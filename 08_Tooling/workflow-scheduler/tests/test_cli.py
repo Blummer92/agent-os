@@ -205,9 +205,24 @@ class TestCLI:
             temp_yaml = f.name
 
         cli = WorkflowSchedulerCLI(db_path=temp_db)
-        cli.create_workflow(temp_yaml)
-
-        result = cli.run_workflow("cycle-workflow")
+        result = cli.create_workflow(temp_yaml)
 
         assert result["status"] == "fail"
         assert "Circular dependency" in result["error"]
+        assert cli.repository.get_workflow("cycle-workflow") is None
+        assert cli.repository.list_workflow_tasks("cycle-workflow") == []
+
+
+def test_create_accepts_forward_dependency_declaration(temp_db, tmp_path):
+    config = tmp_path / "forward.yaml"
+    config.write_text(yaml.safe_dump({
+        "workflow_id": "forward",
+        "title": "Forward reference",
+        "created_by": "owner",
+        "tasks": [{"id": "second", "depends_on": ["first"]}, {"id": "first"}],
+    }), encoding="utf-8")
+    cli = WorkflowSchedulerCLI(db_path=temp_db)
+    assert cli.create_workflow(str(config))["status"] == "pass"
+    stored = cli.repository.get_workflow("forward")
+    assert stored.tasks == ["second", "first"]
+    assert stored.dependencies["second"] == ["first"]

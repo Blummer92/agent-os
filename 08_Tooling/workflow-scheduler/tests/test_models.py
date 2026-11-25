@@ -243,6 +243,8 @@ class TestWorkflowPlanModel:
             created_by="user",
         )
 
+        workflow.add_task("task-0")
+        workflow.add_task("task-1")
         workflow.set_dependencies("task-1", ["task-0"])
         assert workflow.dependencies["task-1"] == ["task-0"]
 
@@ -265,7 +267,9 @@ class TestWorkflowPlanModel:
             created_by="user",
         )
 
-        workflow.mark_completed()
+        workflow.add_task("task-1")
+        workflow.mark_running()
+        workflow.mark_completed(completed_task_ids={"task-1"})
         assert workflow.status == WorkflowStatus.COMPLETED
 
     def test_workflow_mark_failed(self):
@@ -276,9 +280,10 @@ class TestWorkflowPlanModel:
             created_by="user",
         )
 
+        workflow.mark_running()
         workflow.mark_failed(reason="Test failure")
         assert workflow.status == WorkflowStatus.FAILED
-        assert workflow.metadata["failure_reason"] == "Test failure"
+        assert workflow.transition_history[-1].reason == "Test failure"
 
     def test_workflow_mark_cancelled(self):
         """Test marking workflow as cancelled."""
@@ -290,7 +295,7 @@ class TestWorkflowPlanModel:
 
         workflow.mark_cancelled(reason="User cancelled")
         assert workflow.status == WorkflowStatus.CANCELLED
-        assert workflow.metadata["cancellation_reason"] == "User cancelled"
+        assert workflow.transition_history[-1].reason == "User cancelled"
 
     def test_workflow_mark_governance_blocked(self):
         """Test marking workflow as governance blocked."""
@@ -300,9 +305,10 @@ class TestWorkflowPlanModel:
             created_by="user",
         )
 
+        workflow.mark_running()
         workflow.mark_governance_blocked(reason="Policy violation")
         assert workflow.status == WorkflowStatus.GOVERNANCE_BLOCKED
-        assert workflow.metadata["governance_block_reason"] == "Policy violation"
+        assert workflow.transition_history[-1].reason == "Policy violation"
 
     def test_workflow_is_terminal(self):
         """Test checking if workflow is in terminal state."""
@@ -314,7 +320,9 @@ class TestWorkflowPlanModel:
 
         assert not workflow.is_terminal()
 
-        workflow.mark_completed()
+        workflow.add_task("task-1")
+        workflow.mark_running()
+        workflow.mark_completed(completed_task_ids={"task-1"})
         assert workflow.is_terminal()
 
         workflow2 = WorkflowPlan(
@@ -322,5 +330,6 @@ class TestWorkflowPlanModel:
             title="Test Workflow 2",
             created_by="user",
         )
+        workflow2.mark_running()
         workflow2.mark_failed()
         assert workflow2.is_terminal()

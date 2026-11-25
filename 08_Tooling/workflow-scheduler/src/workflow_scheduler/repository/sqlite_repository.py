@@ -286,7 +286,7 @@ class SQLiteRepository:
         Conditional transition guard (Repair B): a terminal workflow is
         never overwritten, and a non-terminal workflow may only stay in
         place (metadata-only write) or move forward along a legitimate
-        transition (draft/pending -> running/paused/cancelled,
+        transition (draft -> pending, draft/pending -> running/paused/cancelled,
         running -> paused/completed/failed/cancelled/governance_blocked,
         paused -> running/cancelled). A stale snapshot that would reverse
         a workflow (e.g. completed -> running, paused -> draft) is
@@ -301,6 +301,7 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
+            task_ids = workflow.tasks
             cursor.execute(
                 """
                 UPDATE workflows
@@ -308,14 +309,17 @@ class SQLiteRepository:
                 WHERE workflow_id = ?
                   AND (? IS NULL OR (status = ? AND updated_at = ?))
                   AND status NOT IN ('completed','failed','cancelled','governance_blocked')
-                  AND (NOT ? OR NOT EXISTS (
+                  AND (NOT ? OR (? > 0 AND ? = (
+                    SELECT COUNT(*) FROM tasks WHERE workflow_id = workflows.workflow_id
+                  ) AND NOT EXISTS (
                     SELECT 1 FROM tasks
                     WHERE workflow_id = workflows.workflow_id
                       AND (status != 'completed' OR execution_claim_token IS NOT NULL
                            OR lease_lock IS NOT NULL)
-                  ))
+                  )))
                   AND (
                     status = ?
+                    OR (status = 'draft' AND ? = 'pending')
                     OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
                     OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
                     OR (status = 'paused' AND ? IN ('running','cancelled'))
@@ -323,13 +327,15 @@ class SQLiteRepository:
                 """,
                 (
                     workflow.status.value,
-                    json.dumps(workflow.tasks),
+                    json.dumps(task_ids),
                     json.dumps(workflow.dependencies),
                     json.dumps(workflow.metadata),
                     new_stamp,
                     workflow.workflow_id,
                     old_status, old_status, old_stamp,
-                    getattr(workflow, "_require_completed_workflow_tasks", False),
+                    workflow.status is WorkflowStatus.COMPLETED,
+                    len(task_ids), len(task_ids),
+                    workflow.status.value,
                     workflow.status.value,
                     workflow.status.value,
                     workflow.status.value,

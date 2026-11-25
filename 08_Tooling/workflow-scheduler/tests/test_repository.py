@@ -281,3 +281,23 @@ class TestSQLiteRepository:
         assert len(tasks) == 1
         assert isinstance(tasks[0].mode, TaskMode)
         assert tasks[0].mode == TaskMode.GATE
+
+
+def test_pending_transition_round_trips_without_editing_wire_modes(repository):
+    workflow = WorkflowPlan("pending-workflow", "Task plan", "owner", mode=WorkflowMode.PRODUCTION)
+    repository.create_workflow(workflow)
+    workflow.mark_pending()
+    assert repository.update_workflow(workflow)
+    observed = repository.get_workflow(workflow.workflow_id)
+    assert observed.status is WorkflowStatus.PENDING
+    assert observed.mode.value == "Production"
+
+
+def test_completion_update_requires_independent_persisted_task_observation(repository):
+    workflow = WorkflowPlan("no-task-row", "Task plan", "owner", tasks=["a"])
+    repository.create_workflow(workflow)
+    workflow.mark_running()
+    assert repository.update_workflow(workflow)
+    workflow.mark_completed(completed_task_ids={"a"})
+    assert not repository.update_workflow(workflow)
+    assert repository.get_workflow("no-task-row").status is WorkflowStatus.RUNNING

@@ -202,15 +202,20 @@ class WorkflowSchedulerCLI:
         if batch_error is not None:
             return batch_error
 
-        workflow = WorkflowPlan(
-            workflow_id=workflow_id,
-            title=title,
-            created_by=created_by,
-            mode=mode,
-        )
-        for task in built_tasks:
-            workflow.add_task(task.id)
-            workflow.set_dependencies(task.id, task.depends_on)
+        try:
+            workflow = WorkflowPlan(
+                workflow_id=workflow_id,
+                title=title,
+                created_by=created_by,
+                mode=mode,
+                tasks=[task.id for task in built_tasks],
+                dependencies=dependencies,
+            )
+        except (TypeError, ValueError) as exc:
+            return self._format_response(
+                status="fail", checks_failed=["invalid_workflow_plan"],
+                next_owner="user", error=str(exc),
+            )
 
         self.repository.create_workflow(workflow)
         for task in built_tasks:
@@ -675,7 +680,7 @@ class WorkflowSchedulerCLI:
                 if c
             ]
         else:
-            settle = lambda plan: plan.mark_completed()  # noqa: E731
+            settle = lambda plan: plan.mark_completed(completed_task_ids=completed)  # noqa: E731
             status = "pass"
             checks_failed = []
 
@@ -684,9 +689,10 @@ class WorkflowSchedulerCLI:
         # nor reverse a concurrent pause/cancel/terminal transition.
         plan_shape = (workflow.mode, workflow.tasks, workflow.dependencies)
         for _attempt in range(3):
-            settle(workflow)
-            if status == "pass":
-                workflow._require_completed_workflow_tasks = True
+            try:
+                settle(workflow)
+            except ValueError:
+                return self._workflow_write_refused(workflow_id)
             if self.repository.update_workflow(workflow):
                 break
             current = self.repository.get_workflow(workflow_id)
@@ -1188,7 +1194,10 @@ class WorkflowSchedulerCLI:
             )
 
         previous_status = workflow.status.value
-        workflow.mark_paused()
+        if workflow.status is WorkflowStatus.RUNNING:
+            workflow.mark_paused()
+        else:
+            workflow._pause_before_start()
         if not self.repository.update_workflow(workflow):
             return self._format_response(
                 status="blocked",

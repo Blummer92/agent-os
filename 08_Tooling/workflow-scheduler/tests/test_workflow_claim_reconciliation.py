@@ -66,6 +66,9 @@ def test_stale_snapshot_cannot_requeue_completed_task(tmp_path):
 
 def test_stale_workflow_cannot_overwrite_completion(tmp_path):
     cli, _ = setup_workflow(tmp_path)
+    starting = cli.repository.get_workflow("race-wf")
+    starting.mark_running()
+    assert cli.repository.update_workflow(starting)
     stale = cli.repository.get_workflow("race-wf")
     assert cli.run_workflow("race-wf")["status"] == "pass"
     stale.mark_failed(reason="stale runner")
