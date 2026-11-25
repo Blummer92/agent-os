@@ -583,8 +583,8 @@ _NOTION_EXECUTOR_TITLE = (
     re.compile(r"(?<![a-z0-9])executor(?![a-z0-9])"),
     re.compile(r"(?<![a-z0-9])notion read(?![a-z0-9])"),
 )
-_NOTION_EXECUTOR_TITLE_NEGATION = re.compile(
-    r"(?<![a-z0-9])(?:not|never|unrelated|avoid)(?![a-z0-9])"
+_NOTION_EXECUTOR_NEGATION = re.compile(
+    r"(?<![a-z0-9])(?:not|never|unrelated|avoid|skip|cannot|no need|[a-z]+n['’]t)(?![a-z0-9])"
 )
 _NOTION_EXECUTOR_GUIDANCE_FAILURE = re.compile(
     r"(?<![a-z0-9])(?:failed|failure|non-success|error)(?![a-z0-9])"
@@ -704,12 +704,11 @@ def _match_candidate(
             " ".join(candidate.use_when[0].casefold().split())
             if candidate.use_when else ""
         )
-        # A negated instruction is not affirmative evidence for the mechanism.
-        if re.search(r"\b(?:not|never|avoid|skip|cannot)\b", guidance):
-            guidance = ""
+        # A negated title or instruction is not affirmative mechanism evidence.
         if (
             all(pattern.search(title) for pattern in _NOTION_EXECUTOR_TITLE)
-            and not _NOTION_EXECUTOR_TITLE_NEGATION.search(title)
+            and not _NOTION_EXECUTOR_NEGATION.search(title)
+            and not _NOTION_EXECUTOR_NEGATION.search(guidance)
             and _NOTION_EXECUTOR_GUIDANCE_FAILURE.search(guidance)
             and _NOTION_EXECUTOR_GUIDANCE_COMPLETION.search(guidance)
         ):
