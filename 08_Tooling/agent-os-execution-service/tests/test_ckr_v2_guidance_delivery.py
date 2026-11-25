@@ -238,3 +238,102 @@ def test_scenario_3_failed_repair_requires_a_new_evaluation_and_stale_admission_
     with pytest.raises(DeliveryRefused, match="task-identity-mismatch"):
         ObserveOnlyDeliverer(RecordingProvider(), clock).deliver(second_attempt, repair_proof,
                                                                 compose_context(HOST, "p", g2))
+
+
+# ---------------------------------------------------------------- receipt integrity (independent QA follow-up)
+def _verified_case():
+    provider, receipt, guidance, context, *_ = pipeline([lesson()])
+    assert verify_delivery_receipt(receipt, provider.prompts, guidance) is None
+    return provider, receipt, guidance
+
+
+def _swap_in_context(provider, old, new):
+    return [provider.prompts[0].replace(old, new)]
+
+
+def test_guardrail_missing_from_provider_context_is_refused():
+    provider, receipt, guidance = _verified_case()
+    log = _swap_in_context(provider, "Guardrail: Never leak a patched clock across tests.\n", "")
+    receipt = {**receipt, "context_sha256": hashlib.sha256(log[0].encode()).hexdigest()}
+    assert verify_delivery_receipt(receipt, log, guidance) == "guidance-not-in-delivered-context"
+
+
+def test_recommendation_missing_from_provider_context_is_refused():
+    provider, receipt, guidance = _verified_case()
+    log = _swap_in_context(provider, f"What to do next time: {GUIDANCE}\n", "")
+    receipt = {**receipt, "context_sha256": hashlib.sha256(log[0].encode()).hexdigest()}
+    assert verify_delivery_receipt(receipt, log, guidance) == "guidance-not-in-delivered-context"
+
+
+def test_guidance_outside_its_block_does_not_count():
+    provider, receipt, guidance = _verified_case()
+    moved = provider.prompts[0].replace(f"Guardrail: Never leak a patched clock across tests.\n", "") \
+        + "\nGuardrail: Never leak a patched clock across tests.\n"
+    receipt = {**receipt, "context_sha256": hashlib.sha256(moved.encode()).hexdigest()}
+    assert verify_delivery_receipt(receipt, [moved], guidance) == "guidance-not-in-delivered-context"
+
+
+def test_duplicate_lesson_identities_in_receipt_are_refused():
+    provider, receipt, guidance = _verified_case()
+    dup = {**receipt, "lessons": receipt["lessons"] * 2}
+    assert verify_delivery_receipt(dup, provider.prompts, guidance) == "receipt-duplicate-lesson"
+
+
+@pytest.mark.parametrize("lessons", [None, "LL-1", {"lesson_id": "LL-1"}, [], ["LL-1"], [{"lesson_id": "LL-1"}],
+                                     [{"lesson_id": 1, "source_revision": "r", "digest": "0" * 64}],
+                                     [{"lesson_id": "LL-1", "source_revision": "r", "digest": "not-a-digest"}]])
+def test_malformed_lesson_fields_are_finite_refusals(lessons):
+    provider, receipt, guidance = _verified_case()
+    assert verify_delivery_receipt({**receipt, "lessons": lessons}, provider.prompts, guidance) == "receipt-malformed"
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: {k: v for k, v in r.items() if k != "context_sha256"},
+    lambda r: {**r, "context_sha256": None},
+    lambda r: {**r, "claims": "delivered"},
+    lambda r: {**r, "claims": {"delivered": False, "applied": None, "outcome_improved": None}},
+    lambda r: {**r, "extra": 1},
+    lambda r: None,
+    lambda r: ["not", "a", "mapping"],
+])
+def test_missing_or_malformed_receipt_fields_are_finite_refusals(mutate):
+    provider, receipt, guidance = _verified_case()
+    assert verify_delivery_receipt(mutate(receipt), provider.prompts, guidance) in ("receipt-malformed",
+                                                                                   "receipt-schema-invalid")
+
+
+def test_malformed_provider_log_is_a_finite_refusal():
+    provider, receipt, guidance = _verified_case()
+    assert verify_delivery_receipt(receipt, "a string, not a log", guidance) == "provider-log-malformed"
+    assert verify_delivery_receipt(receipt, [None], guidance) == "provider-log-malformed"
+
+
+def test_replayed_submission_in_provider_log_is_refused():
+    provider, receipt, guidance = _verified_case()
+    assert verify_delivery_receipt(receipt, provider.prompts * 2, guidance) == "context-delivered-more-than-once"
+
+
+def test_changed_guidance_under_unchanged_revision_is_refused():
+    provider, receipt, guidance = _verified_case()
+    import dataclasses
+    tampered = [dataclasses.replace(guidance[0], guardrail="Changed text, same revision and stale digest.")]
+    assert verify_delivery_receipt(receipt, provider.prompts, tampered) == "guidance-digest-mismatch"
+
+
+def test_changed_context_digest_is_refused():
+    provider, receipt, guidance = _verified_case()
+    flipped = receipt["context_sha256"][:-1] + ("0" if receipt["context_sha256"][-1] != "0" else "1")
+    assert verify_delivery_receipt({**receipt, "context_sha256": flipped}, provider.prompts, guidance) == \
+        "context-not-delivered"
+
+
+def test_receipt_claiming_improvement_is_refused():
+    provider, receipt, guidance = _verified_case()
+    claims = {**receipt["claims"], "outcome_improved": True}
+    assert verify_delivery_receipt({**receipt, "claims": claims}, provider.prompts, guidance) == \
+        "receipt-overclaims-application"
+
+
+def test_non_iterable_provider_log_is_a_finite_refusal_not_an_exception():
+    provider, receipt, guidance = _verified_case()
+    assert verify_delivery_receipt(receipt, None, guidance) == "receipt-malformed"

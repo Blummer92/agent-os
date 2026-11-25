@@ -193,25 +193,74 @@ class ObserveOnlyDeliverer:
         }
 
 
+_RECEIPT_KEYS = frozenset({"schema", "invocation_id", "admission_identity_hash", "result_sha256",
+                           "request_comment_id", "attempt_id", "lessons", "context_sha256", "delivered_at",
+                           "provider_output_sha256", "claims"})
+_HEX64 = frozenset("0123456789abcdef")
+
+
+def _is_digest(value: object) -> bool:
+    return type(value) is str and len(value) == 64 and set(value) <= _HEX64
+
+
 def verify_delivery_receipt(receipt: Mapping[str, Any], provider_received: Sequence[str],
                             guidance: Sequence[ResolvedGuidance]) -> str | None:
-    """None when the provider log proves the receipt's exact context (and every guidance block) was
-    submitted; otherwise one finite reason. The provider log is independent of the receipt."""
-    if receipt.get("schema") != DELIVERY_SCHEMA:
+    """None when the provider log proves the receipt's exact context (and every guidance block,
+    recommendation AND guardrail) was submitted once; otherwise one finite reason. Never raises
+    on malformed evidence. The provider log is independent of the receipt."""
+    try:
+        return _verify(receipt, provider_received, guidance)
+    except (TypeError, ValueError, AttributeError, KeyError):  # defensive: malformed evidence is a refusal
+        return "receipt-malformed"
+
+
+def _verify(receipt: Any, provider_received: Any, guidance: Sequence[ResolvedGuidance]) -> str | None:
+    if not isinstance(receipt, Mapping) or set(receipt) != _RECEIPT_KEYS:
+        return "receipt-malformed"
+    if receipt["schema"] != DELIVERY_SCHEMA:
         return "receipt-schema-invalid"
-    matches = [text for text in provider_received if sha256_text(text) == receipt.get("context_sha256")]
+    for key in ("context_sha256", "result_sha256", "admission_identity_hash", "provider_output_sha256"):
+        if not _is_digest(receipt[key]):
+            return "receipt-malformed"
+    claims = receipt["claims"]
+    if (not isinstance(claims, Mapping) or set(claims) != {"delivered", "applied", "outcome_improved"}
+            or claims["delivered"] is not True):
+        return "receipt-malformed"
+    if claims["applied"] is not None or claims["outcome_improved"] is not None:
+        return "receipt-overclaims-application"
+    lessons = receipt["lessons"]
+    if type(lessons) is not list or not lessons:
+        return "receipt-malformed"
+    claimed = []
+    for item in lessons:
+        if (not isinstance(item, Mapping) or set(item) != {"lesson_id", "source_revision", "digest"}
+                or type(item["lesson_id"]) is not str or type(item["source_revision"]) is not str
+                or not _is_digest(item["digest"])):
+            return "receipt-malformed"
+        claimed.append((item["lesson_id"], item["source_revision"], item["digest"]))
+    if len({lesson_id for lesson_id, _, _ in claimed}) != len(claimed):
+        return "receipt-duplicate-lesson"
+    for g in guidance:
+        if guidance_digest(g.lesson_id, g.source_revision, g.what_to_do_next_time, g.guardrail) != g.digest:
+            return "guidance-digest-mismatch"
+    expected = [(g.lesson_id, g.source_revision, g.digest) for g in guidance]
+    if sorted(claimed) != sorted(expected):
+        return "receipt-lessons-mismatch"
+    if isinstance(provider_received, (str, bytes)) or not all(type(t) is str for t in provider_received):
+        return "provider-log-malformed"
+    matches = [text for text in provider_received if sha256_text(text) == receipt["context_sha256"]]
     if len(matches) != 1:
         return "context-not-delivered" if not matches else "context-delivered-more-than-once"
-    expected = {(g.lesson_id, g.source_revision, g.digest) for g in guidance}
-    claimed = {(x.get("lesson_id"), x.get("source_revision"), x.get("digest")) for x in receipt.get("lessons", [])}
-    if claimed != expected:
-        return "receipt-lessons-mismatch"
     text = matches[0]
     for g in guidance:
-        if f"digest={g.digest}" not in text or _escape(g.what_to_do_next_time) not in text:
+        start = text.find(f"{_OPEN} id={g.lesson_id} revision={g.source_revision} digest={g.digest}\n")
+        end = text.find(_CLOSE, start) if start >= 0 else -1
+        if start < 0 or end < 0:
             return "guidance-not-in-delivered-context"
-    if receipt.get("claims", {}).get("applied") is not None:
-        return "receipt-overclaims-application"
+        block = text[start:end]
+        if (f"What to do next time: {_escape(g.what_to_do_next_time)}\n" not in block
+                or f"Guardrail: {_escape(g.guardrail)}\n" not in block):
+            return "guidance-not-in-delivered-context"
     return None
 
 
