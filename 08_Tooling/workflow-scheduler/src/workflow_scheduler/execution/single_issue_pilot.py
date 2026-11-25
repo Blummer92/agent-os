@@ -878,8 +878,12 @@ def _completed_invariants_hold(result: SingleIssuePilotResult) -> bool:
         and not result.cancellation_requested
         and not result.possible_partial_effects
         and result.lease_acquired
+        and result.lease_acquire_attempts == 1
         and result.lease_released
+        and result.lease_release_attempts == 1
         and result.workspace_created
+        and result.workspace_create_attempts == 1
+        and result.workspace_cleanup_attempts == 1
         and result.workspace_inspected
         and result.workspace_safe
         and result.workspace_filesystem_cleaned
@@ -1060,6 +1064,13 @@ def run_single_issue_pilot(
     return _build_result(state)
 
 
+def _adapter_error_detail(exc: BaseException) -> str:
+    try:
+        return str(exc)[:MAX_PILOT_STRING_LENGTH // 2]
+    except Exception:
+        return type(exc).__name__[:MAX_PILOT_STRING_LENGTH // 2]
+
+
 def _record_unexpected_failure(state: _PilotState, exc: BaseException) -> None:
     """Convert an unexpected lifecycle error into fail-closed evidence."""
     state.primary_status = "quarantined"
@@ -1067,7 +1078,7 @@ def _record_unexpected_failure(state: _PilotState, exc: BaseException) -> None:
     state.reason_codes.add("pilot.unexpected-error")
     state.details.append(f"{state.phase}:unexpected-error")
     if state.primary_error is None:
-        state.primary_error = f"{type(exc).__name__}: {exc}"
+        state.primary_error = f"{type(exc).__name__}: {_adapter_error_detail(exc)}"
 
 
 def _record_hard_stop(state: _PilotState, exc: BaseException) -> None:
@@ -1076,7 +1087,7 @@ def _record_hard_stop(state: _PilotState, exc: BaseException) -> None:
     state.reason_codes.add("pilot.unexpected-error")
     state.details.append(f"{state.phase}:process-terminated")
     if state.primary_error is None:
-        state.primary_error = f"{type(exc).__name__}: {exc}"
+        state.primary_error = f"{type(exc).__name__}: {_adapter_error_detail(exc)}"
 
 
 def _drive_lifecycle(
@@ -1264,7 +1275,7 @@ def _revalidate_issueplan(state: _PilotState) -> None:
             "needs-decision",
             reasons=("issueplan.needs-decision",),
             detail="issueplan-comparison:unsupported",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     state.issueplan_evidence_id = comparison.current_evidence_id
@@ -1312,7 +1323,7 @@ def _revalidate_approval(state: _PilotState) -> None:
             "needs-decision",
             reasons=("approval.needs-decision",),
             detail="approval-applicability:unsupported",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     if not isinstance(applicability, ApprovalApplicabilityResult):
@@ -1425,7 +1436,7 @@ def _verify_evidence_identity(state: _PilotState) -> None:
                 "needs-decision",
                 reasons=("evidence.unsupported",),
                 detail=f"{name}-evidence:serialization-failed",
-                error=str(exc),
+                error=_adapter_error_detail(exc),
             ) from exc
         embedded_mismatch = key is not None and serialized.get(key) != computed
         if embedded_mismatch or computed != expected_ids[name]:
@@ -1567,7 +1578,7 @@ def _check_cancellation(
             "needs-decision",
             reasons=("cancellation.requested",),
             detail=f"cancellation-probe:{checkpoint}:error",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
     if not requested:
         return
@@ -1621,7 +1632,7 @@ def _acquire_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
             "blocked",
             reasons=("lease.acquisition-failed",),
             detail="lease-acquire:error",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     if not isinstance(grant, PilotLeaseGrant):
@@ -1704,7 +1715,7 @@ def _create_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) -
             "blocked",
             reasons=("workspace.creation-failed",),
             detail="workspace-create:error",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     if not isinstance(handle, WorkspaceHandle):
@@ -1746,7 +1757,7 @@ def _inspect_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
             "blocked",
             reasons=("workspace.unresolved",),
             detail="workspace-inspect:error",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     if not isinstance(inspection, WorkspaceInspection):
@@ -1847,7 +1858,7 @@ def _dispatch_executor(state: _PilotState, executor: PilotExecutor) -> None:
                 "executor.possible-partial-effects",
             ),
             detail="executor-run:exception",
-            error=f"{type(exc).__name__}: {exc}",
+            error=f"{type(exc).__name__}: {_adapter_error_detail(exc)}",
             quarantine=True,
         ) from exc
     except BaseException:
@@ -2044,7 +2055,7 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
             "failed",
             reasons=("validation.error",),
             detail="validation:error",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
 
     if not isinstance(observation, PilotValidationObservation):
@@ -2072,7 +2083,7 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
             "needs-decision",
             reasons=("validation.error",),
             detail="validation:unbounded-completed-tests",
-            error=str(exc),
+            error=_adapter_error_detail(exc),
         ) from exc
     if len(set(completed)) != len(completed):
         raise state.stop(
@@ -2096,7 +2107,7 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
                 "needs-decision",
                 reasons=("validation.error",),
                 detail="validation:unbounded-changed-paths",
-                error=str(exc),
+                error=_adapter_error_detail(exc),
             ) from exc
 
     if not state.validation_attempted:
@@ -2155,13 +2166,13 @@ def _finalize(
         _cleanup_workspace(state, workspace_adapter)
     except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
         state.cleanup_errors.append(
-            f"workspace-cleanup:unexpected-error:{type(exc).__name__}: {exc}"
+            f"workspace-cleanup:unexpected-error:{type(exc).__name__}: {_adapter_error_detail(exc)}"
         )
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
     except BaseException as exc:
         state.cleanup_errors.append(
-            f"workspace-cleanup:process-terminated:{type(exc).__name__}: {exc}"
+            f"workspace-cleanup:process-terminated:{type(exc).__name__}: {_adapter_error_detail(exc)}"
         )
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
@@ -2170,13 +2181,13 @@ def _finalize(
         _release_lease(state, lease_adapter)
     except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
         state.release_errors.append(
-            f"lease-release:unexpected-error:{type(exc).__name__}: {exc}"
+            f"lease-release:unexpected-error:{type(exc).__name__}: {_adapter_error_detail(exc)}"
         )
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
     except BaseException as exc:
         state.release_errors.append(
-            f"lease-release:process-terminated:{type(exc).__name__}: {exc}"
+            f"lease-release:process-terminated:{type(exc).__name__}: {_adapter_error_detail(exc)}"
         )
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
@@ -2198,7 +2209,7 @@ def _cleanup_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
     try:
         cleanup = workspace_adapter.cleanup(handle)
     except _EXPECTED_ADAPTER_EXCEPTIONS as exc:
-        state.cleanup_errors.append(f"workspace-cleanup:error:{exc}")
+        state.cleanup_errors.append(f"workspace-cleanup:error:{_adapter_error_detail(exc)}")
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
         return
@@ -2268,12 +2279,9 @@ def _termination_proven(state: _PilotState) -> bool:
     if state.executor_dispatch_attempts and not state.termination_confirmed:
         return False
     if state.validation_attempts:
-        if state.validation_started is None:
+        if state.validation_started is None or state.validation_possible_partial_effects:
             return False
-        if state.validation_started and (
-            not state.validation_termination_confirmed
-            or state.validation_possible_partial_effects
-        ):
+        if state.validation_started and not state.validation_termination_confirmed:
             return False
     return True
 
@@ -2308,7 +2316,7 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
     try:
         release = lease_adapter.release(grant)
     except _EXPECTED_ADAPTER_EXCEPTIONS as exc:
-        state.release_errors.append(f"lease-release:error:{exc}")
+        state.release_errors.append(f"lease-release:error:{_adapter_error_detail(exc)}")
         state.reason_codes.add("lease.release-failed")
         state.quarantined = True
         return
@@ -2465,6 +2473,12 @@ def _build_result(state: _PilotState) -> SingleIssuePilotResult:
         "cleanup_errors": tuple(state.cleanup_errors),
         "release_errors": tuple(state.release_errors),
     }
+    if status == "completed":
+        # Check the same invariants as the public result constructor without
+        # first claiming success. Missing evidence is a quarantine disposition.
+        fields["status"] = "quarantined"
+        if _completed_invariants_hold(SingleIssuePilotResult(**fields)):  # type: ignore[arg-type]
+            fields["status"] = "completed"
     preliminary = SingleIssuePilotResult(**fields)  # type: ignore[arg-type]
     result_id = "single-issue-pilot:" + _semantic_digest(
         SINGLE_ISSUE_PILOT_SCHEMA_NAME, _result_payload(preliminary)

@@ -2936,3 +2936,42 @@ def test_lease1_withheld_release_always_forces_quarantine_precedence() -> None:
 
     assert pilot_module._side_effects_were_possible(state) is True
     assert pilot_module._final_status(state) == "quarantined"
+
+
+def test_long_cleanup_error_preserves_primary_outcome_and_independent_release():
+    workspace = FakeWorkspace(cleanup_error=OSError("long cleanup failure " * 1000))
+    lease = FakeLease()
+    result = _run(workspace=workspace, lease=lease)
+
+    assert result.status == "quarantined"
+    assert result.primary_status == "completed"  # execution/validation succeeded
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+    assert result.lease_release_attempts == len(lease.release_calls) == 1
+    assert result.lease_released
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+    assert result.cleanup_errors and len(result.cleanup_errors[0]) <= 4096
+
+
+def test_validation_only_partial_effects_without_start_proof_are_quarantined():
+    observation = _validation_observation(
+        attempted=True,
+        passed=True,
+        started=False,
+        termination_confirmed=False,
+        possible_partial_effects=True,
+        completed_tests=REQUIRED_TESTS,
+    )
+    lease, workspace = FakeLease(), FakeWorkspace()
+    validator = FakeValidator(observation=observation)
+    result = _run_validation_only(validator=validator, lease=lease, workspace=workspace)
+
+    assert result.status == "quarantined"
+    assert result.validation_attempts == len(validator.calls) == 1
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+    assert result.executor_dispatch_attempts == 0
+    assert not result.executor_called
+    assert not result.executor_started
+    assert not result.termination_confirmed
+    assert result.lease_release_attempts == 0
+    assert not lease.release_calls
+    assert "lease.release-withheld-unproven-termination" in result.reason_codes
