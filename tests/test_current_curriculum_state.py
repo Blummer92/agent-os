@@ -420,6 +420,35 @@ def test_non_active_canonical_unit_requires_decision(status: str) -> None:
     assert payload(result)["disposition"] == "needs-decision"
 
 
+_UNIT_STATUS_REASON = {
+    "ambiguous": "identity-canonical-unit-ambiguous",
+    "archived": "identity-canonical-unit-archived",
+    "split": "identity-canonical-unit-split",
+    "merged": "identity-canonical-unit-merged",
+    "human-review-required": "manual-review-canonical-unit-human-review",
+}
+
+
+def test_clean_fixture_is_supported_so_unit_status_is_the_only_fault() -> None:
+    result = current_state.resolve_current_curriculum_state(evidence())
+    assert result.status is ValidationStatus.VALID
+    assert payload(result)["disposition"] == "supported"
+    assert tuple(result.reason_codes) == ()
+
+
+@pytest.mark.parametrize("status,reason", sorted(_UNIT_STATUS_REASON.items()))
+def test_non_active_canonical_unit_names_its_exact_reason(status: str, reason: str) -> None:
+    """Nov 3 mutation C2: the unit-status reason map was untested.
+
+    The decision (needs-decision) is also reached through the teacher-decision path,
+    so a wrong or missing reason was invisible to the status-only assertion above;
+    this is a reason-code oracle gap, not a demonstrated wrong-curriculum acceptance.
+    """
+    result = current_state.resolve_current_curriculum_state(evidence(unit_status=status))
+    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert tuple(result.reason_codes) == (reason,)
+
+
 def test_malformed_and_unsupported_inputs_fail_closed() -> None:
     assert current_state.resolve_current_curriculum_state(None).status is ValidationStatus.INVALID
     value = evidence()
