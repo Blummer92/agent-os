@@ -490,6 +490,9 @@ SELECTION_BASIS_VALUES = frozenset({
 })
 _GENERIC_REASONS = frozenset({
     "keyword-overlap", "ecosystem-capability-match", "target-path-match",
+    # New bounded rule remains observational/generic pending independent
+    # task-level review; never manufacture a new approved relevance class.
+    "notion-writer-readback-text-match",
 })
 
 

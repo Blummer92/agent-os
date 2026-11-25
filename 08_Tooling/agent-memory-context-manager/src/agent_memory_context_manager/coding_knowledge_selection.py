@@ -674,6 +674,53 @@ def _match_candidate(
         ):
             return 2, (_PR_REFRESH_REASON,)
 
+    # #4026: the Writer's real, explicit task phrases are not controlled
+    # Notion Learning Type / Applies To options. Before the old generic path,
+    # allow only a source-owned, two-mechanism title+guidance agreement. A bare
+    # "Notion" tag, caller prose, or known-ID hint is never a match on its own.
+    # This is a lexical relevance hypothesis; eligibility and independent
+    # semantic applicability remain separate CKR6/CKR2 requirements.
+    if (
+        {"notion writer", "persistence readback", "failure receipts"} <= capability_hints
+        and ecosystem_match
+        and candidate.source_system == "notion-lessons-learned"
+        and "notion" in {_norm(tag) for tag in candidate.keywords}
+    ):
+        title = candidate.name.casefold()
+        guidance = " ".join(candidate.use_when).casefold()
+        avoidance = " ".join(candidate.avoid_when).casefold()
+        def whole(pattern: str, text: str) -> bool:
+            return bool(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", text))
+
+        # Negative statements in use_when remain a blanket ambiguity stop.
+        # An explicit warning about readback in avoid_when also vetoes this
+        # specialized lexical match; generic keyword relevance and authority
+        # are distinct contracts and are not changed here.
+        negation = (
+            r"unrelated|irrelevant|nonapplicable|no|not|never|without|"
+            r"avoid|skip|reject(?:ed)?|"
+            r"prohibit(?:ed|ion)?|forbid(?:den)?|cannot|"
+            r"can.t|don.t|doesn.t|didn.t|shouldn.t|mustn.t|"
+            r"wouldn.t|couldn.t|won.t|isn.t|aren.t"
+        )
+        readback_warning = (
+            whole("readback|read.back|verif(?:y|ied|ication)", avoidance)
+            and whole(negation, avoidance)
+        )
+
+        if (
+            whole("notion", title)
+            and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", title)
+            and whole("notion", guidance)
+            and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
+            and whole("readback|read.back|verif(?:y|ied|ication)", guidance)
+            # Reject ambiguous/negative guidance, rather than promote a
+            # lexical mention of readback to affirmative advice.
+            and not whole(negation, title + " " + guidance)
+            and not readback_warning
+        ):
+            return 2, ("notion-writer-readback-text-match",)
+
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
     if path_match:
