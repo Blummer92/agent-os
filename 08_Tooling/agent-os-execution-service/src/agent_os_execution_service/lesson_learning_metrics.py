@@ -23,7 +23,7 @@ import re
 from typing import Iterable, Mapping
 from urllib.parse import quote
 
-from .ckr6_github_bridge import CKR6_PRODUCER_ACCOUNT_ID, CKR6_PRODUCER_LOGIN, parse_ckr6_result_comment
+from .ckr6_github_bridge import CKR6_PRODUCER_ACCOUNT_ID, CKR6_PRODUCER_LOGIN, _utc, parse_ckr6_result_comment
 from .lesson_learning_loop import (
     LESSON_ID,
     REFINEMENT_SIGNAL_REASONS,
@@ -47,6 +47,13 @@ MAX_ISSUES = 50
 MAX_PAGES_PER_ISSUE = 10
 
 
+# Server-assigned numeric id of the TRUSTED_RECEIPT_AUTHOR account (GitHub REST users/Blummer92,
+# read 2026-11-25). A login can be renamed and re-registered; the numeric id cannot. Pinning it
+# mirrors CKR6_PRODUCER_ACCOUNT_ID. Account identity is not workflow/job provenance, and an owner
+# receipt remains a self-report, never independently verified use.
+TRUSTED_RECEIPT_AUTHOR_ACCOUNT_ID = 32861845
+
+
 def _trusted_record(comment: Mapping[str, object], *, login: str, account_id: int | None = None) -> bool:
     """Server-assigned author identity plus unedited proof, as the R07 consumer requires.
 
@@ -60,7 +67,11 @@ def _trusted_record(comment: Mapping[str, object], *, login: str, account_id: in
     if account_id is not None and (type(user.get("id")) is not int or user.get("id") != account_id):
         return False
     created, updated = comment.get("created_at"), comment.get("updated_at")
-    return type(created) is str and bool(created) and updated == created
+    try:
+        # Same strict ISO-8601-with-offset rule the R07 consumer applies to result records.
+        return _utc(created, "created_at") == _utc(updated, "updated_at") and created == updated
+    except (TypeError, ValueError):
+        return False
 
 
 def _collect_results_and_receipts(
@@ -92,7 +103,8 @@ def _collect_results_and_receipts(
                     malformed["ckr6-result"] += 1
             elif body.startswith("<!-- agent-os-lesson-receipt:v1 -->"):
                 # Receipts are owner-authored claims (same rule as the CKR7 barrier).
-                if not _trusted_record(comment, login=TRUSTED_RECEIPT_AUTHOR):
+                if not _trusted_record(comment, login=TRUSTED_RECEIPT_AUTHOR,
+                                       account_id=TRUSTED_RECEIPT_AUTHOR_ACCOUNT_ID):
                     malformed["untrusted-receipt"] += 1
                     continue
                 try:

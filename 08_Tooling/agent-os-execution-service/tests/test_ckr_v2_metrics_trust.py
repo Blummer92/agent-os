@@ -12,7 +12,7 @@ from agent_os_execution_service.lesson_learning_metrics import derive_lesson_met
 
 STAMP = "2026-11-25T12:00:00Z"
 BOT = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
-OWNER = {"login": "Blummer92", "id": 1, "type": "User"}
+OWNER = {"login": "Blummer92", "id": 32861845, "type": "User"}
 OUTSIDER = {"login": "random-outsider", "id": 7, "type": "User"}
 
 
@@ -74,3 +74,24 @@ def test_bot_login_with_wrong_account_id_never_counts():
     impostor = {"login": "github-actions[bot]", "id": 99999, "type": "Bot"}
     m = derive_lesson_metrics({4026: [rec(501, result_body(), impostor), rec(502, receipt_body(), OWNER)]})
     assert m["receipts"]["valid"] == 0 and m["malformed_markers"] == {"untrusted-ckr6-result": 1}
+
+
+def test_owner_login_with_wrong_or_missing_numeric_id_never_counts():
+    for user in ({"login": "Blummer92", "id": 1}, {"login": "Blummer92"}, {"login": "Blummer92", "id": True},
+                 {"login": "Blummer92", "id": "32861845"}):
+        m = derive_lesson_metrics({4026: [rec(501, result_body(), BOT), rec(502, receipt_body(), user)]})
+        assert m["receipts"]["valid"] == 0 and m["malformed_markers"] == {"untrusted-receipt": 1}, user
+
+
+def test_malformed_or_offsetless_timestamps_never_count():
+    for created in ("yesterday", "2026-11-25T12:00:00", "", None, 1764072000):
+        bad = {"id": 501, "body": result_body(), "user": BOT, "created_at": created, "updated_at": created}
+        m = derive_lesson_metrics({4026: [bad, rec(502, receipt_body(), OWNER)]})
+        assert m["receipts"]["valid"] == 0, created
+
+
+def test_equivalent_instant_with_different_text_is_treated_as_edited_evidence_gap():
+    odd = {"id": 501, "body": result_body(), "user": BOT, "created_at": "2026-11-25T12:00:00Z",
+           "updated_at": "2026-11-25T12:00:00+00:00"}
+    m = derive_lesson_metrics({4026: [odd, rec(502, receipt_body(), OWNER)]})
+    assert m["receipts"]["valid"] == 0
