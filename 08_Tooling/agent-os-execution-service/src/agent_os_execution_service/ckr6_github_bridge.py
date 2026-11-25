@@ -24,7 +24,10 @@ from .ckr6_github_reader import (
     GitHubIssueCommentReader,
     _MAX_RESPONSE_BYTES,
 )
-from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
+from .issue_start_lesson_preflight import (
+    activate_issue_start_lesson_preflight,
+    resolve_issue_start_materiality,
+)
 from .lesson_learning_loop import capture_lesson_candidate, propose_lesson_refinement
 from .lesson_reader_composition import resolve_lesson_read_route
 from .mcp_facade import activate_agent_os_failed_repair
@@ -412,7 +415,17 @@ def classify_envelope(envelope: Ckr6Envelope) -> dict[str, object]:
     )
     if envelope.operation == "failed-repair" and context is RepairContext.NONE:
         raise ValueError("failed-repair must use a repair or CI diagnosis context")
-    plan = plan_lesson_preflight(_request(envelope), repair_context=context)
+    request = _request(envelope)
+    if envelope.operation == "issue-start":
+        # One canonical issue-start materiality owner (#2780), shared with the
+        # producer, so classify and execute can never disagree on one envelope.
+        material, _source = resolve_issue_start_materiality(
+            envelope.specialized_knowledge_required,
+            known_knowledge_refs=envelope.known_knowledge_refs,
+            library_hints=envelope.library_hints,
+        )
+        request = replace(request, specialized_knowledge_required=material)
+    plan = plan_lesson_preflight(request, repair_context=context)
     return {
         "operation": envelope.operation,
         "repository": envelope.repository,
@@ -922,7 +935,11 @@ def parse_ckr6_result_comment(body: object) -> dict[str, object]:
     if body.count("\n") != 1:
         raise ValueError("CKR6 result comment must contain exactly two lines")
     serialized = body[len(prefix):]
-    payload = json.loads(serialized)
+    try:
+        payload = json.loads(serialized)
+    except RecursionError:
+        # Hostile nesting is a malformed record, never an uncaught crash.
+        raise ValueError("CKR6 result payload nesting exceeds parser limits") from None
     if type(payload) is not dict or _canonical_result_json(payload) != serialized:
         raise ValueError("CKR6 result payload must be canonical compact JSON")
     return payload

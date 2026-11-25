@@ -216,6 +216,10 @@ class ModelGateway:
             outcome = self._deny(trace, exc.reason)
             self._remember(request.invocation_id, request_hash, outcome)
             return outcome
+        except Exception as exc:  # noqa: BLE001 - an unexpected admission failure is a terminal, remembered STOP
+            outcome = self._deny(trace, "admission-internal-error:" + type(exc).__name__)
+            self._remember(request.invocation_id, request_hash, outcome)
+            return outcome
         outcome = self._run_admitted(trace, request.prompt, proof)
         self._remember(request.invocation_id, request_hash, outcome)
         return outcome
@@ -247,7 +251,12 @@ class ModelGateway:
             try:
                 trace = self._trace()
                 prompt = request.prompt
-                proof, _ = self._admitter.admit(request, trace, cancel)
+                try:
+                    proof, _ = self._admitter.admit(request, trace, cancel)
+                except StopBoundary:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - terminal STOP; the key is remembered in finally
+                    raise StopBoundary("admission-internal-error:" + type(exc).__name__) from None
                 rid = self._issue_receipt(trace, request, proof, kind="stream",
                                           binding_sha256=sha256_text(prompt), session_id=None)
                 self._consume(trace, rid, sha256_text(prompt), scope="ckr6-model-entry", cancel=cancel)
@@ -308,6 +317,10 @@ class ModelGateway:
             proof, _ = self._admitter.admit(request, trace, cancel)
         except StopBoundary as exc:
             outcome = self._deny(trace, exc.reason)
+            self._remember(request.invocation_id, request_hash, outcome)
+            return outcome
+        except Exception as exc:  # noqa: BLE001 - terminal, remembered STOP; never a stuck key
+            outcome = self._deny(trace, "admission-internal-error:" + type(exc).__name__)
             self._remember(request.invocation_id, request_hash, outcome)
             return outcome
         session = _Session(
@@ -480,6 +493,10 @@ class ModelGateway:
             self._consume(trace, rid, binding_sha256, scope="ckr6-session-start", cancel=cancel)
         except StopBoundary as exc:
             outcome = self._deny(trace, exc.reason, scope="session-start-only")
+            self._remember(request.invocation_id, request_hash, outcome)
+            return outcome
+        except Exception as exc:  # noqa: BLE001 - terminal, remembered STOP; never a stuck key
+            outcome = self._deny(trace, "admission-internal-error:" + type(exc).__name__, scope="session-start-only")
             self._remember(request.invocation_id, request_hash, outcome)
             return outcome
         with self._lock:
