@@ -646,20 +646,6 @@ LESSONS = MappingProxyType({
             ),
         }),
     }),
-    # #4026: reviewed tie-coverage candidate; creation requires a separate owner command.
-    "ckr2-explicit-library-tie-coverage": MappingProxyType({
-        "target_lesson_id": None,
-        "properties": MappingProxyType({
-            "Guardrail": "Never promote a lower relevance bucket or bypass provenance to gain coverage. Keep the existing candidate and selection limits. If reordering changes which lesson IDs make the cutoff, replay the original shortlist in its original order. Keep any prior refusal unless missing required-library coverage was the only reason.",
-            "Learning Type": "Testing lesson",
-            "Lesson Learned": "Preserve explicitly requested library coverage within lesson-ranking ties",
-            "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
-            "What Happened": "Several tied lessons for one requested library can fill a bounded shortlist and displace the only equally relevant lesson for another requested library. Diagnosis: Selecting by tie order alone ignores distinct explicit-library coverage before the shortlist is cut.",
-            "What To Do Next Time": "Within the same relevance bucket, preserve the widest coverage of explicitly requested libraries before truncating. Keep the existing deterministic order when coverage is equal.",
-            "Area": "Governance",
-            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/4097",),
-        }),
-    }),
     # #3417/#4026: reviewed caller-visible-basis candidate; creation requires a separate owner command.
     "ckr2-selection-reason-caller-basis": MappingProxyType({
         "target_lesson_id": None,
@@ -674,16 +660,18 @@ LESSONS = MappingProxyType({
             "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/4026",),
         }),
     }),
-    "ckr2-reversed-instruction-negative-control": MappingProxyType({
+    # #4026: reviewed tie-coverage candidate; creation requires a separate owner command.
+    "ckr2-explicit-library-tie-coverage": MappingProxyType({
         "target_lesson_id": None,
         "properties": MappingProxyType({
-            "Guardrail": "A keyword hit is not evidence that guidance recommends the right action. Keep provenance, eligibility and write authority separate from relevance.",
-            "Learning Type": "QA feedback",
-            "Lesson Learned": "Test the opposite instruction when qualifying lexical lesson matches",
-            "Source Link": "https://github.com/Blummer92/agent-os/pull/4114",
-            "What Happened": "The Notion executor matcher accepted guidance that marked dispatch complete despite an error, or handled the error after completion. Three native selector cases and one writer-qualification case failed with the old predicate. The repaired predicate passed focused CI. Diagnosis: Independent failure and completion keywords showed topic overlap but did not establish the direction or order of the recommended action.",
-            "What To Do Next Time": "Pair a real positive with hard negatives that keep the same topic words but reverse the action or ordering. Assert that the reversed advice does not earn a contextual match or pass writer qualification.",
+            "Guardrail": "Never promote a lower relevance bucket or bypass provenance to gain coverage. Keep the existing candidate and selection limits. If reordering changes which lesson IDs make the cutoff, replay the original shortlist in its original order. Keep any prior refusal unless missing required-library coverage was the only reason.",
+            "Learning Type": "Testing lesson",
+            "Lesson Learned": "Preserve explicitly requested library coverage within lesson-ranking ties",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
+            "What Happened": "Several tied lessons for one requested library can fill a bounded shortlist and displace the only equally relevant lesson for another requested library. Diagnosis: Selecting by tie order alone ignores distinct explicit-library coverage before the shortlist is cut.",
+            "What To Do Next Time": "Within the same relevance bucket, preserve the widest coverage of explicitly requested libraries before truncating. Keep the existing deterministic order when coverage is equal.",
             "Area": "Governance",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/4097",),
         }),
     }),
 })

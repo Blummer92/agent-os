@@ -1,4 +1,4 @@
-"""Test the exact catalog entries without giving the selector a title or ID."""
+"""Test the reporting catalog entry and a non-publishable reversal fixture."""
 import pytest
 
 from agent_memory_context_manager.coding_knowledge_selection import (
@@ -7,13 +7,29 @@ from agent_memory_context_manager.coding_knowledge_selection import (
 from agent_memory_context_manager.lesson_activation_bridge import (
     _as_selection_candidate, describe_selection_basis, normalize_lesson_row,
 )
+from scripts.agent_os_notion_lessons_write import catalog
 from scripts.agent_os_notion_lessons_write.catalog import lesson_for
 from scripts.agent_os_notion_lessons_write.relevance_qualification import (
     _simulated_readback, qualify_reviewed_create,
 )
 
 REPORTING = "ckr2-selection-reason-caller-basis"
-REVERSAL = "ckr2-reversed-instruction-negative-control"
+REVERSAL = "test-only-reversal-fixture"
+
+
+@pytest.fixture(autouse=True)
+def reversal_fixture(monkeypatch):
+    # The real catalog entry belongs to #4116; keep this PR testable on its own.
+    fields = {
+        **lesson_for(REPORTING),
+        "Lesson Learned": "Test opposite instructions in lexical lesson matches",
+        "Learning Type": "QA feedback",
+        "What Happened": "A keyword match accepted the inverse action.",
+        "What To Do Next Time": "Use hard negatives that reverse the action.",
+        "Guardrail": "Do not accept a keyword hit alone.",
+    }
+    entry = {"target_lesson_id": None, "properties": fields}
+    monkeypatch.setattr(catalog, "LESSONS", {**catalog.LESSONS, REVERSAL: entry})
 
 
 def request(task, *hints):
