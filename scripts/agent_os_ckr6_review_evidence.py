@@ -121,7 +121,7 @@ def _finite_diagnostics(diagnostics: Mapping[str, Any] | None) -> dict[str, Any]
         raise ValueError("diagnostic-row-population")
     return {
         "available": True,
-        "selection_basis": basis if basis is not None else "not-evaluated",
+        "selection_basis": (basis or "not-evaluated") if incomplete == "none" else "not-evaluated",
         "retrieval_reason_code": reason,
         "incomplete_reason_code": incomplete,
         **{name: diagnostics[name] for name in count_fields},

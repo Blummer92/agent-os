@@ -201,6 +201,9 @@ def test_diagnostic_rows_preserve_mixed_totals_even_when_later_retrieval_stops(i
     projection = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
     assert tuple(projection["retrieval"][name] for name in
                  ("observed_rows", "normalized_rows", "skipped_rows")) == (87, 82, 5)
+    assert projection["retrieval"]["selection_basis"] == (
+        "no-relevant-signal" if incomplete == "none" else "not-evaluated"
+    )
     assert projection["execution_authorized"] is False
 
 
@@ -325,3 +328,13 @@ def test_input_reader_requests_only_one_bounded_read():
 
     assert _load(LocalSnapshot()) == {}
     assert requests == [MAX_INPUT_BYTES + 1]
+
+
+@pytest.mark.parametrize("basis", ["generic-unique", "exact-library", "not-evaluated", None])
+def test_incomplete_retrieval_does_not_report_an_evaluated_selection_basis(basis):
+    event, result, diagnostics = fixture()
+    diagnostics.update(incomplete_reason_code="repeated-cursor", selection_basis=basis)
+    report = build_review_evidence(event, result, diagnostics, run_id=1, run_attempt=1)
+    assert report["retrieval"]["selection_basis"] == "not-evaluated"
+    assert report["retrieval"]["incomplete_reason_code"] == "repeated-cursor"
+    assert report["source"]["request_run_artifact_association"] == "supplied-unverified"
