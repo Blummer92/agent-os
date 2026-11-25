@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from datetime import datetime
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,10 @@ from agent_os_notion_binding import NotionBindingError, build_read_task, new_rea
 from .catalog import load_catalog
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
+from scripts.agent_os_notion_lessons_write import catalog as reviewed_catalog
+from scripts.agent_os_notion_lessons_write.catalog import LESSON_ID, SOURCE_LINK, WRITABLE_TYPES
+from scripts.agent_os_notion_lessons_write.writer import _single, _lesson_id, _page, _check_schema, _values
+from scripts.agent_os_notion_lessons_write.admission import WriteBlocked, notion_id
 
 VERIFICATION_REQUEST_ID = "verify-photography-foundations-bindings"
 VERIFICATION_ISSUE_NUMBER = 2283
@@ -52,6 +58,21 @@ _PHOTOGRAPHY_ALLOWED_ACTIONS = ("get_database", "get_page")
 _ADDITIONAL_UNIT_ALLOWED_ACTIONS = ("get_data_source", "query_data_source")
 
 
+def _reviewed_inspection_requests() -> dict[str, str]:
+    """Only reviewed, non-null Lesson ID targets can acquire an inspect slug."""
+    targets: dict[str, str] = {}
+    for reviewed_id in reviewed_catalog.LESSONS:
+        target = reviewed_catalog.entry_for(reviewed_id)["target_lesson_id"]
+        if target is not None:
+            if LESSON_ID.fullmatch(target) is None:
+                raise NotionReadRequestError("invalid reviewed lesson target")
+            request_id = f"verify-{target.lower()}-current-revision"
+            if request_id in targets and targets[request_id] != target:
+                raise NotionReadRequestError("ambiguous reviewed lesson target")
+            targets[request_id] = target
+    return targets
+
+
 def _verification_request_spec(
     request_id: str | None,
 ) -> tuple[int, str, tuple[str, ...]] | None:
@@ -67,6 +88,8 @@ def _verification_request_spec(
             "lessons-learned",
             ("get_page", "get_data_source"),
         )
+    if request_id in _reviewed_inspection_requests():
+        return (None, "lessons-learned", ("get_page", "get_data_source", "query_data_source"))
     if request_id == VERIFICATION_REQUEST_ID:
         return (
             VERIFICATION_ISSUE_NUMBER,
@@ -104,6 +127,7 @@ def _binding_verification_request_ids() -> tuple[str, ...]:
     candidates = [
         VERIFICATION_REQUEST_ID,
         LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
+        *_reviewed_inspection_requests(),
         TEACHER_MODELING_VERIFICATION_REQUEST_ID,
         *(
             f"verify-{unit.canonical_unit_key}-binding"
@@ -171,7 +195,7 @@ def admit_binding_verification_request(
         reason, authorized = "issue-target-mismatch", False
     else:
         issue_number = int(transport["issue_number"])
-        if issue_number != expected_issue:
+        if issue_number < 1 or (expected_issue is not None and issue_number != expected_issue):
             reason, authorized = "issue-target-mismatch", False
 
     return {
@@ -403,8 +427,8 @@ def _verified_database(
     }
 
 
-def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
-    """Live-verify the current Lessons Learned data-source identity from one known record."""
+def _verified_lessons_learned_source(adapter: object) -> tuple[str, Mapping[str, Any]]:
+    """Verify the current Lessons Learned anchor and schema exactly once."""
 
     page = _execute_read(adapter, "get_page", page_id=LESSONS_LEARNED_REFERENCE_PAGE_ID)
     if _normalize_notion_id(page.get("id")) != _normalize_notion_id(LESSONS_LEARNED_REFERENCE_PAGE_ID):
@@ -424,6 +448,12 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
     if source.get("archived") is True or source.get("in_trash") is True:
         raise NotionReadRequestError("Lessons Learned data source is archived or trashed")
 
+    return data_source_id.strip(), source
+
+
+def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dict[str, object]:
+    """Live-verify the current Lessons Learned data-source identity from one known record."""
+    data_source_id, _ = _verified_lessons_learned_source(adapter)
     return {
         "schema_version": SCHEMA_VERSION,
         "request_id": LESSONS_LEARNED_VERIFICATION_REQUEST_ID,
@@ -433,6 +463,90 @@ def verify_lessons_learned_binding(adapter: object, *, generated_at: str) -> dic
             "data_source_id": data_source_id.strip(),
             "verification_state": "verified-current",
         },
+        "notion_writes_performed": False,
+        "drive_writes_performed": False,
+        "classroom_artifact_writes_performed": False,
+        "gce_invoked": False,
+        "generated_at": generated_at,
+    }
+
+
+def verify_reviewed_lesson_revision(adapter: object, *, request_id: str,
+                                    generated_at: str) -> dict[str, object]:
+    """Inspect one reviewed Lesson ID without reading or publishing guidance."""
+    lesson_id = _reviewed_inspection_requests().get(request_id)
+    if lesson_id is None:
+        raise NotionReadRequestError("unreviewed lesson inspection request")
+    # Derive and check the canonical destination using the existing anchor.
+    source_id, schema = _verified_lessons_learned_source(adapter)
+    number = int(LESSON_ID.fullmatch(lesson_id).group(1))
+    output = _execute_read(
+        adapter, "query_data_source", data_source_id=source_id,
+        filter={"property": "Lesson ID", "unique_id": {"equals": number}},
+        page_size=2, max_pages=1, max_results=2,
+    )
+    try:
+        # Reuse the writer's finite single-result and Lesson-ID checks.
+        # The query projection may be partial; it must carry writer-required
+        # identity, destination and revision evidence before it is trusted.
+        row = _single(output, notion_id(source_id))
+        if row is None:
+            raise WriteBlocked("reviewed-lesson-missing")
+        if _lesson_id(row) != lesson_id:
+            raise WriteBlocked("query-identity-mismatch")
+        page_id = notion_id(row.get("id"))
+        page = _execute_read(adapter, "get_page", page_id=page_id)
+        _page(page, notion_id(source_id), page_id)
+        if _lesson_id(page) != lesson_id:
+            raise WriteBlocked("lesson-identity-mismatch")
+        _check_schema(schema, notion_id(source_id), {}, extra_types={
+            **WRITABLE_TYPES, "Surface Before Work?": "checkbox",
+        })
+        props = page.get("properties")
+        if not isinstance(props, Mapping):
+            raise WriteBlocked("malformed-page-properties")
+        for name, kind in (("Status", "select"), ("Surface Before Work?", "checkbox")):
+            if not isinstance(props.get(name), Mapping) or props[name].get("type") != kind:
+                raise WriteBlocked("page-property-type-mismatch")
+        status = props["Status"].get("select")
+        if status is not None and (
+            not isinstance(status, Mapping) or type(status.get("name")) is not str
+            or not status["name"]
+        ):
+            raise WriteBlocked("malformed-protected-status")
+        surface = props["Surface Before Work?"].get("checkbox")
+        if type(surface) is not bool:
+            raise WriteBlocked("malformed-protected-surface")
+        link = _values(page, ("Source Link",))["Source Link"]
+        if link is not None and type(link) is not str:
+            raise WriteBlocked("malformed-source-link")
+        revision = page["last_edited_time"]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", revision):
+            raise WriteBlocked("writer-incompatible-revision")
+        try:
+            datetime.fromisoformat(revision.replace("Z", "+00:00"))
+        except ValueError:
+            raise WriteBlocked("writer-incompatible-revision") from None
+        inspected = {
+            "lesson_id": lesson_id,
+            "page_id": page_id,
+            "data_source_id": notion_id(source_id),
+            "source_revision": revision,
+            "status": status["name"] if status is not None else None,
+            "surface_before_work": surface,
+            "source_link_present": bool(link),
+            "source_link_format_valid": bool(link and SOURCE_LINK.fullmatch(link)),
+            "schema_verified": True,
+            "verification_state": "verified-current",
+        }
+    except WriteBlocked as exc:
+        raise NotionReadRequestError(str(exc)) from None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": request_id,
+        "dispatch_status": "completed",
+        "dispatch_reason": "reviewed-lesson-revision-verified",
+        "lesson": inspected,
         "notion_writes_performed": False,
         "drive_writes_performed": False,
         "classroom_artifact_writes_performed": False,
@@ -553,6 +667,8 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_live_bindings(adapter, generated_at=args.generated_at)
         elif admission.get("request_id") == LESSONS_LEARNED_VERIFICATION_REQUEST_ID:
             result = verify_lessons_learned_binding(adapter, generated_at=args.generated_at)
+        elif admission.get("request_id") in _reviewed_inspection_requests():
+            result = verify_reviewed_lesson_revision(adapter, request_id=admission["request_id"], generated_at=args.generated_at)
         elif admission.get("request_id") == TEACHER_MODELING_VERIFICATION_REQUEST_ID:
             result = verify_teacher_modeling_binding(adapter, generated_at=args.generated_at)
         else:
@@ -603,6 +719,7 @@ __all__ = [
     "verify_additional_unit_binding",
     "verify_candy_branding_binding",
     "verify_lessons_learned_binding",
+    "verify_reviewed_lesson_revision",
     "verify_teacher_modeling_binding",
     "verify_live_bindings",
 ]
