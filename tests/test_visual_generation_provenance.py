@@ -160,7 +160,9 @@ def test_wrong_plan_gap_role_or_intent_fingerprint_fails_closed() -> None:
     )
     assert wrong_role.status is ValidationStatus.INVALID
 
-    stale_intent = replace(intent, fingerprint="0" * 64)
+    # Corrupt the already-constructed record to exercise the independent consumer check.
+    stale_intent = replace(intent)
+    object.__setattr__(stale_intent, "fingerprint", "0" * 64)
     stale = bind_gap_to_image_intent(
         plan,
         brief_id="image-gap-weak-rule-thirds",
@@ -169,7 +171,9 @@ def test_wrong_plan_gap_role_or_intent_fingerprint_fails_closed() -> None:
     )
     assert stale.status is ValidationStatus.INVALID
 
-    stale_plan = replace(plan, fingerprint="f" * 64)
+    # Corrupt the already-constructed record to exercise the independent consumer check.
+    stale_plan = replace(plan)
+    object.__setattr__(stale_plan, "fingerprint", "f" * 64)
     bad_plan = bind_gap_to_image_intent(
         stale_plan,
         brief_id="image-gap-weak-rule-thirds",

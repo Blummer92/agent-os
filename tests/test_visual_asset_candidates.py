@@ -608,7 +608,9 @@ def test_v2_invalid_candidate_does_not_corrupt_valid_sibling() -> None:
 
 def test_v2_plan_fingerprint_is_revalidated() -> None:
     plan = _plan()
-    tampered = replace(plan, fingerprint="f" * 64)
+    # Corrupt the already-constructed record to exercise the independent consumer check.
+    tampered = replace(plan)
+    object.__setattr__(tampered, "fingerprint", "f" * 64)
 
     result = filter_approved_visual_candidates(
         tampered,
