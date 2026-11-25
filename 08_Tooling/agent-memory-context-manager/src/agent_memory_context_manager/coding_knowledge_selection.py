@@ -574,6 +574,25 @@ _PR_REFRESH_HISTORICAL_HINTS = frozenset({
 })
 _PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
 
+# #4090: a specifically requested Notion-read executor-outcome guard can match
+# source-owned lesson text even when Notion's generic Learning Type/Applies To
+# fields carry no such controlled label.
+_NOTION_EXECUTOR_HINTS = frozenset({"notion read", "executor outcome"})
+_NOTION_EXECUTOR_REASON = "verified-notion-executor-outcome-match"
+_NOTION_EXECUTOR_TITLE = (
+    re.compile(r"(?<![a-z0-9])executor(?![a-z0-9])"),
+    re.compile(r"(?<![a-z0-9])notion read(?![a-z0-9])"),
+)
+_NOTION_EXECUTOR_TITLE_NEGATION = re.compile(
+    r"(?<![a-z0-9])(?:not|never|unrelated|avoid)(?![a-z0-9])"
+)
+_NOTION_EXECUTOR_GUIDANCE_FAILURE = re.compile(
+    r"(?<![a-z0-9])(?:failed|failure|non-success|error)(?![a-z0-9])"
+)
+_NOTION_EXECUTOR_GUIDANCE_COMPLETION = re.compile(
+    r"(?<![a-z0-9])(?:dispatch|completed|completion)(?![a-z0-9])"
+)
+
 
 def _deduplicate(
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -673,6 +692,28 @@ def _match_candidate(
             and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
         ):
             return 2, (_PR_REFRESH_REASON,)
+
+    # #4090: require BOTH explicit caller signals and independent title plus
+    # guidance signals owned by the lesson. Free-form task_reference, generic
+    # "notion"/"quality-assurance" keywords, and the Guardrail entry never
+    # activate this path. This is a relevance *text match* only; it does not
+    # attest to lesson applicability, currentness, provenance, or write authority.
+    if _NOTION_EXECUTOR_HINTS <= capability_hints:
+        title = " ".join(candidate.name.casefold().split())
+        guidance = (
+            " ".join(candidate.use_when[0].casefold().split())
+            if candidate.use_when else ""
+        )
+        # A negated instruction is not affirmative evidence for the mechanism.
+        if re.search(r"\b(?:not|never|avoid|skip|cannot)\b", guidance):
+            guidance = ""
+        if (
+            all(pattern.search(title) for pattern in _NOTION_EXECUTOR_TITLE)
+            and not _NOTION_EXECUTOR_TITLE_NEGATION.search(title)
+            and _NOTION_EXECUTOR_GUIDANCE_FAILURE.search(guidance)
+            and _NOTION_EXECUTOR_GUIDANCE_COMPLETION.search(guidance)
+        ):
+            return 2, (_NOTION_EXECUTOR_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)

@@ -397,3 +397,49 @@ def test_title_echo_cannot_rescue_generic_capability_overlap():
     assert not result.qualified
     assert "positive-relevance-basis-unverified" in result.reason_codes
     assert result.publication_authorized is False
+
+
+def notion_executor_entry():
+    """Corrected PR #4090 handoff field values (#3417 comment 7166415482)."""
+    return {
+        "target_lesson_id": None,
+        "properties": {
+            "Lesson Learned": "Reject failed executor outcomes before completing a Notion read",
+            "What Happened": "PR #4090 found governed Notion read routes could report dispatch completed after an explicit failed executor result.",
+            "What To Do Next Time": "Before marking governed read dispatch completed, validate executor output is a mapping and reject an explicit non-success status or non-null error. Test failed-status, error-despite-success, wrong-type and success controls on each route.",
+            "Guardrail": "Never infer execution success from a returned helper value or transport success alone. Project explicit failures into bounded sanitized receipts, keep curriculum state separate from execution completion, and do not treat passing CI as proof of live runtime acceptance.",
+            "Area": "Governance",
+            "Learning Type": "QA feedback",
+            "Applies To": ("Notion",),
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/2816",
+        },
+    }
+
+
+def test_notion_executor_outcome_contextual_match_qualifies_without_authority():
+    """The CKR2 mechanism reason counts as contextual; it grants no authority."""
+    positive = request(
+        "notion read", "executor outcome",
+        task="The governed Notion read runner must reject an explicit failed "
+             "status returned by the executor before marking dispatch completed",
+    )
+    negative = request("testing", task="unrelated packaging issue")
+    outcome = check(notion_executor_entry(), (positive,), (negative,))
+    assert outcome.qualified
+    assert outcome.reason_codes == ()
+    assert outcome.positive_hits == 1
+    assert outcome.hard_negative_false_positives == 0
+    assert outcome.publication_authorized is False
+    assert outcome.activation_authorized is False
+
+
+def test_generic_notion_keyword_alone_stays_unverified_for_executor_lesson():
+    """A bare generic classification is not a defensible contextual basis."""
+    positive = request("notion", task="Discover available Notion databases")
+    negative = request("testing", task="unrelated packaging issue")
+    outcome = check(notion_executor_entry(), (positive,), (negative,))
+    assert not outcome.qualified
+    assert outcome.reason_codes == ("positive-relevance-basis-unverified",)
+    assert outcome.positive_hits == 1
+    assert outcome.publication_authorized is False
+    assert outcome.activation_authorized is False
