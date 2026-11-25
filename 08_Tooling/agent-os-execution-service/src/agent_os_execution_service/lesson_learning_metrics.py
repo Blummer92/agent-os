@@ -23,10 +23,11 @@ import re
 from typing import Iterable, Mapping
 from urllib.parse import quote
 
-from .ckr6_github_bridge import parse_ckr6_result_comment
+from .ckr6_github_bridge import CKR6_PRODUCER_ACCOUNT_ID, CKR6_PRODUCER_LOGIN, parse_ckr6_result_comment
 from .lesson_learning_loop import (
     LESSON_ID,
     REFINEMENT_SIGNAL_REASONS,
+    TRUSTED_RECEIPT_AUTHOR,
     parse_receipt_comment,
     receipt_key,
     verify_receipt_against_result,
@@ -44,6 +45,22 @@ _PR_URL = re.compile(r"https://github\.com/Blummer92/agent-os/pull/([1-9][0-9]{0
 
 MAX_ISSUES = 50
 MAX_PAGES_PER_ISSUE = 10
+
+
+def _trusted_record(comment: Mapping[str, object], *, login: str, account_id: int | None = None) -> bool:
+    """Server-assigned author identity plus unedited proof, as the R07 consumer requires.
+
+    An absent ``updated_at`` cannot prove the record is unedited, so it fails
+    exactly like an edited record. This is account-level provenance only: it
+    does not identify which workflow or job posted a bot comment.
+    """
+    user = comment.get("user")
+    if not isinstance(user, Mapping) or user.get("login") != login:
+        return False
+    if account_id is not None and (type(user.get("id")) is not int or user.get("id") != account_id):
+        return False
+    created, updated = comment.get("created_at"), comment.get("updated_at")
+    return type(created) is str and bool(created) and updated == created
 
 
 def _collect_results_and_receipts(
@@ -64,11 +81,20 @@ def _collect_results_and_receipts(
             if type(body) is not str or type(comment_id) is not int:
                 continue
             if body.startswith("<!-- agent-os-ckr6-result:v1 -->"):
+                # CKR v2 WP-F: only the CKR6 producer's unedited record is a result;
+                # a marker-shaped comment from anyone else is counted, never trusted.
+                if not _trusted_record(comment, login=CKR6_PRODUCER_LOGIN, account_id=CKR6_PRODUCER_ACCOUNT_ID):
+                    malformed["untrusted-ckr6-result"] += 1
+                    continue
                 try:
                     results[comment_id] = parse_ckr6_result_comment(body)
                 except (TypeError, ValueError):
                     malformed["ckr6-result"] += 1
             elif body.startswith("<!-- agent-os-lesson-receipt:v1 -->"):
+                # Receipts are owner-authored claims (same rule as the CKR7 barrier).
+                if not _trusted_record(comment, login=TRUSTED_RECEIPT_AUTHOR):
+                    malformed["untrusted-receipt"] += 1
+                    continue
                 try:
                     receipts.append(parse_receipt_comment(body))
                 except (TypeError, ValueError):

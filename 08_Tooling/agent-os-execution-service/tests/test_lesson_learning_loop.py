@@ -383,7 +383,14 @@ def test_metrics_empty_input_reports_version_without_snapshot():
 
 
 def _comment(comment_id, body):
-    return {"id": comment_id, "body": body}
+    # Real GitHub records always carry server-assigned authorship and timestamps; CKR v2 metrics
+    # trust only the CKR6 producer for results and the owner for receipts.
+    if body.startswith("<!-- agent-os-ckr6-result:v1 -->"):
+        user = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
+    else:
+        user = {"login": "Blummer92", "id": 1, "type": "User"}
+    stamp = "2026-11-25T12:00:00Z"
+    return {"id": comment_id, "body": body, "user": user, "created_at": stamp, "updated_at": stamp}
 
 
 def test_metrics_count_only_valid_deduplicated_receipts_and_expose_signals():
