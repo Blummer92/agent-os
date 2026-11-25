@@ -578,34 +578,17 @@ _PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
 # fields carry no such controlled label.
 _NOTION_EXECUTOR_HINTS = frozenset({"notion read", "executor outcome"})
 _NOTION_EXECUTOR_REASON = "verified-notion-executor-outcome-match"
-_NOTION_EXECUTOR_TITLE = (
-    re.compile(r"(?<![a-z0-9])executor(?![a-z0-9])"),
-    re.compile(r"(?<![a-z0-9])notion read(?![a-z0-9])"),
-)
-_NOTION_EXECUTOR_NEGATION = re.compile(
-    r"(?<![a-z0-9])(?:not|never|unrelated|avoid|skip|cannot|no need|[a-z]+n['’ʼ]t)(?![a-z0-9])"
-)
-_NOTION_EXECUTOR_REJECT_FAILURE = re.compile(
-    r"\b(?:reject|refuse)\b.*\b(?:failed|failures?|non-success|errors?)\b"
-)
-_NOTION_EXECUTOR_GUIDANCE_COMPLETION = re.compile(
-    r"(?<![a-z0-9])(?:dispatch|completed|completion|completing)(?![a-z0-9])"
-)
-
-
-def _rejects_executor_failure_before_completion(guidance: str) -> bool:
-    # Keep the rejection and its ordering in one instruction. Words elsewhere
-    # in the field do not establish that failures are rejected before completion.
-    instruction = re.split(r"[.!?;]", guidance, maxsplit=1)[0]
-    if instruction.startswith("before "):
-        completion, separator, rejection = instruction[7:].partition(",")
-    else:
-        rejection, separator, completion = instruction.partition(" before ")
-    return bool(
-        separator
-        and _NOTION_EXECUTOR_REJECT_FAILURE.search(rejection)
-        and _NOTION_EXECUTOR_GUIDANCE_COMPLETION.search(completion)
-    )
+# Match complete reviewed wording, not a collection of words that also appears
+# in reversed or retracted instructions. Case and whitespace are immaterial;
+# other paraphrases abstain until separately reviewed.
+_NOTION_EXECUTOR_TITLE = "reject failed executor outcomes before completing a notion read"
+_NOTION_EXECUTOR_GUIDANCE = frozenset({
+    "before marking governed read dispatch completed, validate executor output "
+    "is a mapping and reject an explicit non-success status or non-null error. "
+    "test failed-status, error-despite-success, wrong-type and success controls "
+    "on each route.",
+    "reject explicit executor errors before reporting dispatch completion.",
+})
 
 
 def _deduplicate(
@@ -718,13 +701,7 @@ def _match_candidate(
             " ".join(candidate.use_when[0].casefold().split())
             if candidate.use_when else ""
         )
-        # A negated title or instruction is not affirmative mechanism evidence.
-        if (
-            all(pattern.search(title) for pattern in _NOTION_EXECUTOR_TITLE)
-            and not _NOTION_EXECUTOR_NEGATION.search(title)
-            and not _NOTION_EXECUTOR_NEGATION.search(guidance)
-            and _rejects_executor_failure_before_completion(guidance)
-        ):
+        if title == _NOTION_EXECUTOR_TITLE and guidance in _NOTION_EXECUTOR_GUIDANCE:
             return 2, (_NOTION_EXECUTOR_REASON,)
 
     if ecosystem_match and capability_overlap:

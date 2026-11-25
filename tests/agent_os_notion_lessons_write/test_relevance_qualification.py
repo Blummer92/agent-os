@@ -456,3 +456,21 @@ def test_writer_refuses_guidance_that_completes_dispatch_despite_errors():
     assert not outcome.qualified
     assert outcome.reason_codes == ("expected-task-not-selected",)
     assert_unprivileged(outcome)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"What To Do Next Time": "Reject non-failed executor results before declaring completion."},
+    {"Lesson Learned": "Accept failed Notion read executor results as completed"},
+    {
+        "What To Do Next Time": "Keep Notion query pages bounded.",
+        "Guardrail": notion_executor_entry()["properties"]["What To Do Next Time"],
+    },
+], ids=["wrong-object", "opposite-title", "guardrail-only"])
+def test_executor_outcome_review_refuses_wrong_or_misplaced_guidance(overrides):
+    entry = notion_executor_entry()
+    entry["properties"].update(overrides)
+    outcome = check(
+        entry, (request("notion read", "executor outcome"),), (request("packaging"),),
+    )
+    assert not outcome.qualified
+    assert not outcome.publication_authorized and not outcome.activation_authorized
