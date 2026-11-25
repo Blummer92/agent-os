@@ -399,7 +399,7 @@ def test_title_echo_cannot_rescue_generic_capability_overlap():
     assert result.publication_authorized is False
 
 
-def notion_executor_entry():
+def notion_executor_entry(*, generic_applies_to=False):
     """Corrected PR #4090 handoff field values (#3417 comment 7166415482)."""
     return {
         "target_lesson_id": None,
@@ -410,7 +410,7 @@ def notion_executor_entry():
             "Guardrail": "Never infer execution success from a returned helper value or transport success alone. Project explicit failures into bounded sanitized receipts, keep curriculum state separate from execution completion, and do not treat passing CI as proof of live runtime acceptance.",
             "Area": "Governance",
             "Learning Type": "QA feedback",
-            "Applies To": ("Notion",),
+            **({"Applies To": ("Notion",)} if generic_applies_to else {}),
             "Source Link": "https://github.com/Blummer92/agent-os/issues/2816",
         },
     }
@@ -423,8 +423,14 @@ def test_notion_executor_outcome_contextual_match_qualifies_without_authority():
         task="The governed Notion read runner must reject an explicit failed "
              "status returned by the executor before marking dispatch completed",
     )
-    negative = request("testing", task="unrelated packaging issue")
-    outcome = check(notion_executor_entry(), (positive,), (negative,))
+    negatives = (
+        request("testing", task="unrelated packaging issue"),
+        request("notion", "readback", task="Verify the revision of a written Notion page"),
+        request("notion", "lessons-write", task="Publish and re-read a reviewed Notion entry"),
+        request("notion", "database-discovery", task="Discover Notion database schema options"),
+        request("ckr6 mutation boundary", task="Report stale CKR6 gate evidence"),
+    )
+    outcome = check(notion_executor_entry(), (positive,), negatives)
     assert outcome.qualified
     assert outcome.reason_codes == ()
     assert outcome.positive_hits == 1
@@ -437,9 +443,22 @@ def test_generic_notion_keyword_alone_stays_unverified_for_executor_lesson():
     """A bare generic classification is not a defensible contextual basis."""
     positive = request("notion", task="Discover available Notion databases")
     negative = request("testing", task="unrelated packaging issue")
-    outcome = check(notion_executor_entry(), (positive,), (negative,))
+    outcome = check(notion_executor_entry(generic_applies_to=True), (positive,), (negative,))
     assert not outcome.qualified
     assert outcome.reason_codes == ("positive-relevance-basis-unverified",)
     assert outcome.positive_hits == 1
     assert outcome.publication_authorized is False
     assert outcome.activation_authorized is False
+
+
+def test_generic_notion_tag_blocks_writer_qualification_on_unrelated_task():
+    positive = request(
+        "notion read", "executor outcome",
+        task="Reject explicit errors returned during governed Notion read execution",
+    )
+    negative = request("notion", "readback", task="Verify a written page's revision")
+    result = check(notion_executor_entry(generic_applies_to=True), (positive,), (negative,))
+    assert not result.qualified
+    assert result.reason_codes == ("unrelated-task-false-positive",)
+    assert result.hard_negative_false_positives == 1
+    assert not result.publication_authorized and not result.activation_authorized
