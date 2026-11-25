@@ -16,7 +16,7 @@ MAX_TEXT_CHARS = 512
 # Advisory narrative text (candidate use_when / avoid_when guidance) is bounded
 # separately from structured identity text. This approved 2048-character limit
 # applies to EACH logical guidance field after Notion rich_text segments are
-# joined and whitespace is stripped; it is not a provider per-segment limit.
+# joined and stripped by the Notion adapter. CKR2 bounds the text it receives.
 # Notion's 2000-character per-segment limit is a distinct transport constraint.
 # The same logical-field policy is shared across CKR11 -> CKR6 -> CKR2.
 # Guidance over this bound still fails closed; nothing is truncated.
@@ -441,6 +441,7 @@ def _select_coding_knowledge(
         priority = {identity: index for index, identity in enumerate(_ranked_order)}
         best.sort(key=lambda item: priority[item[2].knowledge_id])
 
+    # Check the entire winning bucket before the final cut, not weaker matches.
     if any(item[2].authority_conflict for item in best):
         return _result(
             SufficiencyStatus.MANUAL_REVIEW,
@@ -474,9 +475,10 @@ def _select_coding_knowledge(
         for item in best[:MAX_SELECTED]
     )
 
-    uncovered = _uncovered_library_hints(request, selected)
-    if uncovered:
-        refs = _canonical_refs(request, selected)
+    refs = request.canonical_rule_refs + tuple(
+        ref for item in selected for ref in item.candidate.canonical_github_refs
+    )
+    if _uncovered_library_hints(request, selected):
         return _result(
             SufficiencyStatus.INSUFFICIENT,
             _next_escalation(request),
@@ -486,7 +488,6 @@ def _select_coding_knowledge(
             candidate_count,
         )
 
-    refs = _canonical_refs(request, selected)
     if _missing_candidate_provenance(selected):
         return _result(
             SufficiencyStatus.INSUFFICIENT,
@@ -508,10 +509,8 @@ def _select_coding_knowledge(
 
 
 def _knowledge_not_needed(request: CodingKnowledgeRequest) -> bool:
-    if request.specialized_knowledge_required is False:
-        return True
-    if request.specialized_knowledge_required is True:
-        return False
+    if request.specialized_knowledge_required is not None:
+        return not request.specialized_knowledge_required
     return not (
         request.library_hints
         or request.capability_keywords
@@ -573,6 +572,23 @@ _PR_REFRESH_HISTORICAL_HINTS = frozenset({
     "git branch refresh", "rebase rejection", "merge-tree conflict detection", "bounded recovery",
 })
 _PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
+
+# #4090: a specifically requested Notion-read executor-outcome guard can match
+# source-owned lesson text even when Notion's generic Learning Type/Applies To
+# fields carry no such controlled label.
+_NOTION_EXECUTOR_HINTS = frozenset({"notion read", "executor outcome"})
+_NOTION_EXECUTOR_REASON = "verified-notion-executor-outcome-match"
+# Match complete reviewed wording, not a collection of words that also appears
+# in reversed or retracted instructions. Case and whitespace are immaterial;
+# other paraphrases abstain until separately reviewed.
+_NOTION_EXECUTOR_TITLE = "reject failed executor outcomes before completing a notion read"
+_NOTION_EXECUTOR_GUIDANCE = frozenset({
+    "before marking governed read dispatch completed, validate executor output "
+    "is a mapping and reject an explicit non-success status or non-null error. "
+    "test failed-status, error-despite-success, wrong-type and success controls "
+    "on each route.",
+    "reject explicit executor errors before reporting dispatch completion.",
+})
 
 
 def _deduplicate(
@@ -831,6 +847,19 @@ def _match_candidate(
     # check. Canonical currentness/provenance/identity gates still run later.
     if _github_rest_evidence_match(request, candidate):
         return 2, ("github-rest-evidence-text-match",)
+    # #4090: require BOTH explicit caller signals and independent title plus
+    # guidance signals owned by the lesson. Free-form task_reference, generic
+    # "notion"/"quality-assurance" keywords, and the Guardrail entry never
+    # activate this path. This is a relevance *text match* only; it does not
+    # attest to lesson applicability, currentness, provenance, or write authority.
+    if _NOTION_EXECUTOR_HINTS <= capability_hints:
+        title = " ".join(candidate.name.casefold().split())
+        guidance = (
+            " ".join(candidate.use_when[0].casefold().split())
+            if candidate.use_when else ""
+        )
+        if title == _NOTION_EXECUTOR_TITLE and guidance in _NOTION_EXECUTOR_GUIDANCE:
+            return 2, (_NOTION_EXECUTOR_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
@@ -865,16 +894,6 @@ def _missing_candidate_provenance(selected: tuple[SelectedKnowledge, ...]) -> bo
     candidate's refs can never satisfy another candidate's absence.
     """
     return any(not item.candidate.canonical_github_refs for item in selected)
-
-
-def _canonical_refs(
-    request: CodingKnowledgeRequest,
-    selected: tuple[SelectedKnowledge, ...],
-) -> tuple[str, ...]:
-    refs = set(request.canonical_rule_refs)
-    for item in selected:
-        refs.update(item.candidate.canonical_github_refs)
-    return tuple(sorted(refs))
 
 
 def _next_escalation(request: CodingKnowledgeRequest) -> RetrievalEscalation:
