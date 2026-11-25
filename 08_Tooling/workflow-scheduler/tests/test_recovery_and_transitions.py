@@ -197,12 +197,13 @@ def test_stale_updates_cannot_reverse_protected_task_states(tmp_path):
 
 def test_stale_workflow_snapshot_cannot_reverse_workflow(tmp_path):
     cli, _ = prepare(tmp_path)
-    cli.approve("first", approver="owner")
-    workflow = cli.repository.get_workflow("recovery")
-    assert workflow.status.value == "completed"
-    workflow.status = WorkflowStatus.RUNNING
-    assert cli.repository.update_workflow(workflow) is False
-    assert cli.repository.get_workflow("recovery").status.value == "completed"
+    stale = cli.repository.get_workflow("recovery")
+    assert stale.status is WorkflowStatus.RUNNING
+    assert cli.approve("first", approver="owner")["continuation"]["status"] == "pass"
+    assert cli.repository.get_workflow("recovery").status is WorkflowStatus.COMPLETED
+    stale.mark_failed(reason="stale runner")
+    assert cli.repository.update_workflow(stale) is False
+    assert cli.repository.get_workflow("recovery").status is WorkflowStatus.COMPLETED
 
 
 def test_retry_state_cannot_move_backwards(tmp_path):

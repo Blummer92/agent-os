@@ -17,8 +17,9 @@ def test_adapter_deferral_continues_once_after_approval(tmp_path):
     db = _plan(tmp_path, ("t0", "t1"))
     cli = WorkflowSchedulerCLI(db_path=db)
     plan = cli.repository.get_workflow("wf")
-    plan.dependencies["t1"] = ["t0"]
+    plan.set_dependencies("t1", ["t0"])
     assert cli.repository.update_workflow(plan)
+    assert cli.repository.get_workflow("wf").dependencies["t1"] == ["t0"]
     cli.executor.adapter = _defer()
     wait = cli.run_workflow("wf")
     assert wait["blockers"] == ["tasks_awaiting_approval"]
