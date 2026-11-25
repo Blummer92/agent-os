@@ -587,6 +587,100 @@ def _deduplicate(
     return tuple(by_id[key] for key in sorted(by_id, key=lambda key: (key.casefold(), key))), False
 
 
+def _github_rest_evidence_match(
+    request: CodingKnowledgeRequest,
+    candidate: CodingKnowledgeCandidate,
+) -> bool:
+    """#4026: bounded source-owned GitHub REST mechanism relevance.
+
+    This is a relevance hypothesis, not a live lesson qualification or
+    authorization. Unlike broad Python/Testing tags, two independent explicit
+    capability hints and affirmative lesson-owned text are both required.
+    """
+    hints = {_norm(value) for value in request.capability_keywords}
+    pagination = {
+        "github issue comment pagination", "duplicate record detection",
+    } <= hints
+    receipts = {
+        "bounded http get response limits", "timestamp provenance",
+    } <= hints
+    ecosystems = {_norm(value) for value in (
+        request.ecosystem_hints + request.language_hints
+    )}
+    if not (pagination or receipts):
+        return False
+    if not {"python", "github rest api"} <= ecosystems:
+        return False
+    if candidate.source_system != "notion-lessons-learned" or candidate.ecosystem != "python":
+        return False
+
+    # Only source-owned title and activation guidance are eligible. Neither
+    # arbitrary task_reference prose nor known_knowledge_refs are interpreted.
+    import re
+
+    def has(pattern: str, value: str) -> bool:
+        return re.search(r"\b(?:" + pattern + r")\b", value) is not None
+
+    title = candidate.name.casefold()
+    if not has(r"github", title) or has(r"not|never|unrelated", title):
+        return False
+
+    # Negative guidance can veto an apparent match, but cannot supply
+    # positive tokens. Do not combine tokens from different fields/sentences.
+    negated_action = (
+        r"(?:never|do\s+not|don['’]t|skip|avoid)\s+"
+        r"(?:reject|detect|verify|validate|check|fail)"
+    )
+    if any(has(negated_action, value.casefold())
+           for value in (*candidate.use_when, *candidate.avoid_when)):
+        return False
+    clauses = tuple(
+        clause.strip()
+        for value in candidate.use_when
+        for line in value.casefold().splitlines()
+        # A Markdown bullet affects presentation, not the clause's polarity.
+        for clause in re.split(r"[.!?;,]+", re.sub(r"^[-*+][ \t]+", "", line.strip()))
+    )
+    affirmative = r"(?:reject|detect|verify|validate|check|fail)\b"
+    if pagination and has(r"issue[- ]comments?", title) and has(
+        r"pag(?:e|es|ed|ing|ination)", title
+    ):
+        comment_identity = r"github\s+(?:issue[- ]+)?comments?\s+(?:ids?|records?)"
+        # Bind the validating action to comment identities, not page validity.
+        # For example, checking complete pages and keeping duplicates is not
+        # evidence of duplicate identity detection.
+        action_on_identity = (
+            rf"(?:"
+            rf"(?:reject|detect)\s+duplicate\s+{comment_identity}"
+            rf"|(?:verify|validate|check)\s+(?:that\s+)?{comment_identity}\s+are\s+unique"
+            rf")\s+across\s+(?:(?:all|paginated)\s+)?pages?\b"
+        )
+        if any(re.match(action_on_identity, clause) for clause in clauses):
+            return True
+
+    if receipts and all(
+        has(pattern, title) for pattern in (
+            r"get", r"http|rest", r"response|receipt|evidence|reads?",
+            r"size|bounded|bound|limit|limits|trust|provenance|cap",
+        )
+    ):
+        for clause in clauses:
+            if (
+                re.match(affirmative, clause)
+                and all(has(pattern, clause) for pattern in (
+                    r"github", r"http|rest", r"get", r"response|receipt",
+                    r"oversized|size|bytes?|bounded|bound|limit|limits",
+                ))
+                and re.search(
+                    r"\b(?:and|then)\s+(?:verify|validate|check|detect)\b"
+                    r".*\b(?:timestamp|timestamps)\b",
+                    clause,
+                )
+            ):
+                return True
+    return False
+
+
 def _match_candidate(
     request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
@@ -731,6 +825,12 @@ def _match_candidate(
             and not readback_warning
         ):
             return 2, ("notion-writer-readback-text-match",)
+
+    # #4026: a source-owned REST evidence mechanism can outrank generic
+    # metadata only after an explicit conjunctive request and strict content
+    # check. Canonical currentness/provenance/identity gates still run later.
+    if _github_rest_evidence_match(request, candidate):
+        return 2, ("github-rest-evidence-text-match",)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)

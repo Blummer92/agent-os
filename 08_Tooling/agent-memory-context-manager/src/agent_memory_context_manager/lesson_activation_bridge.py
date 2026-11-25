@@ -33,6 +33,7 @@ from .coding_knowledge_selection import (
     KnowledgeCurrentness,
     RetrievalEscalation,
     _LIBRARY_TIE_REASON,
+    _NOTION_EXECUTOR_REASON,
     _PR_REFRESH_REASON,
     _match_candidate,
     _norm,
@@ -493,6 +494,7 @@ _GENERIC_REASONS = frozenset({
     # New bounded rule remains observational/generic pending independent
     # task-level review; never manufacture a new approved relevance class.
     "notion-writer-readback-text-match",
+    "github-rest-evidence-text-match",
 })
 
 
@@ -551,7 +553,7 @@ def describe_selection_basis(
         basis = "rule-ckr6-mutation-boundary"
     # These source-text matches use the existing conservative tie fallback.
     # The exact mechanism reason travels on each selected lesson, not as a new basis.
-    elif reasons & (_GENERIC_REASONS | {_LIBRARY_TIE_REASON, _PR_REFRESH_REASON}):
+    elif reasons & (_GENERIC_REASONS | {_LIBRARY_TIE_REASON, _NOTION_EXECUTOR_REASON, _PR_REFRESH_REASON}):
         basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
     else:  # pragma: no cover - the matcher has no other reason vocabulary
         basis = "no-relevant-signal"
