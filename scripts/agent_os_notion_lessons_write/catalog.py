@@ -677,6 +677,22 @@ LESSONS = MappingProxyType({
             ),
         }),
     }),
+    # #4026: reviewed mutation-identity candidate; creation requires a separate owner command.
+    "ckr6-mutation-identity-executed-code": MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Guardrail": "Do not credit a green mutant run as evidence of test adequacy unless the mutated code actually executed. Absent or mismatched import proof is INVALID, not PASS. Never mistake this local QA evidence for full mutation coverage or CKR6 admission.",
+            "Learning Type": "QA feedback",
+            "Lesson Learned": "Verify the executed code identity before trusting mutation-test results",
+            "Source Link": "https://github.com/Blummer92/agent-os/issues/4026",
+            "What Happened": "PR #4114 QA v1 ran three deliberately defective selector variants; all reported 58 passing tests. Its import check ran in a separate process, so the results did not prove which code pytest executed. QA v2 verified the mutant module path and SHA-256 inside pytest; all three mutants were caught (3, 7, and 6 failures). Diagnosis: A preflight import in one process does not bind a later pytest run to the same mutated source.",
+            "What To Do Next Time": "In the actual pytest process, verify the loaded module path, source hash, and module identity before and after the test run. Include a known-fault control, preserve per-mutant logs, and distinguish killed, survived, and invalid outcomes.",
+            "Area": "Testing",
+            "Supporting Source Links": (
+                "https://github.com/Blummer92/agent-os/pull/4114",
+            ),
+        }),
+    }),
 })
 
 
