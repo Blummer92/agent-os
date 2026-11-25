@@ -22,13 +22,7 @@ class RuntimeDependencyMismatch(RuntimeError):
     """Raised when the active runtime cannot satisfy canonical package metadata."""
 
 
-def declared_requirement(
-    package_name: str,
-    *,
-    project_file: Path = PROJECT_FILE,
-) -> Requirement:
-    """Return exactly one declared requirement for ``package_name``."""
-    normalized_name = canonicalize_name(package_name)
+def _requirements(project_file: Path) -> tuple[Requirement, ...]:
     try:
         payload = tomllib.loads(project_file.read_text(encoding="utf-8"))
         raw_dependencies = payload["project"]["dependencies"]
@@ -37,11 +31,20 @@ def declared_requirement(
             f"runtime/dependency mismatch: cannot read canonical dependency metadata from {project_file}"
         ) from exc
 
-    matches: list[Requirement] = []
-    for raw in raw_dependencies:
-        requirement = Requirement(raw)
-        if canonicalize_name(requirement.name) == normalized_name:
-            matches.append(requirement)
+    return tuple(Requirement(raw) for raw in raw_dependencies)
+
+
+def declared_requirement(
+    package_name: str,
+    *,
+    project_file: Path = PROJECT_FILE,
+) -> Requirement:
+    """Return exactly one declared requirement for ``package_name``."""
+    normalized_name = canonicalize_name(package_name)
+    matches = [
+        requirement for requirement in _requirements(project_file)
+        if canonicalize_name(requirement.name) == normalized_name
+    ]
     if len(matches) != 1:
         raise RuntimeDependencyMismatch(
             f"runtime/dependency mismatch: canonical metadata must declare exactly one {package_name} requirement"
@@ -62,6 +65,11 @@ def validate_runtime_dependency(
     callers do not misattribute its later import error to Agent OS product code.
     """
     requirement = declared_requirement(package_name, project_file=project_file)
+    return _validate_installed(requirement, version_getter)
+
+
+def _validate_installed(requirement: Requirement, version_getter: Callable[[str], str]) -> tuple[str, str]:
+    package_name = requirement.name
     try:
         observed = version_getter(package_name)
     except PackageNotFoundError as exc:
@@ -74,3 +82,20 @@ def validate_runtime_dependency(
             f"runtime/dependency mismatch: {package_name} {observed} does not satisfy canonical requirement {requirement.specifier}"
         )
     return observed, str(requirement.specifier)
+
+
+def runtime_dependency_mismatches(
+    *,
+    project_file: Path = PROJECT_FILE,
+    version_getter: Callable[[str], str] = installed_version,
+) -> tuple[str, ...]:
+    """Report every unsatisfied direct runtime dependency for this environment."""
+    issues = []
+    for requirement in _requirements(project_file):
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        try:
+            _validate_installed(requirement, version_getter)
+        except RuntimeDependencyMismatch as exc:
+            issues.append(str(exc))
+    return tuple(issues)

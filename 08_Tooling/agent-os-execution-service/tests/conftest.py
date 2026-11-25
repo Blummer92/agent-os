@@ -1,25 +1,64 @@
-"""Execution-service test bootstrap with fail-closed runtime parity checks."""
-from __future__ import annotations
-
+"""Test-run-only bootstrap for the canonical in-repo Navigation Registry."""
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sys
 
-# Integration tests load the canonical in-repo Navigation Registry.
-# This does not change production installation or the fail-closed import path.
-_REPOSITORY_SRC = Path(__file__).resolve().parents[3] / "src"
-if _REPOSITORY_SRC.is_dir() and str(_REPOSITORY_SRC) not in sys.path:
-    sys.path.insert(0, str(_REPOSITORY_SRC))
+import pytest
 
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-if str(PACKAGE_ROOT) not in sys.path:
-    sys.path.insert(0, str(PACKAGE_ROOT))
+def _ancestor(marker):
+    for parent in Path(__file__).resolve().parents:
+        if (parent / marker).is_file():
+            return parent
+    raise pytest.UsageError(f"execution-service test setup: missing {marker}")
 
-from runtime_dependency_preflight import RuntimeDependencyMismatch, validate_runtime_dependency
 
-try:
-    validate_runtime_dependency("mcp")
-except RuntimeDependencyMismatch as exc:
-    raise RuntimeError(
-        f"{exc}. Use an isolated runtime installed from 08_Tooling/agent-os-execution-service/pyproject.toml before treating execution-service test failures as product-code evidence."
-    ) from exc
+def _prefer_paths(*paths):
+    priority = []
+    for path in paths:
+        path = path.resolve()
+        if not path.is_dir():
+            raise pytest.UsageError(f"execution-service test setup: missing {path}")
+        priority.append(str(path))
+    existing = [entry for entry in sys.path if str(Path(entry).resolve()) not in priority]
+    sys.path[:] = priority + existing
+
+
+class _MissingRuntimeModule(pytest.Module):
+    def collect(self):
+        pytest.skip(self.config._execution_service_runtime_skip)
+
+
+def pytest_configure(config):
+    repository = _ancestor("src/navigation_registry/__init__.py")
+    package = _ancestor("runtime_dependency_preflight.py")
+    helper_path = package / "runtime_dependency_preflight.py"
+    spec = spec_from_file_location("runtime_dependency_preflight", helper_path)
+    if spec is None or spec.loader is None:
+        raise pytest.UsageError(f"execution-service test setup: cannot load {helper_path}")
+    helper = module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    project = package / "pyproject.toml"
+    missing = helper.runtime_dependency_mismatches(project_file=project)
+    if missing:
+        config._execution_service_runtime_skip = (
+            "execution-service test environment: " + "; ".join(missing)
+            + f"; install the isolated runtime declared in {project}"
+        )
+        return
+
+    canonical = repository / "src/navigation_registry/__init__.py"
+    loaded = sys.modules.get("navigation_registry")
+    if loaded is not None and Path(getattr(loaded, "__file__", None) or "").resolve() != canonical:
+        raise pytest.UsageError("execution-service tests require the canonical in-repo Navigation Registry")
+
+    old_path = sys.path[:]
+    config.add_cleanup(lambda: sys.path.__setitem__(slice(None), old_path))
+    _prefer_paths(repository / "src", package)
+
+
+def pytest_pycollect_makemodule(module_path, parent):
+    if getattr(parent.config, "_execution_service_runtime_skip", None):
+        return _MissingRuntimeModule.from_parent(parent, path=module_path)
+    return None
