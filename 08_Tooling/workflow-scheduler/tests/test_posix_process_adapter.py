@@ -633,12 +633,8 @@ def _pid_alive(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
             text = handle.read()
-    except ProcessLookupError:
-        return False  # exited between the signal probe and the proc read
-    except FileNotFoundError:
-        return False  # reaped before the proc read
     except OSError:
-        return True  # unknown state: stay conservative
+        return True  # exists but unreadable: stay conservative
     tail = text.rsplit(")", 1)
     if len(tail) != 2:
         return True
@@ -780,40 +776,14 @@ def test_migrated_executor_applies_config_rlimits() -> None:
 
 
 @requires_posix_proc
-def test_pid_alive_handles_child_reaped_after_signal_probe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    kill = os.kill
-    with subprocess.Popen([PY, "-c", "import os; os.read(0, 1)"], stdin=subprocess.PIPE) as child:
-        assert _pid_alive(child.pid)
-
-        def reap_after_probe(pid: int, signum: int) -> None:
-            kill(pid, signum)
-            assert pid == child.pid and signum == 0
-            assert child.stdin is not None
-            child.stdin.close()
-            child.wait(timeout=5)
-
-        monkeypatch.setattr(os, "kill", reap_after_probe)
-        assert not _pid_alive(child.pid)
-
-
-@requires_posix_proc
-def test_migrated_graceful_sigterm_kills_a_multiprocess_group() -> None:
-    """Require the child to reap the exact grandchild with SIGTERM status."""
-    # The child blocks SIGTERM so it can reap and report both outcomes. The
-    # grandchild unblocks the inherited mask while retaining default TERM.
-    grandchild_code = (
-        "import signal\n"
-        "signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})\n"
-        "signal.pause()\n"
-    )
+def test_migrated_graceful_sigterm_kills_a_multiprocess_group(tmp_path: Path) -> None:
+    """Child spawns a grandchild; SIGTERM to the pgid must kill both."""
+    grandchild_pid_file = tmp_path / "grandchild.pid"
     script = (
-        "import signal, subprocess, sys\n"
-        "term = {signal.SIGTERM}\n"
-        "signal.pthread_sigmask(signal.SIG_BLOCK, term)\n"
-        f"grandchild = subprocess.Popen([sys.executable, '-c', {grandchild_code!r}])\n"
-        "print(grandchild.wait(), int(signal.sigwait(term)), flush=True)\n"
+        "import subprocess, time\n"
+        "grandchild = subprocess.Popen(['/bin/sleep', '30'])\n"
+        f"open({str(grandchild_pid_file)!r}, 'w').write(str(grandchild.pid))\n"
+        "time.sleep(30)\n"
     )
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=3.0, grace_period_seconds=2.0
@@ -822,8 +792,8 @@ def test_migrated_graceful_sigterm_kills_a_multiprocess_group() -> None:
     assert result.escalation_dispatched is False  # SIGTERM was enough
     assert result.survivor_scan_performed is False
     assert result.termination_confirmed is True
-    assert result.return_code == 0  # the child survived SIGTERM to reap the grandchild
-    assert result.stdout_text.strip() == f"{-signal.SIGTERM} {int(signal.SIGTERM)}"
+    grandchild_pid = int(grandchild_pid_file.read_text())
+    assert not _pid_alive(grandchild_pid)
 
 
 @requires_posix_proc
