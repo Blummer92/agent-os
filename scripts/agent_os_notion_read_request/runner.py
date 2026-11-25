@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Mapping
 
 from .admission import admit_notion_read_request
@@ -205,6 +206,26 @@ def _classify_runner_exception(exc: BaseException, *, phase: str) -> str:
     return RECEIPT_REASON_UNHANDLED
 
 
+def _write_receipt(output: Path, payload: str) -> None:
+    """Publish only a complete JSON receipt; leave any prior file intact on failure."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output.parent,
+            prefix=".notion-read-receipt-", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload + "\n")
+        temporary.replace(output)
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass  # cleanup must not obscure the original failure
+
+
 def _publish_failure_receipt(
     *,
     output: Path,
@@ -242,8 +263,7 @@ def _publish_failure_receipt(
     reject_credential_keys(receipt, "evidence")
     payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(payload + "\n", encoding="utf-8")
+        _write_receipt(output, payload)
     except OSError:
         pass  # best effort; the nonzero exit still signals the failure
     print(payload)
@@ -301,10 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+        _write_receipt(
+            args.output, json.dumps(evidence, sort_keys=True, separators=(",", ":"))
         )
     except OSError as exc:
         return _publish_failure_receipt(
