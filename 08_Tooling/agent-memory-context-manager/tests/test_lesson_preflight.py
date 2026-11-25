@@ -1,3 +1,5 @@
+import pytest
+
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
@@ -362,3 +364,23 @@ def test_pr_a06_consumer_budget_counts_distinct_ids_not_records():
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.candidate_count == 6
     assert result.selected_count == 3
+
+
+@pytest.mark.parametrize("context", [RepairContext.FAILED_PR_REPAIR, RepairContext.CI_DIAGNOSIS])
+def test_forced_material_preflight_does_not_fall_back_if_reader_unavailable(context):
+    req = sparse_repair_request()
+    assert req.specialized_knowledge_required is None
+    assert plan_lesson_preflight(req, repair_context=context).retrieval_required
+    result = consume_lesson_preflight(req, repair_context=context, retrieval_available=False)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
+    assert result.selection_reason_codes == ("lesson-retrieval-unavailable-specialized-knowledge-required",)
+    assert not result.authority_created
+
+
+@pytest.mark.parametrize("context", [RepairContext.FAILED_PR_REPAIR, RepairContext.CI_DIAGNOSIS])
+def test_explicit_not_material_preflight_needs_no_reader(context):
+    req = request(specialized_knowledge_required=False)
+    result = consume_lesson_preflight(req, repair_context=context, retrieval_available=False)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.NOT_NEEDED
+    assert not result.authority_created

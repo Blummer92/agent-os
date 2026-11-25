@@ -271,7 +271,7 @@ def consume_lesson_preflight(
         return _from_selection(selection, (), 0)
 
     if not retrieval_available:
-        if request.specialized_knowledge_required is True:
+        if effective_request.specialized_knowledge_required is True:
             return _fallback(
                 LessonRetrievalStatus.INSUFFICIENT,
                 "lesson-retrieval-unavailable-specialized-knowledge-required",
