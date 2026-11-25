@@ -660,6 +660,20 @@ LESSONS = MappingProxyType({
             "Supporting Source Links": ("https://github.com/Blummer92/agent-os/pull/4097",),
         }),
     }),
+    # #3417/#4026: reviewed caller-visible-basis candidate; creation requires a separate owner command.
+    "ckr2-selection-reason-caller-basis": MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Guardrail": "Selection reporting is observational evidence, never admission, eligibility, or write authority. Missing reason registration must fail loudly in tests, not silently in handoff envelopes.",
+            "Learning Type": "Testing lesson",
+            "Lesson Learned": "When you add a lesson-matching rule, test what the caller actually sees",
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/4114",
+            "What Happened": "PR #4114 added a verified contextual match reason to the lesson selector, but the basis classifier in the reporting layer was not updated, so a successful match was diagnosed as no-relevant-signal with relevance-miss counters attached. Independent QA caught the contradiction pre-merge; the fix registered the reason in the existing basis fallback and added selector-to-caller assertions in the same change.",
+            "What To Do Next Time": "When adding or renaming a selection reason, register it in every diagnostics/reporting consumer in the same PR and extend the selector-to-caller regression test: a true match reports the right basis, an unrelated task still reports no signal, and an incomplete read stays not-evaluated.",
+            "Area": "Governance",
+            "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/4026",),
+        }),
+    }),
 })
 
 
