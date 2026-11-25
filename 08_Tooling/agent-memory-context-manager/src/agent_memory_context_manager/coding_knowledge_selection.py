@@ -16,7 +16,7 @@ MAX_TEXT_CHARS = 512
 # Advisory narrative text (candidate use_when / avoid_when guidance) is bounded
 # separately from structured identity text. This approved 2048-character limit
 # applies to EACH logical guidance field after Notion rich_text segments are
-# joined and whitespace is stripped; it is not a provider per-segment limit.
+# joined and stripped by the Notion adapter. CKR2 bounds the text it receives.
 # Notion's 2000-character per-segment limit is a distinct transport constraint.
 # The same logical-field policy is shared across CKR11 -> CKR6 -> CKR2.
 # Guidance over this bound still fails closed; nothing is truncated.
@@ -441,6 +441,7 @@ def _select_coding_knowledge(
         priority = {identity: index for index, identity in enumerate(_ranked_order)}
         best.sort(key=lambda item: priority[item[2].knowledge_id])
 
+    # Check the entire winning bucket before the final cut, not weaker matches.
     if any(item[2].authority_conflict for item in best):
         return _result(
             SufficiencyStatus.MANUAL_REVIEW,
@@ -474,9 +475,10 @@ def _select_coding_knowledge(
         for item in best[:MAX_SELECTED]
     )
 
-    uncovered = _uncovered_library_hints(request, selected)
-    if uncovered:
-        refs = _canonical_refs(request, selected)
+    refs = request.canonical_rule_refs + tuple(
+        ref for item in selected for ref in item.candidate.canonical_github_refs
+    )
+    if _uncovered_library_hints(request, selected):
         return _result(
             SufficiencyStatus.INSUFFICIENT,
             _next_escalation(request),
@@ -486,7 +488,6 @@ def _select_coding_knowledge(
             candidate_count,
         )
 
-    refs = _canonical_refs(request, selected)
     if _missing_candidate_provenance(selected):
         return _result(
             SufficiencyStatus.INSUFFICIENT,
@@ -508,10 +509,8 @@ def _select_coding_knowledge(
 
 
 def _knowledge_not_needed(request: CodingKnowledgeRequest) -> bool:
-    if request.specialized_knowledge_required is False:
-        return True
-    if request.specialized_knowledge_required is True:
-        return False
+    if request.specialized_knowledge_required is not None:
+        return not request.specialized_knowledge_required
     return not (
         request.library_hints
         or request.capability_keywords
@@ -584,14 +583,29 @@ _NOTION_EXECUTOR_TITLE = (
     re.compile(r"(?<![a-z0-9])notion read(?![a-z0-9])"),
 )
 _NOTION_EXECUTOR_NEGATION = re.compile(
-    r"(?<![a-z0-9])(?:not|never|unrelated|avoid|skip|cannot|no need|[a-z]+n['’]t)(?![a-z0-9])"
+    r"(?<![a-z0-9])(?:not|never|unrelated|avoid|skip|cannot|no need|[a-z]+n['’ʼ]t)(?![a-z0-9])"
 )
-_NOTION_EXECUTOR_GUIDANCE_FAILURE = re.compile(
-    r"(?<![a-z0-9])(?:failed|failure|non-success|error)(?![a-z0-9])"
+_NOTION_EXECUTOR_REJECT_FAILURE = re.compile(
+    r"\b(?:reject|refuse)\b.*\b(?:failed|failures?|non-success|errors?)\b"
 )
 _NOTION_EXECUTOR_GUIDANCE_COMPLETION = re.compile(
-    r"(?<![a-z0-9])(?:dispatch|completed|completion)(?![a-z0-9])"
+    r"(?<![a-z0-9])(?:dispatch|completed|completion|completing)(?![a-z0-9])"
 )
+
+
+def _rejects_executor_failure_before_completion(guidance: str) -> bool:
+    # Keep the rejection and its ordering in one instruction. Words elsewhere
+    # in the field do not establish that failures are rejected before completion.
+    instruction = re.split(r"[.!?;]", guidance, maxsplit=1)[0]
+    if instruction.startswith("before "):
+        completion, separator, rejection = instruction[7:].partition(",")
+    else:
+        rejection, separator, completion = instruction.partition(" before ")
+    return bool(
+        separator
+        and _NOTION_EXECUTOR_REJECT_FAILURE.search(rejection)
+        and _NOTION_EXECUTOR_GUIDANCE_COMPLETION.search(completion)
+    )
 
 
 def _deduplicate(
@@ -709,8 +723,7 @@ def _match_candidate(
             all(pattern.search(title) for pattern in _NOTION_EXECUTOR_TITLE)
             and not _NOTION_EXECUTOR_NEGATION.search(title)
             and not _NOTION_EXECUTOR_NEGATION.search(guidance)
-            and _NOTION_EXECUTOR_GUIDANCE_FAILURE.search(guidance)
-            and _NOTION_EXECUTOR_GUIDANCE_COMPLETION.search(guidance)
+            and _rejects_executor_failure_before_completion(guidance)
         ):
             return 2, (_NOTION_EXECUTOR_REASON,)
 
@@ -747,16 +760,6 @@ def _missing_candidate_provenance(selected: tuple[SelectedKnowledge, ...]) -> bo
     candidate's refs can never satisfy another candidate's absence.
     """
     return any(not item.candidate.canonical_github_refs for item in selected)
-
-
-def _canonical_refs(
-    request: CodingKnowledgeRequest,
-    selected: tuple[SelectedKnowledge, ...],
-) -> tuple[str, ...]:
-    refs = set(request.canonical_rule_refs)
-    for item in selected:
-        refs.update(item.candidate.canonical_github_refs)
-    return tuple(sorted(refs))
 
 
 def _next_escalation(request: CodingKnowledgeRequest) -> RetrievalEscalation:

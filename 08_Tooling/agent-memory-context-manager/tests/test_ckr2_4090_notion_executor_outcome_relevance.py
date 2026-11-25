@@ -38,6 +38,17 @@ GUARDRAIL = (
 REVISION = "2026-11-25T12:00:00.000Z"
 
 
+@pytest.mark.parametrize("title,guidance", [
+    ("Donʼt reject failed executor outcomes before completing a Notion read", GUIDANCE),
+    (TITLE, "Donʼt check failure before marking dispatch completed."),
+], ids=["title-modifier-apostrophe", "guidance-modifier-apostrophe"])
+def test_unicode_modifier_apostrophe_does_not_turn_negation_into_a_match(title, guidance):
+    _, selected = reasons_for(
+        request("notion read", "executor outcome"), candidate(title=title, guidance=guidance),
+    )
+    assert all(REASON not in reasons for reasons in selected)
+
+
 def row(*, title=TITLE, guidance=GUIDANCE):
     def rich(value, kind="rich_text"):
         return {"type": kind, kind: [{"plain_text": value}]}
@@ -88,6 +99,10 @@ def reasons_for(req, cand):
     return result, selected
 
 
+
+def assert_not_contextual(selected):
+    assert all(REASON not in reasons for reasons in selected), selected
+
 def test_explicit_mechanism_request_selects_via_contextual_reason():
     result, selected = reasons_for(
         request(
@@ -117,15 +132,20 @@ def test_extra_caller_hints_do_not_dilute_the_mechanism_match():
 ])
 def test_partial_caller_signals_never_activate_the_branch(hints):
     _, selected = reasons_for(request(*hints), candidate())
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
-def test_negated_title_never_activates_the_branch():
-    _, selected = reasons_for(
-        request("notion read", "executor outcome"),
-        candidate(title="Do not reject failed executor outcomes before completing a Notion read"),
-    )
-    assert all(REASON not in reason_codes for reason_codes in selected)
+@pytest.mark.parametrize("title", [
+    "Do not reject failed executor outcomes before completing a Notion read",
+    "Skip rejecting failed executor outcomes before completing a Notion read",
+    "Cannot reject failed executor outcomes before completing a Notion read",
+    "Don't reject failed executor outcomes before completing a Notion read",
+    "Don’t reject failed executor outcomes before completing a Notion read",
+    "No need to reject failed executor outcomes before completing a Notion read",
+])
+def test_negated_title_never_activates_the_branch(title):
+    _, selected = reasons_for(request("notion read", "executor outcome"), candidate(title=title))
+    assert_not_contextual(selected)
 
 
 def test_negated_guidance_never_activates_the_branch():
@@ -136,7 +156,7 @@ def test_negated_guidance_never_activates_the_branch():
                      "before marking governed read dispatch completed.",
         ),
     )
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
 def test_guidance_without_completion_signal_never_activates_the_branch():
@@ -144,7 +164,7 @@ def test_guidance_without_completion_signal_never_activates_the_branch():
         request("notion read", "executor outcome"),
         candidate(guidance="Reject failed executor output and surface an explicit error receipt."),
     )
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
 def test_guardrail_text_alone_never_supplies_positive_evidence():
@@ -154,7 +174,7 @@ def test_guardrail_text_alone_never_supplies_positive_evidence():
         request("notion read", "executor outcome"),
         candidate(guidance="Record the executor outcome and continue the read."),
     )
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
 HARD_NEGATIVES = (
@@ -168,13 +188,17 @@ HARD_NEGATIVES = (
      ("ci", "packaging")),
     ("A Notion read executor returned success with a valid bounded payload; project the read evidence",
      ("notion",)),
+    ("Persist an approved Notion lesson", ("Notion Writer", "persistence")),
+    ("Verify the current revision of a Notion page by reading it back", ("notion read", "readback")),
+    ("Add generic Notion integration telemetry", ("notion", "quality-assurance")),
+    ("Audit unrelated fixture isolation", ("quality-assurance", "cache")),
 )
 
 
 @pytest.mark.parametrize("task,hints", HARD_NEGATIVES)
 def test_unrelated_tasks_never_receive_the_contextual_reason(task, hints):
     _, selected = reasons_for(request(*hints, task=task), candidate())
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
 _MECHANISM_TASKS = (
@@ -262,16 +286,23 @@ def test_complete_snapshot_selects_late_contextual_lesson_without_id(boundaries,
 
 
 @pytest.mark.parametrize("fault", ["repeated", "missing"])
-def test_partial_snapshot_never_evaluates_even_when_match_was_read(fault):
+@pytest.mark.parametrize("match_index", [0, 20], ids=["first-page", "second-page"])
+def test_partial_snapshot_never_evaluates_even_when_match_was_read(fault, match_index):
     records = _snapshot()
-    records.insert(0, records.pop())
-    read, calls = _snapshot_reader(records[:32], (16,), fault=fault)
+    records.insert(match_index, records.pop())
+    records = records[:32]
+    complete, _ = _snapshot_reader(records, (16,))
+    assert _retrieve(complete).selected_lesson_ids == ("LL-4090",)
+
+    read, calls = _snapshot_reader(records, (16,), fault=fault)
     result = _retrieve(read)
     assert calls == [None, "opaque-page-1"]
     assert result.selected_lesson_ids == ()
-    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
-    assert result.retrieval_diagnostics["observed_rows"] == 0
-
+    diagnostics = result.retrieval_diagnostics
+    assert diagnostics["selection_basis"] == "not-evaluated"
+    assert diagnostics["incomplete_reason_code"] == f"{fault}-cursor"
+    # Partial pages were fetched but never admitted to normalization.
+    assert diagnostics["observed_rows"] == diagnostics["normalized_rows"] == 0
 
 @pytest.mark.parametrize("defect", ["conflicting-revision", "missing-revision", "missing-provenance"])
 def test_snapshot_rejects_invalid_late_evidence(defect):
@@ -296,19 +327,6 @@ def test_snapshot_rejects_invalid_late_evidence(defect):
         assert "unverifiable-relevant-candidate" in result.selection_reason_codes
 
 
-@pytest.mark.parametrize("title", [
-    "Skip rejecting failed executor outcomes before completing a Notion read",
-    "Cannot reject failed executor outcomes before completing a Notion read",
-    "Don't reject failed executor outcomes before completing a Notion read",
-    "Don’t reject failed executor outcomes before completing a Notion read",
-    "No need to reject failed executor outcomes before completing a Notion read",
-])
-def test_additional_negative_title_polarity(title):
-    _, selected = reasons_for(request("notion read", "executor outcome"), candidate(title=title))
-    assert all(REASON not in reason_codes for reason_codes in selected)
-
-
-
 def test_unrelated_complete_snapshot_reports_no_signal():
     read, _ = _snapshot_reader(_snapshot(), (23, 74))
     result = _retrieve(read, task="Fix leap-day display in a calendar", hints=("calendar formatting",))
@@ -317,7 +335,7 @@ def test_unrelated_complete_snapshot_reports_no_signal():
     assert result.retrieval_diagnostics["selection_basis"] == "no-relevant-signal"
 
 
-def test_new_reason_preserves_manual_review_for_broad_best_bucket_tie():
+def test_broad_best_bucket_tie_falls_back_to_manual_review():
     read, _ = _snapshot_reader(_snapshot(), (23, 74))
     result = _retrieve(read, hints=("notion read", "executor outcome", "deployment"), languages=("Python",))
     assert result.retrieval_diagnostics["best_bucket_tied_identities"] > 5
@@ -340,20 +358,39 @@ def test_task_prose_alone_does_not_replace_typed_signals():
     (TITLE, "Unrelated guidance: reject the failure before dispatch completion."),
     (TITLE, "Don't check failure before marking dispatch completed."),
     (TITLE, "We don’t check failure before marking dispatch completed."),
+], ids=[
+    "title-missing-executor",
+    "title-wrong-domain",
+    "guidance-missing-failure",
+    "guidance-unrelated",
+    "guidance-ascii-negation",
+    "guidance-curly-negation",
 ])
 def test_contextual_match_requires_independent_lesson_owned_signals(title, guidance):
     _, selected = reasons_for(
         request("notion read", "executor outcome"), candidate(title=title, guidance=guidance),
     )
-    assert all(REASON not in reason_codes for reason_codes in selected)
+    assert_not_contextual(selected)
 
 
-@pytest.mark.parametrize("task,hints", [
-    ("Persist an approved Notion lesson", ("Notion Writer", "persistence")),
-    ("Verify the current revision of a Notion page by reading it back", ("notion read", "readback")),
-    ("Add generic Notion integration telemetry", ("notion", "quality-assurance")),
-    ("Audit unrelated fixture isolation", ("quality-assurance", "cache")),
+@pytest.mark.parametrize("guidance", [
+    "Mark dispatch completed even if the executor returns an error.",
+    "Record the executor error after marking the read completed.",
+    "Reject the executor failure after marking dispatch completed.",
 ])
-def test_additional_hard_negatives_do_not_receive_notion_executor_reason(task, hints):
-    _, selected = reasons_for(request(*hints, task=task), candidate())
-    assert all(REASON not in reason_codes for reason_codes in selected)
+def test_contextual_match_refuses_completion_before_failure_handling(guidance):
+    _, selected = reasons_for(
+        request("notion read", "executor outcome"), candidate(guidance=guidance),
+    )
+    assert_not_contextual(selected)
+
+
+@pytest.mark.parametrize("guidance", [
+    GUIDANCE,
+    "Reject explicit executor errors before reporting dispatch completion.",
+])
+def test_contextual_match_requires_rejection_before_completion(guidance):
+    _, selected = reasons_for(
+        request("notion read", "executor outcome"), candidate(guidance=guidance),
+    )
+    assert selected == [(REASON,)]
