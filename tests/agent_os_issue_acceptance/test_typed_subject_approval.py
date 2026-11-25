@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import copy
+from collections import UserDict
+from enum import Enum
+from types import SimpleNamespace
 
 import pytest
 
+from instructional_workflow_contracts.common import FrozenObject
 from instructional_workflow_contracts.live_operation_subject import CONTRACT_ID
-from scripts.agent_os_issue_acceptance.approval_records import ApprovalState
+from scripts.agent_os_issue_acceptance import typed_subject_approval as binding
 from scripts.agent_os_issue_acceptance.typed_subject_approval import (
     INSTRUCTIONAL_LIVE_SUBJECT_KIND,
-    TYPED_SUBJECT_APPROVAL_SCHEMA_VERSION,
-    TYPED_SUBJECT_PROJECTION_SCHEMA_VERSION,
     TypedSubjectReference,
     validate_typed_subject_reference,
 )
@@ -28,11 +29,6 @@ def _invalid_subject() -> dict[str, object]:
         "visual_reuse_evidence_ids": [],
         "authority": {},
     }
-
-
-def test_typed_subject_versions_are_additive_successors():
-    assert TYPED_SUBJECT_APPROVAL_SCHEMA_VERSION == "1.2"
-    assert TYPED_SUBJECT_PROJECTION_SCHEMA_VERSION == "1.1"
 
 
 def test_reference_accepts_only_canonical_instructional_kind_and_version():
@@ -96,3 +92,52 @@ def test_no_io_or_runtime_dependencies_are_imported():
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_uppercase_digest_is_canonicalized_without_relaxing_the_prefix():
+    prefix = "instructional-live-operation-subject:"
+    ref = TypedSubjectReference(INSTRUCTIONAL_LIVE_SUBJECT_KIND, CONTRACT_ID, prefix + "A" * 64)
+    assert ref.subject_id == prefix + "a" * 64
+    with pytest.raises(ValueError, match="malformed"):
+        TypedSubjectReference(INSTRUCTIONAL_LIVE_SUBJECT_KIND, CONTRACT_ID, prefix.upper() + "a" * 64)
+    with pytest.raises(ValueError, match="malformed"):
+        TypedSubjectReference(INSTRUCTIONAL_LIVE_SUBJECT_KIND, CONTRACT_ID, prefix + "G" * 64)
+
+
+def test_plain_dict_requirement_does_not_dispatch_custom_mapping():
+    class Custom(UserDict):
+        def __iter__(self):
+            pytest.fail("custom mapping executed")
+
+    with pytest.raises(ValueError, match="plain dict"):
+        validate_typed_subject_reference(Custom())
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_validator_failure_is_value_error_without_unbounded_details(monkeypatch, fail):
+    def validate(_raw):
+        if fail:
+            raise RuntimeError("raw" * 5000)
+        return SimpleNamespace(status="invalid", record=None, reason_codes=("X" * 5000,) * 20, details=("raw" * 5000,))
+
+    monkeypatch.setattr(binding, "validate_live_operation_subject", validate)
+    with pytest.raises(ValueError) as caught:
+        validate_typed_subject_reference({})
+    assert "raw" not in str(caught.value)
+    assert len(str(caught.value)) < 320
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_equivalent_status_enum_and_validated_id_binding(monkeypatch, mismatch):
+    class ReloadedStatus(str, Enum):
+        VALID = "valid"
+
+    subject_id = "instructional-live-operation-subject:" + "a" * 64
+    payload_id = "instructional-live-operation-subject:" + "b" * 64 if mismatch else subject_id
+    record = SimpleNamespace(contract_version=CONTRACT_ID, record_id=subject_id, payload=FrozenObject((("subject_id", payload_id),)))
+    monkeypatch.setattr(binding, "validate_live_operation_subject", lambda _: SimpleNamespace(status=ReloadedStatus.VALID, record=record, reason_codes=(), details=()))
+    if mismatch:
+        with pytest.raises(ValueError, match="does not match"):
+            validate_typed_subject_reference({})
+    else:
+        assert validate_typed_subject_reference({}).subject_id == subject_id

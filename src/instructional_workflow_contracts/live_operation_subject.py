@@ -1,21 +1,21 @@
 """Pure typed live-operation subject for governed instructional production."""
 from __future__ import annotations
 
-from typing import Any
-
 from .common import (
     FINGERPRINT_ALGORITHM,
+    MAX_JSON_ITEMS,
     AuthorityEvidence,
     ContractValidationError,
     ValidatedRecord,
     ValidationResult,
     ValidationStatus,
     freeze_json,
-    sanitize_detail,
+    invalid_result,
     sha256_hex,
     validate_and_normalize_json,
     validate_bounded_list,
     validate_exact_fields,
+    validate_mapping,
     validate_revision,
     validate_sha256,
     validate_stable_id,
@@ -56,26 +56,28 @@ _AUTHORITY_FIELDS = frozenset(
 def validate_live_operation_subject(value: object) -> ValidationResult:
     """Validate one exact approval-semantic live-operation subject without I/O."""
     try:
-        # Classify closed-schema top-level fields before generic JSON normalization so
-        # forbidden invocation/audit keys remain contract-unknown rather than being
-        # reclassified by the shared secret-like-key firewall. Nested secret-like
-        # keys still fail through the shared normalization path.
-        if type(value) is dict and all(type(key) is str for key in value):
-            validate_exact_fields(value, _TOP_LEVEL_FIELDS, "live-operation subject")
-        data = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
-        if type(data) is not dict:
-            raise ContractValidationError("handoff-wrong-type", "live-operation subject must be a mapping")
-        validate_exact_fields(data, _TOP_LEVEL_FIELDS, "live-operation subject")
+        # Only examine the bounded raw shape before normalization. Preserve
+        # the closed top-level unknown-field reason without scanning a huge
+        # mapping or dispatching caller-defined Mapping operations.
+        raw = validate_mapping(value, "live-operation subject")
+        if len(raw) > MAX_JSON_ITEMS:
+            raise ContractValidationError("handoff-oversized", "live-operation subject exceeds its item bound")
+        if len(raw) > len(_TOP_LEVEL_FIELDS):
+            raise ContractValidationError("handoff-unknown-field", "live-operation subject contains unknown fields")
+        if any(type(key) is not str for key in raw):
+            raise ContractValidationError("handoff-wrong-type", "live-operation subject keys must be built-in strings")
+        validate_exact_fields(raw, _TOP_LEVEL_FIELDS, "live-operation subject")
+        data = validate_and_normalize_json(raw, max_bytes=MAX_INPUT_BYTES)
         if validate_version(data["contract_version"]) != CONTRACT_ID:
             raise ContractValidationError("handoff-version-unsupported", "unsupported live-operation subject version")
 
-        source = _mapping(data["source"], "source")
+        source = validate_mapping(data["source"], "source")
         validate_exact_fields(source, frozenset({"stable_id", "revision", "content_fingerprint"}), "source")
         validate_stable_id(source["stable_id"], "source stable_id")
         validate_revision(source["revision"])
         validate_sha256(source["content_fingerprint"], "source content_fingerprint")
 
-        requirement_binding = _mapping(data["material_requirement"], "material_requirement")
+        requirement_binding = validate_mapping(data["material_requirement"], "material_requirement")
         validate_exact_fields(
             requirement_binding,
             frozenset({"contract_version", "requirement_id", "record_revision", "record_fingerprint", "record"}),
@@ -100,7 +102,7 @@ def validate_live_operation_subject(value: object) -> ValidationResult:
         if expected != observed:
             raise ContractValidationError("material-incompatible-fingerprint", "MaterialRequirement binding does not match validated record")
 
-        workspace = _mapping(data["workspace"], "workspace")
+        workspace = validate_mapping(data["workspace"], "workspace")
         validate_exact_fields(
             workspace,
             frozenset({"slides_template_id", "docs_template_id", "target_folder_id"}),
@@ -109,7 +111,7 @@ def validate_live_operation_subject(value: object) -> ValidationResult:
         for key in sorted(workspace):
             validate_stable_id(workspace[key], key)
 
-        operation = _mapping(data["operation"], "operation")
+        operation = validate_mapping(data["operation"], "operation")
         validate_exact_fields(
             operation,
             frozenset({"idempotency_key", "slides_name", "docs_name", "operation_shape_fingerprint"}),
@@ -124,6 +126,8 @@ def validate_live_operation_subject(value: object) -> ValidationResult:
         data["visual_reuse_evidence_ids"] = list(
             _evidence_ids(data["visual_reuse_evidence_ids"], "visual_reuse_evidence_ids", required=False)
         )
+        # MaterialRequirement V1 has a closed schema without visual_direction;
+        # the decision and its evidence obligation are defined by V2.
         requirement_payload = requirement.to_dict()
         visual_direction = requirement_payload.get("visual_direction")
         if (
@@ -134,44 +138,30 @@ def validate_live_operation_subject(value: object) -> ValidationResult:
         ):
             raise ContractValidationError("material-missing-required-field", "visual/reuse evidence is required by MaterialRequirement")
 
-        authority = _mapping(data["authority"], "authority")
+        authority = validate_mapping(data["authority"], "authority")
         validate_exact_fields(authority, _AUTHORITY_FIELDS, "authority")
         if any(value is not False for value in authority.values()):
             raise ContractValidationError("authority-invalid", "live-operation subject cannot grant authority")
 
-        semantic_payload = dict(data)
-        subject_id = SUBJECT_ID_PREFIX + sha256_hex(semantic_payload)
-        record_payload = dict(data)
-        record_payload["subject_id"] = subject_id
+        # A new semantic payload gets a new SHA-256 identity; revision 1
+        # belongs to that subject, not to the source within its payload.
+        subject_id = SUBJECT_ID_PREFIX + sha256_hex(data)
+        data["subject_id"] = subject_id
         record = ValidatedRecord(
             contract_version=CONTRACT_ID,
             record_id=subject_id,
             record_revision=1,
             fingerprint_algorithm=FINGERPRINT_ALGORITHM,
-            fingerprint=sha256_hex(record_payload),
-            payload=freeze_json(record_payload),
+            fingerprint=sha256_hex(data),
+            payload=freeze_json(data),
         )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return ValidationResult(
-            status=ValidationStatus.INVALID,
-            record=None,
-            reason_codes=(exc.reason_code,),
-            details=(exc.detail,),
-        )
-    except (TypeError, ValueError) as exc:
-        return ValidationResult(
-            status=ValidationStatus.INVALID,
-            record=None,
-            reason_codes=("handoff-invalid",),
-            details=(sanitize_detail(str(exc)),),
-        )
-
-
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a mapping")
-    return value
+        # ContractValidationError and ValidationResult own diagnostic sanitation.
+        return invalid_result(exc.reason_code, exc.detail)
+    except (AttributeError, KeyError, RecursionError, TypeError, ValueError):
+        # Bad shapes from a dependency must not escape or disclose raw data.
+        return invalid_result("handoff-invalid", "could not validate live-operation subject")
 
 
 def _evidence_ids(value: object, name: str, *, required: bool) -> tuple[str, ...]:
@@ -188,5 +178,5 @@ __all__ = [
     "CONTRACT_ID",
     "SUBJECT_ID_PREFIX",
     "validate_live_operation_subject",
-    "AuthorityEvidence",
+    "AuthorityEvidence",  # compatibility re-export; subject flags are a separate schema
 ]
