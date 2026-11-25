@@ -674,6 +674,18 @@ LESSONS = MappingProxyType({
             "Supporting Source Links": ("https://github.com/Blummer92/agent-os/issues/4026",),
         }),
     }),
+    "ckr2-reversed-instruction-negative-control": MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Guardrail": "A keyword hit is not evidence that guidance recommends the right action. Keep provenance, eligibility and write authority separate from relevance.",
+            "Learning Type": "QA feedback",
+            "Lesson Learned": "Test the opposite instruction when qualifying lexical lesson matches",
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/4114",
+            "What Happened": "The Notion executor matcher accepted guidance that marked dispatch complete despite an error, or handled the error after completion. Three native selector cases and one writer-qualification case failed with the old predicate. The repaired predicate passed focused CI. Diagnosis: Independent failure and completion keywords showed topic overlap but did not establish the direction or order of the recommended action.",
+            "What To Do Next Time": "Pair a real positive with hard negatives that keep the same topic words but reverse the action or ordering. Assert that the reversed advice does not earn a contextual match or pass writer qualification.",
+            "Area": "Governance",
+        }),
+    }),
 })
 
 

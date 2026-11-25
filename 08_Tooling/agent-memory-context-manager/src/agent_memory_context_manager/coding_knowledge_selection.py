@@ -575,6 +575,38 @@ _PR_REFRESH_HISTORICAL_HINTS = frozenset({
 _PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
 
 
+_LESSON_TEST_REASON = "verified-lesson-relevance-test-match"
+# Keep task hints and the lesson's own title / primary guidance independent.
+_LESSON_TEST_MECHANISMS = (
+    (
+        frozenset({"selection basis", "caller reporting"}),
+        re.compile(r"\b(?:caller|handoff)\b"),
+        re.compile(r"\bselection reason\b[^.!?]*\bselector-to-caller\b"),
+    ),
+    (
+        frozenset({"lexical lesson relevance", "reversed instruction"}),
+        re.compile(r"\b(?:lexical lesson|relevance match)"),
+        re.compile(r"\bhard negatives?\b[^.!?]*\breverse (?:the )?(?:advice|action|order)\b"),
+    ),
+)
+_LESSON_TEST_NEGATION = re.compile(
+    r"\b(?:not|never|skip|avoid|cannot|no need|\w+n['’ʼ]t)\s+"
+    r"(?:test(?:ing)?|check(?:ing)?|pair(?:ing)?|revers(?:e|ing)|register(?:ing)?|extend(?:ing)?)\b"
+)
+
+
+def _lesson_test_mechanisms(candidate: CodingKnowledgeCandidate) -> tuple[frozenset[str], ...]:
+    if candidate.source_system != "notion-lessons-learned" or not candidate.use_when:
+        return ()
+    title = " ".join(candidate.name.casefold().split())
+    guidance = " ".join(candidate.use_when[0].casefold().split())
+    return tuple(
+        hints if not _LESSON_TEST_NEGATION.search(title + " " + guidance) else frozenset()
+        for hints, title_pattern, guidance_pattern in _LESSON_TEST_MECHANISMS
+        if title_pattern.search(title) and guidance_pattern.search(guidance)
+    )
+
+
 def _deduplicate(
     candidates: tuple[CodingKnowledgeCandidate, ...],
 ) -> tuple[tuple[CodingKnowledgeCandidate, ...], bool]:
@@ -673,6 +705,15 @@ def _match_candidate(
             and re.search(r"(?<![a-z0-9])git(?![a-z0-9])", guidance)
         ):
             return 2, (_PR_REFRESH_REASON,)
+
+    lesson_tests = _lesson_test_mechanisms(candidate)
+    if lesson_tests:
+        # Generic Testing/QA metadata is not enough for this mechanism.
+        capability_overlap.difference_update(("testing", "quality-assurance"))
+        if ecosystem_match and len(lesson_tests) == 1:
+            hints, = lesson_tests
+            if hints and hints <= capability_hints:
+                return 2, (_LESSON_TEST_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)

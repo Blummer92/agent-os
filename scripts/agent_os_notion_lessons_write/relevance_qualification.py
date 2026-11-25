@@ -68,7 +68,7 @@ def qualify_reviewed_create(
     assertions about the real Notion page or its activation.
     """
     from agent_memory_context_manager.coding_knowledge_selection import (
-        CodingKnowledgeRequest, SufficiencyStatus, select_coding_knowledge,
+        CodingKnowledgeRequest, SufficiencyStatus, _LESSON_TEST_REASON, select_coding_knowledge,
     )
     from agent_memory_context_manager.lesson_activation_bridge import (
         LessonActivationSkip, _as_selection_candidate, normalize_lesson_row,
@@ -103,6 +103,7 @@ def qualify_reviewed_create(
     context_reasons = frozenset({
         "verified-ckr6-mutation-context-match",
         "pr-refresh-reconciliation-text-match",
+        _LESSON_TEST_REASON,
         # A writer lesson has no independent library_name. CKR2's
         # "exact-library-match" here can be obtained by repeating the
         # lesson title as a library hint; it is a title echo, not evidence
