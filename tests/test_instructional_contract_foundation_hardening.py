@@ -111,3 +111,11 @@ def test_freezing_and_thawing_refuse_overdeep_inputs():
         freeze_json(raw)
     with pytest.raises(ContractValidationError, match="nesting-depth"):
         canonical_json_bytes(frozen)
+
+
+@pytest.mark.parametrize("text", [
+    r'password="prefix\"synthetic-suffix"',
+    r"token='prefix\'synthetic-suffix'",
+])
+def test_escaped_quote_does_not_end_redaction_early(text):
+    assert "synthetic-suffix" not in sanitize_detail(text)

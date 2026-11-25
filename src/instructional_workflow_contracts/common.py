@@ -67,7 +67,7 @@ _SECRET_KEY_RE = re.compile(
 )
 _SECRET_DETAIL_RE = re.compile(
     rf"""(?<![\w-])(?:[\w-]*?[_-])?(?:{_SECRET_LABEL}|tokens?|sessions?|bearer)["']?\s*[:=]\s*"""
-    r"""(?:Bearer\s+[^\s,;}]+|"[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s,;}]+)|\bBearer\s+[A-Za-z0-9._~+/=-]+""",
+    r"""(?:Bearer\s+[^\s,;}]+|"(?:\\.|[^"\\])*(?:"|\\?$)|'(?:\\.|[^'\\])*(?:'|\\?$)|[^\s,;}]+)|\bBearer\s+[A-Za-z0-9._~+/=-]+""",
     re.IGNORECASE,
 )
 

@@ -986,9 +986,9 @@ class _PilotState:
         self.primary_status = status
         self.reason_codes.update(reasons)
         if detail is not None:
-            self.details.append(detail)
+            self.details.append(_bounded_adapter_note(detail))
         if error is not None and self.primary_error is None:
-            self.primary_error = error
+            self.primary_error = _bounded_adapter_note(error)
         if quarantine:
             self.quarantined = True
         return _PilotStop()
@@ -1064,9 +1064,17 @@ def run_single_issue_pilot(
     return _build_result(state)
 
 
+def _bounded_adapter_note(note: object) -> str:
+    return note[:MAX_PILOT_STRING_LENGTH // 2] if type(note) is str else "invalid adapter detail"
+
+
+def _exact_flags(*flags: object) -> bool:
+    return all(type(flag) is bool for flag in flags)
+
+
 def _adapter_error_detail(exc: BaseException) -> str:
     try:
-        return str(exc)[:MAX_PILOT_STRING_LENGTH // 2]
+        return _bounded_adapter_note(str(exc))
     except Exception:
         return type(exc).__name__[:MAX_PILOT_STRING_LENGTH // 2]
 
@@ -1870,7 +1878,10 @@ def _dispatch_executor(state: _PilotState, executor: PilotExecutor) -> None:
         state.possible_partial_effects = True
         raise
 
-    if not isinstance(observation, PilotExecutionObservation):
+    if not isinstance(observation, PilotExecutionObservation) or not _exact_flags(
+        observation.started, observation.cancellation_requested,
+        observation.termination_confirmed, observation.possible_partial_effects,
+    ):
         state.possible_partial_effects = True
         raise state.stop(
             "quarantined",
@@ -2058,7 +2069,11 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
             error=_adapter_error_detail(exc),
         ) from exc
 
-    if not isinstance(observation, PilotValidationObservation):
+    if not isinstance(observation, PilotValidationObservation) or not _exact_flags(
+        observation.started, observation.termination_confirmed, observation.possible_partial_effects,
+        observation.attempted, observation.passed,
+    ):
+        state.validation_possible_partial_effects = True
         raise state.stop(
             "needs-decision",
             reasons=("validation.error",),
@@ -2214,7 +2229,9 @@ def _cleanup_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
         state.quarantined = True
         return
 
-    if not isinstance(cleanup, WorkspaceCleanup):
+    if not isinstance(cleanup, WorkspaceCleanup) or not _exact_flags(
+        cleanup.filesystem_removed, cleanup.metadata_removed, cleanup.path_absent, cleanup.force_required,
+    ):
         state.cleanup_errors.append("workspace-cleanup:unsupported-observation")
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
@@ -2235,14 +2252,14 @@ def _cleanup_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
         state.cleanup_errors.append(
             "workspace-cleanup:filesystem-not-removed"
             + (":path-absent" if cleanup.path_absent else "")
-            + (f":{cleanup.reason}" if cleanup.reason else "")
+            + (f":{_bounded_adapter_note(cleanup.reason)}" if cleanup.reason else "")
         )
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
     if not state.workspace_metadata_cleaned:
         state.cleanup_errors.append(
             "workspace-cleanup:metadata-not-removed"
-            + (f":{cleanup.reason}" if cleanup.reason else "")
+            + (f":{_bounded_adapter_note(cleanup.reason)}" if cleanup.reason else "")
         )
         state.reason_codes.add("workspace.metadata-cleanup-failed")
         state.quarantined = True
@@ -2321,7 +2338,9 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
         state.quarantined = True
         return
 
-    if not isinstance(release, PilotLeaseReleaseObservation):
+    if not isinstance(release, PilotLeaseReleaseObservation) or not _exact_flags(
+        release.released, release.ambiguous, release.forced,
+    ):
         state.release_errors.append("lease-release:unsupported-observation")
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
@@ -2335,7 +2354,7 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
         return
     if release.ambiguous:
         state.release_errors.append(
-            "lease-release:ambiguous" + (f":{release.reason}" if release.reason else "")
+            "lease-release:ambiguous" + (f":{_bounded_adapter_note(release.reason)}" if release.reason else "")
         )
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
@@ -2357,7 +2376,7 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
         return
     if not release.released:
         state.release_errors.append(
-            "lease-release:not-released" + (f":{release.reason}" if release.reason else "")
+            "lease-release:not-released" + (f":{_bounded_adapter_note(release.reason)}" if release.reason else "")
         )
         state.reason_codes.add("lease.release-failed")
         state.quarantined = True
@@ -2460,7 +2479,7 @@ def _build_result(state: _PilotState) -> SingleIssuePilotResult:
         "executor_started": state.executor_started,
         "cancellation_requested": state.cancellation_requested,
         "termination_confirmed": state.termination_confirmed,
-        "possible_partial_effects": state.possible_partial_effects,
+        "possible_partial_effects": state.possible_partial_effects or state.validation_possible_partial_effects,
         "validation_attempts": state.validation_attempts,
         "validation_attempted": state.validation_attempted,
         "validation_passed": state.validation_passed,
