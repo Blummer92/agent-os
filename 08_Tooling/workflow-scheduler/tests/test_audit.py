@@ -233,3 +233,51 @@ class TestAuditLogger:
 
         events = logger.get_events()
         assert len(events[0].timestamp) > 0
+
+
+def test_failed_durable_audit_is_not_recorded_in_memory_and_can_retry(tmp_path, monkeypatch):
+    from workflow_scheduler.repository.sqlite_repository import SQLiteRepository
+
+    repo = SQLiteRepository(str(tmp_path / "audit.db"))
+    logger = AuditLogger(repo)
+    task = Task(
+        id="audit-task", workflow_id="audit-workflow", type="test",
+        owner="system", action="audit", idempotency_key="audit-key",
+    )
+    try:
+        logger.log_task_created(task)
+
+        def refuse(**kwargs):
+            assert kwargs["workflow_id"] == task.workflow_id
+            raise OSError("injected audit write failure")
+
+        with monkeypatch.context() as m:
+            m.setattr(repo, "log_event", refuse)
+            with pytest.raises(OSError, match="^injected audit write failure$"):
+                logger.log_task_paused(task)
+
+        assert [e.event_type for e in logger.events] == ["task_created"]
+        assert [e.event_type for e in logger.get_events(workflow_id=task.workflow_id)] == ["task_created"]
+
+        logger.log_task_paused(task)
+        events = AuditLogger(repo).get_events(workflow_id=task.workflow_id, task_id=task.id)
+        assert [e.event_type for e in events] == ["task_created", "task_paused"]
+        assert all((e.workflow_id, e.task_id) == (task.workflow_id, task.id) for e in events)
+        assert [e.event_type for e in logger.events] == ["task_created", "task_paused"]
+    finally:
+        repo.close()
+
+
+def test_memory_audit_detaches_details_from_input_and_readers():
+    logger = AuditLogger()
+    wf = WorkflowPlan(workflow_id="wf-audit", title="Verify audit", created_by="tester")
+    task_ids = ["member"]
+    logger.log_batch_result(wf, "batch-1", "completed", task_ids)
+    task_ids.clear()
+    readback = logger.get_events(workflow_id=wf.workflow_id)
+    assert len(readback) == 1
+    assert readback[0].details["task_ids"] == ["member"]
+    readback[0].details["task_ids"].append("not-a-member")
+    logger.get_events().clear()
+    assert len(logger.get_events()) == 1
+    assert logger.get_events()[0].details["task_ids"] == ["member"]

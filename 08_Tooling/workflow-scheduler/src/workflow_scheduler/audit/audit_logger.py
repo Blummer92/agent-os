@@ -1,5 +1,6 @@
 """Audit logger for task and workflow state transitions."""
 
+from copy import deepcopy
 from dataclasses import dataclass, asdict
 import json
 from typing import Any, Dict, List, Optional
@@ -54,17 +55,17 @@ class AuditLogger:
             workflow_id=workflow.workflow_id if workflow else (task.workflow_id if task else None),
             status_before=status_before,
             status_after=status_after,
-            details=details or {},
+            details=deepcopy(details) if details is not None else {},
         )
-        self.events.append(event)
-
-        if self.repository:
+        if self.repository is not None:
             self.repository.log_event(
                 event_type=event_type,
                 task_id=event.task_id,
                 workflow_id=event.workflow_id,
                 details=event.to_dict(),
             )
+        # A raised persistence error must not leave a phantom in-memory event.
+        self.events.append(event)
 
     def log_task_created(self, task: Task) -> None:
         """Log task creation."""
@@ -363,7 +364,7 @@ class AuditLogger:
             events = [e for e in events if e.task_id == task_id]
         if workflow_id:
             events = [e for e in events if e.workflow_id == workflow_id]
-        return events
+        return deepcopy(events)
 
     @staticmethod
     def _restore_event(row: Dict[str, Any]) -> AuditEvent:

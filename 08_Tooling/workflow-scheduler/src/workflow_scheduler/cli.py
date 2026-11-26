@@ -34,7 +34,6 @@ _TERMINAL_TASK_STATUSES = (
 )
 
 _BATCH_BAD_STATUSES = (TaskStatus.FAILED, TaskStatus.GOVERNANCE_BLOCKED, TaskStatus.CANCELLED)
-_BATCH_RESUMABLE_STATUSES = (TaskStatus.APPROVAL_PENDING, TaskStatus.RETRY_SCHEDULED, TaskStatus.PAUSED)
 _BATCH_NOT_ATTEMPTED_STATUSES = (TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.APPROVED, TaskStatus.QUEUED, TaskStatus.RUNNING)
 
 
@@ -43,8 +42,8 @@ def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
 
     Rules (checked in order):
       - "failed": any member is FAILED, GOVERNANCE_BLOCKED, or CANCELLED
-      - "completed": every member is COMPLETED
-      - "not_started": every member is still un-attempted (DRAFT/PENDING/
+      - "completed": at least one member exists and every member is COMPLETED
+      - "not_started": empty or every member is still un-attempted (DRAFT/PENDING/
         APPROVED/QUEUED/RUNNING) — nothing has happened to this batch yet
       - "partial": anything else (a mix of completed, resumable-blocked,
         and/or not-yet-attempted members, with nothing failed)
@@ -56,7 +55,7 @@ def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
     """
     if any(s in _BATCH_BAD_STATUSES for s in member_statuses):
         return "failed"
-    if all(s == TaskStatus.COMPLETED for s in member_statuses):
+    if member_statuses and all(s == TaskStatus.COMPLETED for s in member_statuses):
         return "completed"
     if all(s in _BATCH_NOT_ATTEMPTED_STATUSES for s in member_statuses):
         return "not_started"
