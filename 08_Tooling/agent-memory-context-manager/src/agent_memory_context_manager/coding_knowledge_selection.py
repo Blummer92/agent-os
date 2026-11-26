@@ -853,12 +853,19 @@ def _match_candidate(
             rf"(?:use|perform) {readback} to (?:verify|confirm) {persisted_state}"
             rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}"
         )
-        notion_write = r"notion writ(?:e|er|ing)|(?:write|writing|persist) to notion"
+        # A write and verification in the same clause do not establish
+        # their order. Accept an explicit post-write relation, not word order.
+        after_write = r"after (?:a |the )?notion write"
+        ordered_verification = re.compile(
+            rf"(?:{after_write},? (?:{persistence_verification})"
+            rf"|(?:{persistence_verification}) {after_write}"
+            rf"|(?:write|persist) to notion,? then (?:{persistence_verification}))"
+        )
         if (
             whole("notion", title)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", title)
             and any(
-                whole(notion_write, clause) and whole(persistence_verification, clause)
+                ordered_verification.fullmatch(_reviewed_text(clause))
                 for clause in re.split(r"[.!?;]+", guidance)
             )
             and not whole(negation, title + " " + all_guidance)

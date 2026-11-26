@@ -76,6 +76,28 @@ def test_affirmative_readback_instrument_binds_to_persisted_state():
     assert result.authority_created is False
 
 
+@pytest.mark.parametrize(("guidance", "expected"), [
+    (GUIDANCE, SufficiencyStatus.SUFFICIENT),
+    ("Write to Notion, then use an independent readback to verify the persisted revision.",
+     SufficiencyStatus.SUFFICIENT),
+    ("Use an independent readback to verify the persisted revision after a Notion write.",
+     SufficiencyStatus.SUFFICIENT),
+    ("Use an independent readback to verify the persisted revision before a Notion write.",
+     SufficiencyStatus.INSUFFICIENT),
+    ("Before a Notion write, use an independent readback to verify the persisted revision.",
+     SufficiencyStatus.INSUFFICIENT),
+    ("Use an independent readback to verify the persisted revision, then perform the Notion write.",
+     SufficiencyStatus.INSUFFICIENT),
+    ("During a Notion write, use an independent readback to verify the persisted revision.",
+     SufficiencyStatus.INSUFFICIENT),
+])
+def test_writer_readback_must_follow_the_write(guidance, expected):
+    lesson = candidate(use_when=(guidance,))
+    result = select_coding_knowledge(request(), (lesson,))
+    assert result.sufficiency_status is expected
+    assert result.knowledge_refs == (("LL-TEST",) if expected is SufficiencyStatus.SUFFICIENT else ())
+
+
 @pytest.mark.parametrize("hints", [
     (), ("Notion writer",), ("persistence readback",),
     ("Notion writer", "persistence readback"),
