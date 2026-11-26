@@ -130,19 +130,29 @@ def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str,
 
 
 def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> dict[str, Any] | None:
-    if explicit_number is not None:
-        if not isinstance(explicit_number, int) or not (0 < explicit_number <= 2_147_483_647):
-            raise EvidenceError("pr-number-invalid")
-        return reader.get(f"/pulls/{explicit_number}")
-    prs = reader.get(f"/commits/{sha}/pulls?per_page=100")
-    if not isinstance(prs, list):
-        raise EvidenceError("associated-prs-malformed")
-    candidates = [p for p in prs if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha]
-    if not candidates:
-        return None
-    if len(candidates) != 1:
-        raise EvidenceError("associated-pr-ambiguous")
-    return candidates[0]
+    number = explicit_number
+    if number is None:
+        prs = reader.get(f"/commits/{sha}/pulls?per_page=100")
+        if not isinstance(prs, list):
+            raise EvidenceError("associated-prs-malformed")
+        candidates = [
+            p for p in prs
+            if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha
+        ]
+        if not candidates:
+            return None
+        if len(candidates) != 1:
+            raise EvidenceError("associated-pr-ambiguous")
+        # Association rows identify the PR, but omit the authoritative count.
+        number = candidates[0].get("number")
+    if type(number) is not int or not 0 < number <= 2_147_483_647:
+        raise EvidenceError("pr-number-invalid")
+    detail = reader.get(f"/pulls/{number}")
+    if not isinstance(detail, dict):
+        raise EvidenceError("pr-not-merged")
+    if type(detail.get("number")) is not int or detail["number"] != number:
+        raise EvidenceError("requested-pr-identity-mismatch")
+    return detail
 
 
 def _validate_pr(pr: dict[str, Any], repo: str, sha: str) -> tuple[int, int]:
@@ -263,8 +273,6 @@ def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validati
     if pr is None:
         return {"status": "not-applicable", "reason_code": "push-without-merged-pr", "merge_sha": sha, "authority_created": False}
     number, expected_count = _validate_pr(pr, repo, sha)
-    if pr_number is not None and pr_number != number:
-        raise EvidenceError("requested-pr-identity-mismatch")
     commits = _commits(reader, number, expected_count)
     if validation_run_id is not None and (type(validation_run_id) is not int or validation_run_id < 1):
         raise EvidenceError("validation-run-id-invalid")
@@ -315,6 +323,18 @@ def render_summary(report: dict[str, Any]) -> str:
              "| --- | ---: | ---: | --- |"]
     for lead in report["review_leads"]:
         lines.append(f"| {_markdown_cell(lead['scope'])} | {lead['fix_count']} | {lead['test_count']} | Review needed (CKR5: not proven) |")
+    if report["review_leads"]:
+        lines.extend([
+            "", "### Draft review checklist", "",
+            "For each lead, verify the underlying evidence and check for an existing lesson "
+            "before proposing a new one. If the evidence does not support a reusable rule, stop.",
+            "",
+            "- **One reusable action:** state what to do and how to check it.",
+            "- **When it applies:** describe the condition that makes the action necessary.",
+            "- **When it does not apply:** give a similar case that should be excluded.",
+            "- **One source-linked example:** keep PR-specific details here, not in the rule. "
+            "Use the PR and the fix/test references in the report artifact.",
+        ])
     lines.extend(["", "**No lesson candidate, Notion write, activation, merge authority, or closure authority was produced.**",
                   "Commit message patterns only identify possible review leads. They do not prove the fix's semantics, test success, existing lesson novelty, or reusable rule.", ""])
     return "\n".join(lines)

@@ -1,4 +1,5 @@
 """Read-only post-merge report: positive and hard-negative cases."""
+from copy import deepcopy
 import unittest
 from scripts.agent_os_post_merge_learning import report
 
@@ -51,6 +52,34 @@ class TestLearning(unittest.TestCase):
         self.assertIsNone(result["lesson_proposal"])
         self.assertFalse(result["publication_authorized"])
 
+    def test_summary_provides_one_manual_lesson_draft_checklist(self):
+        reader = Reader([commit(1, "fix(api): repair"), commit(2, "fix(ckr2): repair")])
+        result = report.build_report(reader, SHA, 4101, 100)
+        self.assertEqual(len(result["review_leads"]), 2)
+        before = deepcopy(result)
+        reads = reader.requests.copy()
+        summary = report.render_summary(result)
+        self.assertEqual(summary.count("### Draft review checklist"), 1)
+        for prompt in ("One reusable action", "When it applies", "When it does not apply",
+                       "One source-linked example", "check for an existing lesson"):
+            self.assertIn(prompt, summary)
+        self.assertIn("Commit message patterns only identify possible review leads", summary)
+        self.assertEqual(reader.requests, reads)
+        self.assertEqual(result, before)
+        self.assertIsNone(result["lesson_proposal"])
+        self.assertTrue(all(x["lesson_proposal"] is None for x in result["review_leads"]))
+        self.assertFalse(result["publication_authorized"])
+
+    def test_summary_omits_lesson_checklist_without_repair_leads(self):
+        records = [commit(1, "docs(api): clarify")]
+        for conclusion in ("success", "failure"):
+            with self.subTest(conclusion=conclusion):
+                result = report.build_report(
+                    Reader(records, validation=run(conclusion=conclusion)), SHA, 4101, 100
+                )
+                self.assertEqual(result["review_leads"], [])
+                self.assertNotIn("Draft review checklist", report.render_summary(result))
+
     def test_positive_ordinary_pr_creates_no_lead(self):
         result = report.build_report(Reader([commit(1, "feat(api): feature"),
                                              commit(2, "test(api): coverage")]), SHA, 4101, 100)
@@ -100,6 +129,42 @@ class TestLearning(unittest.TestCase):
             return []
         reader.get = exact_get
         self.assertEqual(report.build_report(reader, SHA, None, 100)["status"], "not-applicable")
+
+    def test_automatic_report_resolves_compact_association_before_review(self):
+        records = [commit(1, "fix(api): repair")]
+        for detail in (pr(1), {**pr(1), "number": 123}):
+            with self.subTest(detail=detail):
+                reader = Reader(records, metadata=detail)
+                get = reader.get
+                def compact(path):
+                    if path == f"/commits/{SHA}/pulls?per_page=100":
+                        reader.requests.append(path)
+                        return [{"number": 4101, "merged_at": pr(1)["merged_at"],
+                                 "merge_commit_sha": SHA}]
+                    return get(path)
+                reader.get = compact
+                if detail["number"] != 4101:
+                    with self.assertRaisesRegex(report.EvidenceError, "requested-pr-identity-mismatch"):
+                        report.build_report(reader, SHA, None, 100)
+                    self.assertEqual(len(reader.requests), 2)
+                else:
+                    result = report.build_report(reader, SHA, None, 100)
+                    self.assertEqual(result["pr_number"], 4101)
+                    self.assertEqual(reader.requests, [
+                        f"/commits/{SHA}/pulls?per_page=100", "/pulls/4101",
+                        "/pulls/4101/commits?per_page=100&page=1", "/actions/runs/100",
+                    ])
+                    self.assertIn("Draft review checklist", report.render_summary(result))
+                    self.assertIsNone(result["lesson_proposal"])
+
+    def test_automatic_invalid_associated_number_does_not_fetch_detail(self):
+        reader = Reader([])
+        def malformed(path):
+            self.assertEqual(path, f"/commits/{SHA}/pulls?per_page=100")
+            return [{"number": True, "merged_at": pr(1)["merged_at"], "merge_commit_sha": SHA}]
+        reader.get = malformed
+        with self.assertRaisesRegex(report.EvidenceError, "pr-number-invalid"):
+            report.build_report(reader, SHA, None, 100)
 
     def test_negative_bounded_evidence(self):
         records = [commit(i, "fix(api): repair") for i in range(1, 27)]
