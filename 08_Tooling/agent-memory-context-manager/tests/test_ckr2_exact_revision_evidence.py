@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import unittest
 
+import pytest
+
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeRequest, KnowledgeCurrentness,
     _match_candidate, select_coding_knowledge,
@@ -61,13 +63,6 @@ class ExactRevisionEvidenceTests(unittest.TestCase):
         other = replace(self.positive, knowledge_id="LL-5000")
         self.assertEqual(_match_candidate(REQUEST, other), (2, (REASON,)))
 
-    def test_explicit_pair_and_ecosystem_are_required(self):
-        for hints in ((), ("exact-head evidence",), ("lesson preflight",), ("CKR6",)):
-            with self.subTest(hints=hints):
-                request = replace(REQUEST, capability_keywords=hints, known_knowledge_refs=("LL-98",))
-                self.assertEqual(_match_candidate(request, self.positive), (0, ()))
-        self.assertEqual(_match_candidate(replace(REQUEST, ecosystem_hints=("git",)), self.positive), (0, ()))
-
     def test_untrusted_source_or_wrong_ecosystem_cannot_qualify(self):
         for c in (replace(self.positive, source_system="untrusted-data"),
                   replace(self.positive, ecosystem="git")):
@@ -94,13 +89,6 @@ class ExactRevisionEvidenceTests(unittest.TestCase):
         unrelated = replace(request, capability_keywords=("quality-assurance",))
         self.assertGreater(_match_candidate(unrelated, self.negative)[0], 0)
 
-    def test_selection_still_requires_currentness_and_provenance(self):
-        for field in ({"currentness": KnowledgeCurrentness.STALE}, {"canonical_github_refs": (), "evidence_refs": ()}):
-            with self.subTest(field=field):
-                c = replace(self.positive, **field)
-                r = select_coding_knowledge(REQUEST, (c,))
-                self.assertNotEqual(r.sufficiency_status.value, "sufficient")
-
     def test_receipt_diagnostics_use_existing_tie_basis(self):
         basis = describe_selection_basis(REQUEST, (self.real, self.near), identity_route=False)
         self.assertEqual((basis.basis, basis.tied_identities), ("generic-unique", 1))
@@ -108,13 +96,36 @@ class ExactRevisionEvidenceTests(unittest.TestCase):
         tie = describe_selection_basis(REQUEST, multiple, identity_route=False)
         self.assertEqual((tie.basis, tie.tied_identities), ("generic-tie-lexical-cut", 4))
 
-    def test_offline_retrieval_uses_the_rule_with_and_without_known_id(self):
-        for known in ((), ("LL-98",)):
-            with self.subTest(known=known):
-                def read(query):
-                    alts = query.get("filter", {}).get("or")
-                    rows = [row("LL-98")] if alts and all("unique_id" in a for a in alts) else [row("D-4102"), row("LL-98")]
-                    return {"results": rows, "has_more": False, "next_cursor": None}
-                res = orchestrate_lesson_retrieval(replace(REQUEST, known_knowledge_refs=known), execute_read=read)
-                self.assertEqual(res.selected_lesson_ids, ("LL-98",))
-                self.assertEqual(res.lesson_retrieval_status.value, "sufficient")
+# Collect each case independently so pytest emits one JUnit testcase per result.
+@pytest.mark.parametrize("hints", [(), ("exact-head evidence",), ("lesson preflight",), ("CKR6",)])
+def test_explicit_pair_is_required(hints):
+    positive = _as_selection_candidate(normalize_lesson_row(row("LL-98")))
+    request = replace(REQUEST, capability_keywords=hints, known_knowledge_refs=("LL-98",))
+    assert _match_candidate(request, positive) == (0, ())
+
+
+def test_ecosystem_is_required():
+    positive = _as_selection_candidate(normalize_lesson_row(row("LL-98")))
+    assert _match_candidate(replace(REQUEST, ecosystem_hints=("git",)), positive) == (0, ())
+
+
+@pytest.mark.parametrize("field", [
+    {"currentness": KnowledgeCurrentness.STALE},
+    {"canonical_github_refs": (), "evidence_refs": ()},
+], ids=["stale", "missing-provenance"])
+def test_selection_still_requires_currentness_and_provenance(field):
+    positive = _as_selection_candidate(normalize_lesson_row(row("LL-98")))
+    result = select_coding_knowledge(REQUEST, (replace(positive, **field),))
+    assert result.sufficiency_status.value != "sufficient"
+
+
+@pytest.mark.parametrize("known", [(), ("LL-98",)], ids=["search", "known-id"])
+def test_offline_retrieval_uses_the_rule_with_and_without_known_id(known):
+    def read(query):
+        alts = query.get("filter", {}).get("or")
+        rows = [row("LL-98")] if alts and all("unique_id" in a for a in alts) else [row("D-4102"), row("LL-98")]
+        return {"results": rows, "has_more": False, "next_cursor": None}
+
+    result = orchestrate_lesson_retrieval(replace(REQUEST, known_knowledge_refs=known), execute_read=read)
+    assert result.selected_lesson_ids == ("LL-98",)
+    assert result.lesson_retrieval_status.value == "sufficient"
