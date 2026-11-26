@@ -25,10 +25,12 @@ termination.
 
 from __future__ import annotations
 
+import math
 import os
 import selectors
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
@@ -213,8 +215,8 @@ def _pgid_live_survivors(pgid: int) -> list[int]:
         entries = os.listdir("/proc")
     except OSError as exc:
         raise PosixProcessSurvivorError(
-            f"survivor scan could not list /proc: {exc}"
-        ) from exc
+            f"survivor scan could not list /proc (errno={exc.errno})"
+        ) from None
     for entry in entries:
         if not entry.isdigit():
             continue
@@ -243,16 +245,17 @@ def _assert_no_pgid_survivors(pgid: int, settle_seconds: float) -> None:
     if survivors:
         raise PosixProcessSurvivorError(
             f"{len(survivors)} live process(es) survived SIGKILL in pgid {pgid}: "
-            f"{survivors}; route to manual review/quarantine"
+            f"{survivors[:16]}; route to manual review/quarantine"
         )
 
 
-def _silent_kill(process: "subprocess.Popen[bytes]") -> None:
+def _silent_kill(process: "subprocess.Popen[bytes]", *, send_signal: bool = True) -> None:
     """Best-effort kill+reap for a child that failed containment setup."""
-    try:
-        process.kill()
-    except OSError:
-        pass
+    if send_signal:
+        try:
+            process.kill()
+        except OSError:
+            pass
     try:
         process.wait(timeout=5)
     except (OSError, subprocess.TimeoutExpired):
@@ -295,19 +298,19 @@ def _setpgid_probe() -> tuple[bool, str]:
     """
     try:
         proc = subprocess.Popen(
-            ["/bin/sleep", "30"],
+            [sys.executable, "-c", "import signal; signal.pause()"],
             start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
     except OSError as exc:
-        return False, f"cannot spawn a process-group leader: {exc}"
+        return False, f"cannot spawn a process-group leader (errno={exc.errno})"
     try:
         try:
             pgid = os.getpgid(proc.pid)
-        except (ProcessLookupError, PermissionError, OSError) as exc:
-            return False, f"cannot read the spawned child's pgid: {exc}"
+        except OSError as exc:
+            return False, f"cannot read the spawned child's pgid (errno={exc.errno})"
         if pgid != proc.pid:
             return False, f"child pgid {pgid} != child pid {proc.pid}"
         return True, ""
@@ -469,15 +472,16 @@ class _BoundedBuffer:
         if not chunk:
             return
         self._total += len(chunk)
-        half = max(self._max_bytes // 2, 1)
-        if len(self._head) < half:
-            take = half - len(self._head)
+        head_bytes = self._max_bytes // 2
+        tail_bytes = self._max_bytes - head_bytes
+        if len(self._head) < head_bytes:
+            take = head_bytes - len(self._head)
             self._head.extend(chunk[:take])
             chunk = chunk[take:]
         if chunk:
             self._tail.extend(chunk)
-            if len(self._tail) > half:
-                del self._tail[: len(self._tail) - half]
+            if len(self._tail) > tail_bytes:
+                del self._tail[: len(self._tail) - tail_bytes]
         self.truncated = self._total > self._max_bytes
 
     def text(self) -> str:
@@ -671,7 +675,7 @@ def _signal_group(pgid: int, sig: signal.Signals) -> str | None:
     """
     try:
         os.killpg(pgid, sig)
-    except (ProcessLookupError, PermissionError):
+    except OSError:
         return None
     return sig.name
 
@@ -683,10 +687,11 @@ def _drain_until(
     deadline: float,
     cancelled: CancellationCheck | None,
     poll_interval: float,
+    failed_streams: set,
 ) -> tuple[bool, bool, bool]:
     """Drain ready pipes until both close, the deadline passes, or cancellation.
 
-    Returns ``(timeout_observed, cancellation_requested, exited)``.
+    Returns ``(timeout_observed, cancellation_requested, exited_and_drained)``.
     """
     while True:
         exited = process.poll() is not None
@@ -700,7 +705,10 @@ def _drain_until(
             return False, True, exited and not open_streams
         if not open_streams:
             # Process still running with both pipes closed; just wait for exit.
-            time.sleep(min(poll_interval, remaining))
+            try:
+                process.wait(timeout=min(poll_interval, remaining))
+            except subprocess.TimeoutExpired:
+                pass
             continue
         for key, _ in selector.select(timeout=min(poll_interval, remaining)):
             stream = key.fileobj
@@ -710,6 +718,7 @@ def _drain_until(
             except BlockingIOError:
                 continue
             except OSError:
+                failed_streams.add(stream)
                 chunk = b""
             if not chunk:
                 selector.unregister(stream)
@@ -747,100 +756,98 @@ def run_bounded_posix_process(
     """
     _require_posix()
     validated_argv = _validate_argv(argv)
-    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
-        raise PosixProcessAdapterError("timeout_seconds must be a positive number")
-    if not isinstance(grace_period_seconds, (int, float)) or grace_period_seconds < 0:
-        raise PosixProcessAdapterError("grace_period_seconds must not be negative")
-    if not isinstance(max_output_bytes, int) or max_output_bytes <= 0:
+    for name, value, minimum in (
+        ("timeout_seconds", timeout_seconds, 0),
+        ("grace_period_seconds", grace_period_seconds, -1),
+        ("poll_interval_seconds", poll_interval_seconds, 0),
+    ):
+        if (type(value) not in (int, float) or abs(value) > 2**53
+                or not math.isfinite(value) or value < 0 or value == minimum):
+            raise PosixProcessAdapterError(f"{name} must be finite and within bounds")
+    if type(max_output_bytes) is not int or max_output_bytes <= 0:
         raise PosixProcessAdapterError("max_output_bytes must be a positive integer")
     validated_rlimits = _validate_rlimits(rlimits)
 
-    process: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - argv validated above
-        list(validated_argv),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        shell=False,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-        preexec_fn=(lambda: _apply_rlimits_in_child(validated_rlimits))
-        if validated_rlimits
-        else None,
-    )
+    try:
+        process = subprocess.Popen(  # noqa: S603 - argv validated above
+            list(validated_argv),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            cwd=cwd,
+            env=env,
+            start_new_session=True,
+            preexec_fn=(lambda: _apply_rlimits_in_child(validated_rlimits))
+            if validated_rlimits
+            else None,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise OSError("POSIX process spawn failed") from None
     # The pgid is the containment identity for this run: capture it now,
     # while the child is certainly still ours, and fail closed unless it
     # is a fresh group led by the child itself.
     try:
         pgid = os.getpgid(process.pid)
-    except OSError as exc:
+    except OSError:
         _silent_kill(process)
-        raise PosixProcessAdapterError(
-            f"spawned child has no readable pgid: {exc}"
-        ) from exc
+        raise RuntimeError("spawned child has no readable pgid") from None
     if pgid != process.pid:
         _silent_kill(process)
-        raise PosixProcessAdapterError(
-            f"child pgid {pgid} != child pid {process.pid}: not a fresh process group"
-        )
+        raise RuntimeError("spawned child does not lead a fresh process group")
     started = True
 
     stdout_buf = _BoundedBuffer(max_output_bytes)
     stderr_buf = _BoundedBuffer(max_output_bytes)
 
     assert process.stdout is not None and process.stderr is not None
-    os.set_blocking(process.stdout.fileno(), False)
-    os.set_blocking(process.stderr.fileno(), False)
-
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, stdout_buf)
-    selector.register(process.stderr, selectors.EVENT_READ, stderr_buf)
     open_streams = {process.stdout, process.stderr}
+    failed_streams: set = set()
+    try:
+        with selectors.DefaultSelector() as selector:
+            for stream, buffer in ((process.stdout, stdout_buf), (process.stderr, stderr_buf)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, buffer)
+
+            def drain(seconds: float, check: CancellationCheck | None = None):
+                return _drain_until(
+                    process, selector, open_streams, time.monotonic() + seconds,
+                    check, poll_interval_seconds, failed_streams,
+                )
+
+            timeout_observed, cancellation_requested, exit_and_drain = drain(timeout_seconds, cancelled)
+            signal_dispatched = None
+            escalation_dispatched = False
+            survivor_scan_performed = False
+            if not exit_and_drain and (timeout_observed or cancellation_requested):
+                signal_dispatched = _signal_group(pgid, signal.SIGTERM)
+                _, _, exit_and_drain = drain(grace_period_seconds)
+                if not exit_and_drain:
+                    escalation_dispatched = _signal_group(pgid, signal.SIGKILL) is not None
+                    survivor_scan_performed = True
+                    # Final bounded pipe drain, including when TERM grace is zero.
+                    drain(max(grace_period_seconds, 0.1))
+    except BaseException as exc:
+        # An exceptional drain/setup must not abandon the child. This is
+        # teardown of the original invocation, not a new attempt.
+        _signal_group(pgid, signal.SIGKILL)
+        _silent_kill(process, send_signal=False)
+        if isinstance(exc, Exception):
+            raise RuntimeError("POSIX process supervision failed") from None
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
 
     try:
-        deadline = time.monotonic() + timeout_seconds
-        timeout_observed, cancellation_requested, exited = _drain_until(
-            process, selector, open_streams, deadline, cancelled, poll_interval_seconds
-        )
-
-        signal_dispatched: str | None = None
-        escalation_dispatched = False
-        child_exit_observed = exited
-        survivor_scan_performed = False
-
-        if not exited and (timeout_observed or cancellation_requested):
-            signal_dispatched = _signal_group(pgid, signal.SIGTERM)
-            grace_deadline = time.monotonic() + grace_period_seconds
-            _, _, exited_after_term = _drain_until(
-                process, selector, open_streams, grace_deadline, None, poll_interval_seconds
-            )
-            child_exit_observed = exited_after_term
-
-            if not exited_after_term:
-                escalation_dispatched = _signal_group(pgid, signal.SIGKILL) is not None
-                kill_deadline = time.monotonic() + grace_period_seconds
-                _, _, exited_after_kill = _drain_until(
-                    process, selector, open_streams, kill_deadline, None, poll_interval_seconds
-                )
-                child_exit_observed = exited_after_kill
-                # Prove zero live processes remain in the invocation pgid.
-                # Fail closed: survivors (or an unlistable /proc) raise.
-                survivor_scan_performed = True
-                _assert_no_pgid_survivors(pgid, max(grace_period_seconds, 1.0))
-    finally:
-        selector.close()
-
-    communication_completed = False
-    return_code = process.poll()
-    if child_exit_observed or return_code is not None:
-        try:
-            return_code = process.wait(timeout=max(grace_period_seconds, 0.1))
-            communication_completed = True
-        except subprocess.TimeoutExpired:
-            communication_completed = False
-    termination_confirmed = bool(
-        child_exit_observed and communication_completed and return_code is not None
-    )
+        return_code = process.wait(timeout=max(grace_period_seconds, 0.1))
+    except (OSError, subprocess.TimeoutExpired):
+        return_code = None
+    child_exit_observed = return_code is not None
+    communication_completed = not open_streams and not failed_streams and child_exit_observed
+    termination_confirmed = child_exit_observed and communication_completed
+    if survivor_scan_performed:
+        _assert_no_pgid_survivors(pgid, max(grace_period_seconds, 1.0))
     possible_partial_effects = not termination_confirmed
 
     reason = _bounded_reason(
@@ -933,7 +940,7 @@ def _outcome_for(result: PosixProcessExecutionResult) -> ExecutorOutcome:
         return "cancelled"
     if result.timeout_observed:
         return "timed-out"
-    if result.return_code == 0:
+    if result.return_code == 0 and result.termination_confirmed:
         return "succeeded"
     return "failed"
 
