@@ -728,6 +728,40 @@ def _github_rest_evidence_match(
     return False
 
 
+
+# A reviewed executed-revision mechanism. Scope this to the existing canary
+# signals, never an incident identifier, generic QA tag, or task prose.
+_EXECUTED_REVISION_HINTS = frozenset({"exact-head evidence", "lesson preflight"})
+_EXECUTED_REVISION_REASON = "executed-revision-evidence-text-match"
+_EXECUTED_REVISION_TITLE = re.compile(
+    r"verify (?:ckr2 relevance fixes|lesson retrieval evidence) against the exact (?:code )?revision executed"
+)
+# This narrow rule admits reviewed wording in full, not a prefix plus
+# arbitrary prose. Unreviewed guidance abstains even with no negation words.
+_EXECUTED_REVISION_GUARD_NOTE = r"(?: (?:skip unrelated checks|unrelated checks are optional)\.)?"
+_EXECUTED_REVISION_PRIMARY = re.compile(
+    r"(?:when validating an unmerged ckr2 relevance fix, )?record the sha actually executed\. "
+    r"compare positive and negative lesson-selection fixtures against both main and the exact pr head\."
+    r"(?: independently verify lesson applicability before interpreting a no-match result as a matcher defect\.)?"
+)
+_EXECUTED_REVISION_GUARD = re.compile(
+    r"never treat a main-branch ckr6 result as proof that an unmerged pr's matcher works\. "
+    r"preserve fail-closed abstention, provenance checks, retrieval limits, and authorization boundaries\."
+    + _EXECUTED_REVISION_GUARD_NOTE
+)
+
+
+def _executed_revision_evidence_match(candidate: CodingKnowledgeCandidate) -> bool:
+    return (
+        candidate.source_system == "notion-lessons-learned"
+        and _norm(candidate.ecosystem) == "agent-os"
+        and len(candidate.use_when) == 2
+        and not candidate.avoid_when
+        and _EXECUTED_REVISION_PRIMARY.fullmatch(_reviewed_text(candidate.use_when[0])) is not None
+        and _EXECUTED_REVISION_GUARD.fullmatch(_reviewed_text(candidate.use_when[1])) is not None
+    )
+
+
 def _match_candidate(
     request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
@@ -749,6 +783,14 @@ def _match_candidate(
     path_match = False
     if candidate_library:
         path_match = any(candidate_library in _norm(path) for path in request.target_path_hints)
+
+    exact_revision_request = "agent-os" in ecosystems and _EXECUTED_REVISION_HINTS <= capability_hints
+    exact_revision_title = _EXECUTED_REVISION_TITLE.fullmatch(_reviewed_text(candidate.name).removesuffix("."))
+    if exact_revision_title and (_norm(candidate.ecosystem) == "agent-os" or exact_revision_request):
+        # A claimed rule cannot win on metadata, a caller-supplied hint, or a path alone.
+        if (exact_revision_request or (ecosystem_match and capability_overlap)) and _executed_revision_evidence_match(candidate):
+            return 2, (_EXECUTED_REVISION_REASON,)
+        return 0, ()
 
     if exact_library:
         reasons = ["exact-library-match"]
@@ -892,6 +934,9 @@ def _match_candidate(
         and not _contradicts_primary(candidate, _NOTION_EXECUTOR_CONTRADICTION)
     ):
         return 2, (_NOTION_EXECUTOR_REASON,)
+
+    if exact_revision_request and (not ecosystem_match or _norm(candidate.ecosystem) == "agent-os"):
+        return 0, ()
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
