@@ -22,6 +22,66 @@ Run it: `python -m scripts.agent_os_mission_reliability --owner Blummer92
 --repo agent-os --issues 2775,2776` (add `--admitted 2775:<ISO>` for admission
 evidence; only HTTP GET is issued; `GITHUB_TOKEN` is optional).
 
+## Module map
+
+```text
+__main__ -> cli -> args -> inputs -> errors
+               |-> http_client -> errors
+               |-> report -> errors
+               +-> service -> github_source -> inputs/http_client/errors
+                             |                 + canonical issue linkage parser
+                             +-> derive -> inputs/errors
+                                        +-> progress/delivery/lifecycle/outcome_metrics -> metrics
+```
+
+| File | One job |
+|---|---|
+| `__main__.py`, `cli.py` | Module entrypoint and CLI orchestration, respectively. Only the CLI reads the token environment value, after parsing. |
+| `args.py`, `inputs.py` | Parse argument text and freeze validated issue/admission data, respectively. |
+| `http_client.py` | One GitHub API JSON GET, with timeouts, origin policy, pagination indicator, and safe errors. |
+| `github_source.py` | Freeze and acquire exact issue/PR records; continues numeric pages only when the response indicates next-page coverage. |
+| `service.py` | Check all acquired identities, then compose acquisition and derivation. |
+| `derive.py` | Validate normalized rows and concatenate pure metric projections without changing the callers' data. |
+| `progress_metrics.py`, `delivery_metrics.py`, `lifecycle_metrics.py`, `outcome_metrics.py` | Group pure formulas by completion/interaction, PR delivery, elapsed time, and finite/learning outcomes. |
+| `metrics.py` | Assemble metric rows and calculate time distributions, with no I/O or transport. |
+| `errors.py`, `report.py` | Define structured errors and serialize complete output, respectively. |
+| `__init__.py` | Preserve the package-level acquisition and derivation exports. |
+
+The grouped metric projections are pure and keep related prefilters, evidence
+labels, and formulas together. Their literal row definitions explain why those
+functions exceed 35 lines; no other production function does.
+
+### Usage and compatibility
+
+Run both CLI and tests from a checkout root. No path edits, installed console
+entrypoint, or extra setup is provided by this repository's `pyproject.toml`:
+
+```sh
+python -m scripts.agent_os_mission_reliability --owner Blummer92 --repo agent-os --issues 2775,2776
+python -m pytest tests/agent_os_mission_reliability
+```
+
+- `--issues` accepts up to 100 decimal entries (positive signed-32-bit range),
+  deduplicated in first-seen order. Empty entries are errors.
+- `--admitted` requires unique entries from the frozen set, with offset-aware
+  ISO timestamps. Omitted issues are not admitted.
+- Only HTTPS GETs to the GitHub API are used. Cross-origin redirects are
+  refused, so the optional trimmed token is never forwarded. No retries.
+- The CLI scans up to 30 PR pages of 100; the injected-reader API retains its
+  10-page default and may explicitly select a limit up to 30. More pages,
+  duplicate page identities, incomplete acquisition, or wrong issue / PR
+  readback cause an error rather than a partial report. Large repositories
+  above this scan limit cannot produce a complete report by this route.
+- Success prints `{"records":...,"report":...}`, preserving the existing
+  records envelope and its nested `records` list. CLI-only `report.window`
+  is now `{repository, issue_numbers, label}` rather than a bare label.
+  Programmatic `derive_mission_reliability(..., window="label")` still returns
+  the string label unchanged. Unknown metrics are valid evidence, not failures.
+- Exit codes: **0** verified report (or standard `--help`), **1** failed
+  acquisition or report processing, **2** invalid arguments or token.
+  Failure outputs one `{"error":{"code":...,"message":...,"field":...}}`
+  object, with optional sanitized HTTP status, body excerpt, and rate limits.
+
 ## Metric definitions and derivation sources
 
 | Metric | Definition | Derivation source |
