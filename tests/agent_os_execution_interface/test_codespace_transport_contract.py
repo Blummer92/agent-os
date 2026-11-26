@@ -18,6 +18,7 @@ from scripts.agent_os_execution_interface.codespaces_orchestrator_transport impo
     CodespaceCandidate, TransportReason, TransportRequest, TransportStatus,
     run_codespace_transport, validate_argv,
 )
+from tests.junit_cases import collect_cases
 
 REPOSITORY = "Blummer92/agent-os"
 BASE = "f6849de75dddde737215e333f807f99c3e444c02"
@@ -31,61 +32,31 @@ class CodespaceTransportContractTests(unittest.TestCase):
         fields.update(overrides)
         return TransportRequest(**fields)
 
-    def candidate(self, name="qualified", state="Available"):
+    @staticmethod
+    def candidate(name="qualified", state="Available"):
         return CodespaceCandidate(name=name, state=state,
                                   repository_full_name=REPOSITORY, owner_login="Blummer92")
 
-    def test_wrappers_paths_clients_and_helper_options_stop_before_discovery(self):
-        attempts = (
-            ("git", "push", "origin", "main"), ("gh", "issue", "create"),
-            ("/usr/bin/git", "push", "origin", "main"),
-            ("/usr/bin/gh", "issue", "create"), ("./git", "status"),
-            ("sh", "-c", "git push origin main"), ("bash", "-lc", "gh issue create"),
-            ("python", "-c", "import subprocess; subprocess.run(['git','push'])"),
-            ("python3", "script.py"), ("python", "-m", "pip", "install", "anything"),
-            ("env", "git", "push"), ("curl", "-X", "POST", "https://api.github.com"),
-            ("hub", "pull-request"), ("git", "-c", "alias.publish=!git push", "publish"),
-            ("git", "--exec-path=/tmp", "status"), ("git", "config", "alias.publish", "!gh api"),
-            ("git", "diff", "--ext-diff"), ("git", "show", "--textconv"),
-            ("rg", "--pre", "git push", "pattern"),
-            ("pytest", "-p", "unknown_plugin", "tests/x.py"),
-            ("python", "-m", "pytest", "--override-ini", "addopts=-p unknown"),
-            ("pytest", "../foreign/test_x.py"), ("git", "worktree", "add", "-b", "main", "/tmp/w"),
-        )
-        for argv in attempts:
-            with self.subTest(argv=argv):
-                seen = []
-                def discover():
-                    seen.append("discovery")
-                    return (self.candidate(),)
-                result = run_codespace_transport(self.request(argv), list_candidates=discover,
-                                                run=lambda *a, **k: seen.append("run"))
-                self.assertEqual(result.status, TransportStatus.REJECTED)
-                self.assertEqual(result.reason_codes, (TransportReason.FORBIDDEN_COMMAND,))
-                self.assertEqual(seen, [])
-                self.assertIsNone(result.started_at_or_none)
-                self.assertIsNone(result.ended_at_or_none)
+    def _check_wrappers_paths_clients_and_helper_options_stop_before_discovery(self, argv):
+        seen = []
+        def discover():
+            seen.append("discovery")
+            return (self.candidate(),)
+        result = run_codespace_transport(self.request(argv), list_candidates=discover,
+                                        run=lambda *a, **k: seen.append("run"))
+        self.assertEqual(result.status, TransportStatus.REJECTED)
+        self.assertEqual(result.reason_codes, (TransportReason.FORBIDDEN_COMMAND,))
+        self.assertEqual(seen, [])
+        self.assertIsNone(result.started_at_or_none)
+        self.assertIsNone(result.ended_at_or_none)
 
-    def test_supported_finite_families_preserve_existing_commands(self):
-        for argv in (("git", "rev-parse", "HEAD"), ("git", "status", "--short"),
-                     ("git", "worktree", "add", "--detach", "/tmp/w", BASE),
-                     ("git", "worktree", "add", "-b", "agent/3333", "/tmp/w", BASE),
-                     ("git", "diff", "--check"), ("git", "show", "--stat", "HEAD"),
-                     ("git", "log", "--oneline", "--max-count=10"),
-                     ("rg", "--files", "scripts"), ("rg", "-n", "transport", "scripts"),
-                     ("python", "-m", "pytest", "tests/x"),
-                     ("python3", "-m", "pytest", "-q", "tests/x.py::test_case"),
-                     ("pytest", "-x", "08_Tooling/workflow-scheduler/tests")):
-            with self.subTest(argv=argv):
-                self.assertIsNone(validate_argv(argv))
+    def _check_supported_finite_families_preserve_existing_commands(self, argv):
+        self.assertIsNone(validate_argv(argv))
 
-    def test_data_bounds_refuse_control_characters_and_oversized_argv(self):
-        for argv in ((), ("git", ""), ("git", "a\x00b"), ("rg", "a\nb"),
-                     ("rg", "x" * 4097), ("git",) * 65, ("rg",) + ("x" * 4096,) * 5):
-            with self.subTest(argv=argv[:2]):
-                self.assertEqual(validate_argv(argv), TransportReason.INVALID_REQUEST)
-                with self.assertRaises(ValueError):
-                    self.request(argv)
+    def _check_data_bounds_refuse_control_characters_and_oversized_argv(self, argv):
+        self.assertEqual(validate_argv(argv), TransportReason.INVALID_REQUEST)
+        with self.assertRaises(ValueError):
+            self.request(argv)
 
     def test_ssh_quotes_data_without_turning_it_into_a_command(self):
         argv = ("rg", "-e", "$(git push); 'quoted' pattern", "scripts")
@@ -129,32 +100,25 @@ class CodespaceTransportContractTests(unittest.TestCase):
         self.assertFalse(payload["publication_authorized"])
         self.assertFalse(payload["merge_authorized"])
 
-    def test_timeout_and_transport_error_retain_attempt_timestamps(self):
-        for exc, reason in ((subprocess.TimeoutExpired("inert", 1), TransportReason.TRANSPORT_TIMEOUT),
-                            (RuntimeError("inert"), TransportReason.TRANSPORT_ERROR)):
-            with self.subTest(reason=reason):
-                def fail(*a, **k):
-                    raise exc
-                result = run_codespace_transport(self.request(),
-                          list_candidates=lambda: (self.candidate(),), run=fail)
-                self.assertEqual(result.reason_codes, (reason,))
-                self.assertIsNotNone(result.started_at_or_none)
-                self.assertIsNotNone(result.ended_at_or_none)
-                self.assertIsNone(result.exit_status_or_none)
+    def _check_timeout_and_transport_error_retain_attempt_timestamps(self, make_error, reason):
+        def fail(*a, **k):
+            raise make_error()
+        result = run_codespace_transport(self.request(),
+                  list_candidates=lambda: (self.candidate(),), run=fail)
+        self.assertEqual(result.reason_codes, (reason,))
+        self.assertIsNotNone(result.started_at_or_none)
+        self.assertIsNotNone(result.ended_at_or_none)
+        self.assertIsNone(result.exit_status_or_none)
 
-    def test_missing_ambiguous_unqualified_and_changed_identity_never_run(self):
-        cases = ((), (self.candidate("one"), self.candidate("two")),
-                 (self.candidate(state="Shutdown"),), (self.candidate("different"),))
-        for candidates in cases:
-            with self.subTest(candidates=candidates):
-                calls = []
-                result = run_codespace_transport(self.request(codespace_name_or_none="qualified"),
-                          list_candidates=lambda: candidates,
-                          run=lambda *a, **k: calls.append(a))
-                self.assertEqual(result.status, TransportStatus.FAILED)
-                self.assertEqual(calls, [])
-                self.assertIsNone(result.started_at_or_none)
-                self.assertIsNone(result.ended_at_or_none)
+    def _check_missing_ambiguous_unqualified_and_changed_identity_never_run(self, candidates):
+        calls = []
+        result = run_codespace_transport(self.request(codespace_name_or_none="qualified"),
+                  list_candidates=lambda: candidates,
+                  run=lambda *a, **k: calls.append(a))
+        self.assertEqual(result.status, TransportStatus.FAILED)
+        self.assertEqual(calls, [])
+        self.assertIsNone(result.started_at_or_none)
+        self.assertIsNone(result.ended_at_or_none)
 
     def test_profile_binding_changes_identity_without_rewriting_legacy_identity(self):
         legacy = self.request()
@@ -217,6 +181,71 @@ class CodespaceTransportContractTests(unittest.TestCase):
         stale = dispatch_admitted_operation_to_codespace(**arguments, evidence_stale=True)
         self.assertEqual(stale.status, DispatchStatus.NOT_DISPATCHED)
         self.assertEqual(len(seen), 1)
+
+
+
+collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_wrappers_paths_clients_and_helper_options_stop_before_discovery, (
+    (('git', 'push', 'origin', 'main'),),
+    (('gh', 'issue', 'create'),),
+    (('/usr/bin/git', 'push', 'origin', 'main'),),
+    (('/usr/bin/gh', 'issue', 'create'),),
+    (('./git', 'status'),),
+    (('sh', '-c', 'git push origin main'),),
+    (('bash', '-lc', 'gh issue create'),),
+    (('python', '-c', "import subprocess; subprocess.run(['git','push'])"),),
+    (('python3', 'script.py'),),
+    (('python', '-m', 'pip', 'install', 'anything'),),
+    (('env', 'git', 'push'),),
+    (('curl', '-X', 'POST', 'https://api.github.com'),),
+    (('hub', 'pull-request'),),
+    (('git', '-c', 'alias.publish=!git push', 'publish'),),
+    (('git', '--exec-path=/tmp', 'status'),),
+    (('git', 'config', 'alias.publish', '!gh api'),),
+    (('git', 'diff', '--ext-diff'),),
+    (('git', 'show', '--textconv'),),
+    (('rg', '--pre', 'git push', 'pattern'),),
+    (('pytest', '-p', 'unknown_plugin', 'tests/x.py'),),
+    (('python', '-m', 'pytest', '--override-ini', 'addopts=-p unknown'),),
+    (('pytest', '../foreign/test_x.py'),),
+    (('git', 'worktree', 'add', '-b', 'main', '/tmp/w'),),
+))
+
+collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_supported_finite_families_preserve_existing_commands, (
+    (('git', 'rev-parse', 'HEAD'),),
+    (('git', 'status', '--short'),),
+    (('git', 'worktree', 'add', '--detach', '/tmp/w', BASE),),
+    (('git', 'worktree', 'add', '-b', 'agent/3333', '/tmp/w', BASE),),
+    (('git', 'diff', '--check'),),
+    (('git', 'show', '--stat', 'HEAD'),),
+    (('git', 'log', '--oneline', '--max-count=10'),),
+    (('rg', '--files', 'scripts'),),
+    (('rg', '-n', 'transport', 'scripts'),),
+    (('python', '-m', 'pytest', 'tests/x'),),
+    (('python3', '-m', 'pytest', '-q', 'tests/x.py::test_case'),),
+    (('pytest', '-x', '08_Tooling/workflow-scheduler/tests'),),
+))
+
+collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_data_bounds_refuse_control_characters_and_oversized_argv, (
+    ((),),
+    (('git', ''),),
+    (('git', 'a\x00b'),),
+    (('rg', 'a\nb'),),
+    (('rg', 'x' * 4097),),
+    (('git',) * 65,),
+    (('rg',) + ('x' * 4096,) * 5,),
+))
+
+collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_timeout_and_transport_error_retain_attempt_timestamps, (
+    (lambda: subprocess.TimeoutExpired('inert', 1), TransportReason.TRANSPORT_TIMEOUT),
+    (lambda: RuntimeError('inert'), TransportReason.TRANSPORT_ERROR),
+))
+
+collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_missing_ambiguous_unqualified_and_changed_identity_never_run, (
+    ((),),
+    ((CodespaceTransportContractTests.candidate('one'), CodespaceTransportContractTests.candidate('two')),),
+    ((CodespaceTransportContractTests.candidate(state='Shutdown'),),),
+    ((CodespaceTransportContractTests.candidate('different'),),),
+))
 
 
 if __name__ == "__main__":
