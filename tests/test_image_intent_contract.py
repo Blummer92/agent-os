@@ -10,6 +10,7 @@ from instructional_workflow_contracts.common import (
     ValidatedRecord,
     ValidationStatus,
     freeze_json,
+    sha256_hex,
 )
 
 
@@ -141,13 +142,14 @@ def test_prompt_omits_empty_optional_sections() -> None:
 
 
 def test_prompt_rejects_malformed_validated_record_payload() -> None:
+    payload = freeze_json({"identity": {"contract_version": IMAGE_INTENT_CONTRACT_ID}})
     malformed = ValidatedRecord(
         contract_version=IMAGE_INTENT_CONTRACT_ID,
         record_id="image-intent:malformed-001",
         record_revision=1,
         fingerprint_algorithm=FINGERPRINT_ALGORITHM,
-        fingerprint="0" * 64,
-        payload=freeze_json({"identity": {"contract_version": IMAGE_INTENT_CONTRACT_ID}}),
+        fingerprint=sha256_hex(payload),
+        payload=payload,
     )
 
     try:

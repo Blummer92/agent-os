@@ -135,3 +135,54 @@ def test_visual_reuse_identity_is_semantic_when_supplied() -> None:
     second = copy.deepcopy(base)
     second["visual_reuse_evidence_ids"] = ["visual-plan-2"]
     assert _id(first) != _id(second)
+
+
+def test_typed_approval_reference_binds_the_canonical_subject():
+    from scripts.agent_os_issue_acceptance.typed_subject_approval import (
+        INSTRUCTIONAL_LIVE_SUBJECT_KIND,
+        validate_typed_subject_reference,
+    )
+
+    value = _subject()
+    reference = validate_typed_subject_reference(value)
+    assert reference.subject_kind == INSTRUCTIONAL_LIVE_SUBJECT_KIND
+    assert reference.subject_schema_version == value["contract_version"]
+    assert reference.subject_id == _id(value)
+
+
+def test_typed_approval_reference_rejects_claimed_kind_id_and_old_version():
+    import pytest
+    from scripts.agent_os_issue_acceptance.typed_subject_approval import (
+        validate_typed_subject_reference,
+    )
+
+    for key, claim in (
+        ("subject_id", SUBJECT_ID_PREFIX + "f" * 64),
+        ("subject_kind", "different-kind"),
+        ("contract_version", "instructional-materials-live-operation-subject-v0"),
+    ):
+        with pytest.raises(ValueError, match="typed approval subject is invalid"):
+            validate_typed_subject_reference({**_subject(), key: claim})
+
+
+def test_malformed_dependency_failures_return_invalid_and_suppress_raw_details(monkeypatch):
+    from instructional_workflow_contracts import live_operation_subject as module
+
+    original = _subject()
+    for failure in (KeyError, AttributeError, RecursionError):
+        def fail(_value):
+            raise failure("raw synthetic detail")
+
+        monkeypatch.setattr(module, "validate_material_requirement", fail)
+        result = module.validate_live_operation_subject(original)
+        assert result.status == ValidationStatus.INVALID
+        assert result.reason_codes == ("handoff-invalid",)
+        assert "raw synthetic detail" not in str(result.details)
+
+
+def test_oversized_raw_mapping_refuses_before_collecting_top_level_keys():
+    from instructional_workflow_contracts.common import MAX_JSON_ITEMS
+
+    result = validate_live_operation_subject({str(key): True for key in range(MAX_JSON_ITEMS + 1)})
+    assert result.status == ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-oversized",)

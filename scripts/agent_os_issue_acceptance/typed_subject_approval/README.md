@@ -2,12 +2,11 @@
 
 Issue #1976 adds an **additive** typed-subject seam over the canonical #398 approval lifecycle and #407 approved-execution projection.
 
-- Approval schema successor: `1.2`.
-- Projection schema successor: `1.1`.
+- The #1976 design names approval `1.2` and projection `1.1`. This reference validator does not implement or enforce those envelope versions.
 - Supported subject kind: `instructional-materials-live-operation`.
 - Supported subject schema: the public #1975 `instructional-materials-live-operation-subject-v1` contract.
 - Stored subject binding is only `subject_kind`, `subject_schema_version`, and `subject_id`.
-- Candidate construction and currentness require the complete subject object and recompute the reference with `validate_live_operation_subject`; arbitrary subject-ID strings are never accepted as approval input.
+- Candidate construction and currentness require the complete, plain-dict #1975 subject object and recompute the reference with `validate_live_operation_subject`; arbitrary subject-ID strings are never accepted as approval input.
 - Approval lifecycle state, decision revisions, expiry, invalidation, supersession, and repository/proposal applicability remain delegated to `approval_records.py`.
 - The projection composes the existing #407 `1.0` projection and carries the exact typed subject reference plus typed approval ID/revision.
 - Typed approval and projection objects remain `execution_authorized=false`; the projection also remains `authoritative=false` and `side_effects_performed=false`.

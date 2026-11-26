@@ -202,7 +202,7 @@ def test_output_within_bound_is_not_marked_truncated() -> None:
 
 def test_timeout_with_live_child_sends_sigterm_and_confirms_exit() -> None:
     result = run_bounded_posix_process(
-        [PY, "-c", "import time; time.sleep(30)"],
+        [PY, "-c", "import signal; signal.pause()"],
         timeout_seconds=0.2,
         grace_period_seconds=1.0,
     )
@@ -222,9 +222,9 @@ def test_timeout_with_live_child_sends_sigterm_and_confirms_exit() -> None:
 
 def test_child_ignoring_sigterm_requires_escalation_to_sigkill() -> None:
     script = (
-        "import signal, time\n"
+        "import signal\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "time.sleep(30)\n"
+        "signal.pause()\n"
     )
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=0.2, grace_period_seconds=0.3
@@ -254,7 +254,7 @@ def test_timeout_signals_target_the_process_group_not_a_single_pid(
     monkeypatch.setattr(adapter_module.os, "killpg", spy)
 
     result = run_bounded_posix_process(
-        [PY, "-c", "import time; time.sleep(30)"],
+        [PY, "-c", "import signal; signal.pause()"],
         timeout_seconds=0.2,
         grace_period_seconds=0.5,
     )
@@ -276,7 +276,7 @@ def test_timeout_signals_target_the_process_group_not_a_single_pid(
 
 def test_cancellation_request_is_distinct_from_termination_confirmed() -> None:
     result = run_bounded_posix_process(
-        [PY, "-c", "import time; time.sleep(30)"],
+        [PY, "-c", "import signal; signal.pause()"],
         timeout_seconds=30.0,
         grace_period_seconds=1.0,
         cancelled=lambda: True,
@@ -295,7 +295,7 @@ def test_cancellation_request_is_distinct_from_termination_confirmed() -> None:
 
 
 def test_output_emitted_before_timeout_is_preserved_after_termination() -> None:
-    script = "import sys, time; print('before-timeout'); sys.stdout.flush(); time.sleep(30)"
+    script = "import sys, signal; print('before-timeout'); sys.stdout.flush(); signal.pause()"
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=0.2, grace_period_seconds=0.5
     )
@@ -312,27 +312,25 @@ def test_child_process_is_fully_reaped_after_completion() -> None:
     script = "import os; print(os.getpid())"
     result = run_bounded_posix_process([PY, "-c", script])
     pid = int(result.stdout_text.strip())
-    with pytest.raises(ProcessLookupError):
-        # A reaped process no longer exists in the process table at all
-        # (unlike an un-reaped zombie, which would still answer signal 0).
-        os.kill(pid, 0)
+    _assert_drained_and_reaped(result, pid)
 
 
 def test_child_process_is_reaped_after_timeout_and_termination() -> None:
-    # stdout must be explicitly flushed: Python block-buffers stdout when it
-    # is a pipe (not a TTY), and a SIGTERM/SIGKILL termination bypasses the
-    # normal interpreter shutdown that would otherwise flush it. Without an
-    # explicit flush before the sleep, the pid text can be silently lost
-    # instead of ever reaching the pipe -- a real, platform-dependent
-    # ordering hazard, not a bounded timing assumption.
-    script = "import os, time; print(os.getpid()); import sys; sys.stdout.flush(); time.sleep(30)"
+    script = "import os, signal; print(os.getpid(), flush=True); signal.pause()"
     result = run_bounded_posix_process(
-        [PY, "-c", script], timeout_seconds=0.2, grace_period_seconds=0.5
+        [PY, "-c", script], timeout_seconds=0.5, grace_period_seconds=0.5
     )
-    pid = int(result.stdout_text.strip())
-    assert result.termination_confirmed is True
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert result.timeout_observed
+    _assert_drained_and_reaped(result, int(result.stdout_text.strip()))
+
+
+def _assert_drained_and_reaped(result, pid):
+    assert result.child_exit_observed
+    assert result.communication_completed
+    assert result.termination_confirmed
+    assert result.return_code is not None
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
 
 
 # --------------------------------------------------------------------------
@@ -377,7 +375,7 @@ def test_executor_maps_successful_result_onto_observation() -> None:
 
 def test_executor_maps_timeout_result_onto_observation() -> None:
     config = PosixProcessExecutorConfig(
-        argv=(PY, "-c", "import time; time.sleep(30)"),
+        argv=(PY, "-c", "import signal; signal.pause()"),
         timeout_seconds=0.2,
         grace_period_seconds=0.5,
     )
@@ -724,12 +722,12 @@ def test_migrated_rlimit_nproc_caps_fork(tmp_path: Path) -> None:
     limit = _uid_thread_count() + 10
     result_file = tmp_path / "forks"
     script = (
-        "import subprocess\n"
+        "import subprocess, sys\n"
         "kids = []\n"
         "ok = 0\n"
         "for _ in range(30):\n"
         "    try:\n"
-        "        kids.append(subprocess.Popen(['/bin/sleep', '30']))\n"
+        "        kids.append(subprocess.Popen([sys.executable, '-c', 'import signal; signal.pause()']))\n"
         "        ok += 1\n"
         "    except OSError:\n"
         "        break\n"
@@ -813,7 +811,7 @@ def test_migrated_graceful_sigterm_kills_a_multiprocess_group() -> None:
         "term = {signal.SIGTERM}\n"
         "signal.pthread_sigmask(signal.SIG_BLOCK, term)\n"
         f"grandchild = subprocess.Popen([sys.executable, '-c', {grandchild_code!r}])\n"
-        "print(grandchild.wait(), int(signal.sigwait(term)), flush=True)\n"
+        "print(grandchild.wait(timeout=6), int(signal.sigwait(term)), flush=True)\n"
     )
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=3.0, grace_period_seconds=2.0
@@ -824,19 +822,44 @@ def test_migrated_graceful_sigterm_kills_a_multiprocess_group() -> None:
     assert result.termination_confirmed is True
     assert result.return_code == 0  # the child survived SIGTERM to reap the grandchild
     assert result.stdout_text.strip() == f"{-signal.SIGTERM} {int(signal.SIGTERM)}"
+    _assert_drained_and_reaped(result, result.pid)
+
+
+@requires_posix_proc
+def test_group_cancellation_waits_for_child_to_reap_grandchild(tmp_path: Path) -> None:
+    """Both group members see TERM; the child observes and reaps its child."""
+    ready = tmp_path / "ready"
+    script = (
+        "import signal, subprocess, sys\n"
+        "signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})\n"
+        "code = 'import signal; signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM}); signal.pause()'\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', code])\n"
+        f"open({str(ready)!r}, 'w').close()\n"
+        "assert signal.sigwait({signal.SIGTERM}) == signal.SIGTERM\n"
+        "print(grandchild.wait(timeout=2), flush=True)\n"
+    )
+    result = run_bounded_posix_process(
+        [PY, "-c", script], timeout_seconds=3.0, grace_period_seconds=2.0,
+        cancelled=ready.is_file,
+    )
+    assert result.cancellation_requested
+    assert result.signal_dispatched == "SIGTERM"
+    assert result.escalation_dispatched is False
+    assert result.survivor_scan_performed is False
+    assert result.return_code == 0
+    assert result.stdout_text.strip() == str(-signal.SIGTERM)
+    _assert_drained_and_reaped(result, result.pid)
 
 
 @requires_posix_proc
 def test_migrated_sigkill_escalation_for_a_sigterm_ignorer() -> None:
     """A child that ignores SIGTERM must still die via the bounded escalation.
 
-    No handshake is needed: the timeout itself guarantees the SIGTERM
-    cannot race interpreter startup.
     """
     script = (
-        "import signal, time\n"
+        "import signal\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "time.sleep(30)\n"
+        "signal.pause()\n"
     )
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=2.0, grace_period_seconds=1.0
@@ -862,9 +885,9 @@ def test_migrated_sigkill_escalation_reaches_a_lingering_grandchild(
     """
     grandchild_pid_file = tmp_path / "grandchild.pid"
     grandchild_code = (
-        "import signal, time\n"
+        "import signal\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "time.sleep(30)\n"
+        "signal.pause()\n"
     )
     script = (
         "import subprocess, sys\n"
@@ -879,17 +902,18 @@ def test_migrated_sigkill_escalation_reaches_a_lingering_grandchild(
     assert result.survivor_scan_performed is True
     assert result.survivor_count == 0
     assert result.termination_confirmed is True
-    grandchild_pid = int(grandchild_pid_file.read_text())
-    assert not _pid_alive(grandchild_pid)
+    assert grandchild_pid_file.is_file()
+    assert adapter_module._pgid_live_survivors(result.pid) == []
+    _assert_drained_and_reaped(result, result.pid)
 
 
 def test_migrated_fail_closed_on_survivor(monkeypatch: pytest.MonkeyPatch) -> None:
     """A survivor after SIGKILL raises PosixProcessSurvivorError -- never ignored."""
     monkeypatch.setattr(adapter_module, "_pgid_live_survivors", lambda _pgid: [424242])
     script = (
-        "import signal, time\n"
+        "import signal\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "time.sleep(30)\n"
+        "signal.pause()\n"
     )
     with pytest.raises(adapter_module.PosixProcessSurvivorError) as excinfo:
         run_bounded_posix_process(
@@ -1037,3 +1061,86 @@ def test_migrated_compact_evidence_is_schema_versioned_and_framed() -> None:
 def test_migrated_compact_evidence_rejects_non_results() -> None:
     with pytest.raises(PosixProcessAdapterError):
         adapter_module.compact_execution_evidence(object())
+
+
+@pytest.mark.parametrize("limit", [1, 3, 5])
+def test_output_limit_keeps_exact_capacity_and_truncation(limit):
+    for total in (limit, limit + 1):
+        result = run_bounded_posix_process(
+            [PY, "-c", f"import os; os.write(1, b'x' * {total})"],
+            max_output_bytes=limit,
+        )
+        assert result.stdout_text == "x" * limit
+        assert result.stdout_truncated is (total > limit)
+        _assert_drained_and_reaped(result, result.pid)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("timeout_seconds", float("inf")),
+    ("grace_period_seconds", float("nan")),
+    ("poll_interval_seconds", 0),
+])
+def test_unbounded_timing_is_refused_before_spawn(monkeypatch, field, value):
+    _assert_never_spawns(monkeypatch)
+    with pytest.raises(PosixProcessAdapterError, match=field):
+        run_bounded_posix_process([PY, "-c", "pass"], **{field: value})
+
+
+def test_pipe_read_failure_is_not_eof(monkeypatch):
+    real_popen = adapter_module.subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+
+        def failed_read(_size):
+            raise OSError("not EOF")
+
+        process.stdout.read1 = failed_read
+        return process
+
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", spawn)
+    result = run_bounded_posix_process([PY, "-c", "print('discarded')"])
+    assert result.child_exit_observed
+    assert result.return_code == 0
+    assert not result.communication_completed
+    assert not result.termination_confirmed
+    assert result.possible_partial_effects
+    with pytest.raises(ChildProcessError):
+        os.waitpid(result.pid, os.WNOHANG)
+
+
+def test_failed_signal_does_not_supply_exit_or_drain_evidence(monkeypatch):
+    real_killpg = os.killpg
+    pgids = []
+
+    def vanished(pgid, _sig):
+        pgids.append(pgid)
+        raise ProcessLookupError
+
+    monkeypatch.setattr(adapter_module.os, "killpg", vanished)
+    monkeypatch.setattr(adapter_module, "_assert_no_pgid_survivors", lambda *_: None)
+    try:
+        result = run_bounded_posix_process(
+            [PY, "-c", "import signal; signal.pause()"],
+            cancelled=lambda: True, grace_period_seconds=0,
+        )
+        assert result.signal_dispatched is None
+        assert result.cancellation_requested
+        assert result.return_code is None
+        assert not result.child_exit_observed
+        assert not result.communication_completed
+        assert not result.termination_confirmed
+        assert result.possible_partial_effects
+    finally:
+        if pgids:
+            real_killpg(pgids[0], signal.SIGKILL)
+            os.waitpid(pgids[0], 0)
+
+
+def test_spawn_failure_does_not_echo_raw_os_error(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise OSError("raw argument" * 2000)
+
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", fail)
+    with pytest.raises(OSError, match="^POSIX process spawn failed$"):
+        run_bounded_posix_process([PY, "-c", "pass"])
