@@ -2936,3 +2936,174 @@ def test_lease1_withheld_release_always_forces_quarantine_precedence() -> None:
 
     assert pilot_module._side_effects_were_possible(state) is True
     assert pilot_module._final_status(state) == "quarantined"
+
+
+def test_long_cleanup_error_preserves_primary_outcome_and_independent_release():
+    workspace = FakeWorkspace(cleanup_error=OSError("long cleanup failure " * 1000))
+    lease = FakeLease()
+    result = _run(workspace=workspace, lease=lease)
+
+    assert result.status == "quarantined"
+    assert result.primary_status == "completed"  # execution/validation succeeded
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+    assert result.lease_release_attempts == len(lease.release_calls) == 1
+    assert result.lease_released
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+    assert result.cleanup_errors and len(result.cleanup_errors[0]) <= 4096
+
+
+def test_validation_only_partial_effects_without_start_proof_are_quarantined():
+    observation = _validation_observation(
+        attempted=True,
+        passed=True,
+        started=False,
+        termination_confirmed=False,
+        possible_partial_effects=True,
+        completed_tests=REQUIRED_TESTS,
+    )
+    lease, workspace = FakeLease(), FakeWorkspace()
+    validator = FakeValidator(observation=observation)
+    result = _run_validation_only(validator=validator, lease=lease, workspace=workspace)
+
+    assert result.status == "quarantined"
+    assert result.validation_attempts == len(validator.calls) == 1
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+    assert result.executor_dispatch_attempts == 0
+    assert not result.executor_called
+    assert not result.executor_started
+    assert not result.termination_confirmed
+    assert result.lease_release_attempts == 0
+    assert not lease.release_calls
+    assert "lease.release-withheld-unproven-termination" in result.reason_codes
+
+
+@pytest.mark.parametrize("field", ["filesystem_removed", "metadata_removed"])
+def test_cleanup_truthy_string_is_not_cleanup_proof(field):
+    from dataclasses import replace
+
+    cleanup = replace(WorkspaceCleanup(filesystem_removed=True, metadata_removed=True), **{field: "false"})
+    workspace = FakeWorkspace(cleanup=cleanup)
+    lease = FakeLease()
+    result = _run(workspace=workspace, lease=lease)
+    assert result.status == "quarantined"
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+    assert result.lease_release_attempts == len(lease.release_calls) == 1
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_release_observation_requires_boolean_proof_and_bounded_diagnostics(oversized):
+    class Lease(FakeLease):
+        def release(self, grant):
+            from dataclasses import replace
+
+            valid = super().release(grant)
+            if oversized:
+                return replace(valid, released=False, ambiguous=True, reason="ambiguous " * 1500)
+            return replace(valid, released="false")
+
+    lease = Lease()
+    result = _run(lease=lease)
+    assert result.status == "quarantined"
+    assert not result.lease_released
+    assert result.lease_release_attempts == len(lease.release_calls) == 1
+    assert result.release_errors and len(result.release_errors[0]) <= 4096
+
+
+def test_long_cleanup_observation_preserves_quarantine_and_release():
+    cleanup = WorkspaceCleanup(filesystem_removed=False, metadata_removed=False, reason="cleanup " * 1500)
+    lease = FakeLease()
+    result = _run(workspace=FakeWorkspace(cleanup=cleanup), lease=lease)
+    assert result.status == "quarantined"
+    assert result.lease_released
+    assert result.cleanup_errors and all(len(error) <= 4096 for error in result.cleanup_errors)
+
+
+@pytest.mark.parametrize("field", ["attempted", "passed", "termination_confirmed"])
+def test_validation_truthy_string_is_not_validation_proof(field):
+    from dataclasses import replace
+
+    observation = _validation_observation(
+        attempted=True, passed=True, started=True, termination_confirmed=True,
+        completed_tests=REQUIRED_TESTS,
+    )
+    validator = FakeValidator(observation=replace(observation, **{field: "false"}))
+    lease = FakeLease()
+    result = _run_validation_only(validator=validator, lease=lease)
+    assert result.status == "quarantined"
+    assert result.validation_attempts == 1
+    assert result.lease_release_attempts == 0
+    assert not result.executor_called and not result.termination_confirmed
+
+
+def test_validation_partial_effects_are_not_dropped_from_receipt():
+    validator = FakeValidator(observation=_validation_observation(
+        attempted=True, passed=True, started=False, possible_partial_effects=True,
+        completed_tests=REQUIRED_TESTS,
+    ))
+    result = _run_validation_only(validator=validator)
+    assert result.status == "quarantined"
+    assert result.possible_partial_effects
+
+
+@pytest.mark.parametrize("change", [
+    {"acquired": "false"},
+    {"lease_identity": "pilot-lease:" + "0" * 64},
+    {"generation": False},
+])
+def test_unbound_lease_grant_never_dispatches_or_releases(change):
+    from dataclasses import replace
+
+    class Lease(FakeLease):
+        def acquire(self, request):
+            return replace(super().acquire(request), **change)
+
+    lease, workspace, executor = Lease(), FakeWorkspace(), FakeExecutor()
+    result = _run(lease=lease, workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert result.lease_acquire_attempts == 1
+    assert not result.lease_acquired
+    assert result.lease_release_attempts == 0
+    assert not lease.release_calls
+    assert not workspace.create_calls and not executor.calls
+
+
+@pytest.mark.parametrize("change", [
+    {"created": "false"},
+    {"workspace_identity": "pilot-workspace:" + "0" * 64},
+])
+def test_unbound_workspace_never_dispatches_or_deletes(change):
+    from dataclasses import replace
+
+    class Workspace(FakeWorkspace):
+        def create(self, request):
+            return replace(super().create(request), **change)
+
+    workspace, executor = Workspace(), FakeExecutor()
+    result = _run(workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert result.workspace_create_attempts == 1
+    assert not result.workspace_created
+    assert not workspace.cleanup_calls and not executor.calls
+    assert result.lease_released  # independently bound lease, no worker dispatched
+
+
+@pytest.mark.parametrize("field", ["resolved", "clean"])
+def test_nonboolean_workspace_inspection_prevents_dispatch(field):
+    workspace = FakeWorkspace(inspection=_inspection(**{field: "false"}))
+    executor = FakeExecutor()
+    result = _run(workspace=workspace, executor=executor)
+    assert result.status == "quarantined"
+    assert not result.workspace_safe and not executor.calls
+    assert result.workspace_cleanup_attempts == len(workspace.cleanup_calls) == 1
+
+
+def test_boolean_release_generation_does_not_count_as_generation_one():
+    from dataclasses import replace
+
+    class Lease(FakeLease):
+        def release(self, grant):
+            return replace(super().release(grant), generation=True)
+
+    result = _run(lease=Lease())
+    assert result.status == "quarantined"
+    assert not result.lease_released

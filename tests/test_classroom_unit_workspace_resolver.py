@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from instructional_workflow_contracts.classroom_unit_workspace import (
     CONTRACT_ID as WORKSPACE_CONTRACT_ID,
     validate_classroom_unit_workspace,
@@ -163,16 +165,10 @@ def test_result_is_non_authorizing():
 def test_invalid_or_tampered_workspace_is_rejected_before_reader_use():
     workspace = _workspace(_root())
     reader = FakeReader({"drive-unit": _folder("drive-unit")})
-    from instructional_workflow_contracts.common import ValidatedRecord
-
-    tampered = ValidatedRecord(
-        contract_version=workspace.contract_version,
-        record_id=workspace.record_id,
-        record_revision=workspace.record_revision,
-        fingerprint_algorithm=workspace.fingerprint_algorithm,
-        fingerprint="0" * 64,
-        payload=workspace.payload,
-    )
+    # Inject corruption after valid construction so this still exercises the
+    # resolver's independent consumer defense.
+    tampered = replace(workspace)
+    object.__setattr__(tampered, "fingerprint", "0" * 64)
     result = resolve_classroom_unit_workspace(tampered, reader)
     assert result.status is ValidationStatus.INVALID
     assert reader.calls == []

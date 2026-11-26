@@ -22,14 +22,7 @@ MAX_DETAIL_LENGTH = 500
 MAX_JSON_ITEMS = 4096
 
 FINGERPRINT_ALGORITHM = "sha256"
-SUPPORTED_STATUSES = (
-    "valid",
-    "invalid",
-    "blocked",
-    "stale",
-    "manual-review-required",
-)
-
+# Consumed by the AST import regression, not a Python runtime sandbox.
 FORBIDDEN_IMPORT_PREFIXES = (
     "requests",
     "httpx",
@@ -64,8 +57,20 @@ _UNSAFE_TEXT_RE = re.compile(
     r"(?:<script\b|javascript:|\$\{\{|\{\{\s*secrets\.|__import__\s*\(|(?:eval|exec)\s*\(|os\.system\s*\()",
     re.IGNORECASE,
 )
+_SECRET_LABEL = (
+    r"(?:api[_-]?keys?|access[_-]?tokens?|refresh[_-]?tokens?|passwords?|passwds?|"
+    r"secrets?|client[_-]?secrets?|private[_-]?keys?|credentials?|oauth)"
+)
 _SECRET_KEY_RE = re.compile(
-    r"(?:^|[_-])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|private[_-]?key|credential|oauth)(?:$|[_-])",
+    rf"(?:^|[_-]){_SECRET_LABEL}(?:$|[_-])|^(?:tokens?|bearer|sessions?)$",
+    re.IGNORECASE,
+)
+# A diagnostic may contain a serialized string, not a parseable document.
+# After a credential label, discard the bounded suffix rather than guessing
+# where a value ends inside nested or multiply escaped quotes.
+_SECRET_DETAIL_RE = re.compile(
+    rf"(?:(?<![\w-])(?:[\w-]*?[_-])?(?:{_SECRET_LABEL}|tokens?|sessions?|bearer|authorization)"
+    r"(?:\\*[\"'])?\s*[:=]|\bBearer\s+).*$",
     re.IGNORECASE,
 )
 
@@ -110,13 +115,19 @@ class ValidationStatus(str, Enum):
     MANUAL_REVIEW_REQUIRED = "manual-review-required"
 
 
+SUPPORTED_STATUSES = tuple(status.value for status in ValidationStatus)
+
+
 class ContractValidationError(ValueError):
     """Bounded validation failure with a finite reason code."""
 
     def __init__(self, reason_code: str, detail: str) -> None:
-        validate_reason_code(reason_code)
-        self.reason_code = reason_code
-        self.detail = sanitize_detail(detail)
+        if _is_reason_code(reason_code):
+            self.reason_code = reason_code
+            self.detail = sanitize_detail(detail)
+        else:
+            self.reason_code = "handoff-invalid"
+            self.detail = "invalid validation reason code"
         super().__init__(self.detail)
 
 
@@ -146,10 +157,39 @@ class ContractReference:
 class FrozenObject:
     items: tuple[tuple[str, Any], ...]
 
+    def __post_init__(self) -> None:
+        _validate_frozen_items(self.items)
+        keys: set[str] = set()
+        for entry in self.items:
+            if type(entry) is not tuple or len(entry) != 2 or type(entry[0]) is not str:
+                raise TypeError("frozen JSON object requires string-key pairs")
+            key, value = entry
+            if key in keys:
+                raise ContractValidationError("handoff-duplicate", "frozen JSON object contains duplicate keys")
+            keys.add(key)
+            _require_frozen_value(value)
+
 
 @dataclass(frozen=True, slots=True)
 class FrozenArray:
     items: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        _validate_frozen_items(self.items)
+        for value in self.items:
+            _require_frozen_value(value)
+
+
+def _validate_frozen_items(items: object) -> None:
+    if type(items) is not tuple:
+        raise TypeError("frozen JSON items must be an exact tuple")
+    if len(items) > MAX_JSON_ITEMS:
+        raise ContractValidationError("handoff-oversized", "frozen JSON exceeds the item-count bound")
+
+
+def _require_frozen_value(value: object) -> None:
+    if value is not None and type(value) not in (bool, int, float, str, FrozenObject, FrozenArray):
+        raise TypeError("frozen JSON cannot contain mutable or unsupported values")
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,14 +206,18 @@ class ValidatedRecord:
         validate_version(self.contract_version)
         validate_stable_id(self.record_id, "record_id")
         validate_revision(self.record_revision)
-        validate_algorithm(self.fingerprint_algorithm)
+        if type(self.fingerprint_algorithm) is not str or self.fingerprint_algorithm != FINGERPRINT_ALGORITHM:
+            raise ContractValidationError("handoff-invalid", "unsupported record fingerprint algorithm")
         validate_sha256(self.fingerprint, "record fingerprint")
         if type(self.payload) is not FrozenObject:
             raise TypeError("payload must be FrozenObject")
         if type(self.authority) is not AuthorityEvidence:
             raise TypeError("authority must be internal AuthorityEvidence")
-        if canonical_size(self.payload) > MAX_RESULT_BYTES:
+        encoded = canonical_json_bytes(self.payload)
+        if len(encoded) > MAX_RESULT_BYTES:
             raise ValueError("validated record exceeds result-size bound")
+        if self.fingerprint != _sha256_bytes(encoded):
+            raise ContractValidationError("handoff-invalid", "record fingerprint does not match its payload")
 
     def to_dict(self) -> dict[str, Any]:
         value = thaw_json(self.payload)
@@ -227,6 +271,19 @@ class ValidationResult:
             if self.status is ValidationStatus.BLOCKED and not blockers:
                 raise ValueError("blocked results require blockers")
 
+        if self.status is ValidationStatus.STALE and not reasons:
+            raise ValueError("stale results require a reason code")
+        # Common reason codes have a finite shared precedence. Domain-specific
+        # codes are owned by their validators, not by the handoff resolver.
+        # Some existing contracts encode manual review in payload/flags or
+        # details rather than reason codes; preserve that non-valid outcome.
+        reason_set, blocker_set = set(reasons), set(blockers)
+        codes = reason_set | blocker_set
+        # A domain-specific code must not suppress a known invalid reason.
+        if codes and (codes <= _KNOWN_REASON_CODES or codes & _INVALID_REASON_CODES):
+            if self.status != _status_from_codes(reason_set, blocker_set):
+                raise ContractValidationError("handoff-invalid", "result status does not match its reasons and blockers")
+
         result_payload = {
             "status": self.status.value,
             "reason_codes": list(reasons),
@@ -243,6 +300,7 @@ class ValidationResult:
 
 
 def validate_text(value: object, name: str, *, max_length: int = MAX_STRING_LENGTH) -> str:
+    """Check bounded contract text; these patterns are not a security firewall."""
     if type(value) is not str:
         raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in string")
     if not value or len(value) > max_length:
@@ -255,12 +313,14 @@ def validate_text(value: object, name: str, *, max_length: int = MAX_STRING_LENG
 
 
 def validate_mapping(value: object, name: str) -> dict[str, Any]:
+    """Type-check and return the borrowed dict; copy or normalize before editing."""
     if type(value) is not dict:
         raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
     return value
 
 
 def validate_bounded_list(value: object, name: str, maximum: int) -> list[Any]:
+    """Check and return the borrowed list; copy or normalize before editing."""
     if type(value) is not list:
         raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in list")
     if len(value) > maximum:
@@ -268,14 +328,20 @@ def validate_bounded_list(value: object, name: str, maximum: int) -> list[Any]:
     return value
 
 
-def validate_exact_fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
-    if set(value) != expected:
-        if set(value) - expected:
+def validate_exact_fields(value: object, expected: frozenset[str], name: str) -> None:
+    if type(value) is not dict:
+        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
+    if len(value) > len(expected):
+        raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
+    keys = value.keys()
+    if keys != expected:
+        if keys - expected:
             raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
         raise ContractValidationError("handoff-invalid", f"{name} is missing required fields")
 
 
 def validate_stable_id(value: object, name: str = "stable_id") -> str:
+    """Validate a logical identifier, not a filesystem path or a URL segment."""
     text = validate_text(value, name, max_length=128)
     if not _ID_RE.fullmatch(text):
         raise ContractValidationError("identity-invalid", f"{name} is malformed")
@@ -295,11 +361,15 @@ def validate_revision(value: object) -> int:
     return value
 
 
+def _is_reason_code(value: object) -> bool:
+    return type(value) is str and len(value) <= 128 and _REASON_RE.fullmatch(value) is not None
+
+
 def validate_reason_code(value: object) -> str:
-    text = validate_text(value, "reason code", max_length=128)
-    if not _REASON_RE.fullmatch(text):
-        raise ValueError("reason code is outside the canonical namespaces")
-    return text
+    """Check shared syntax; each reason registry owns status semantics."""
+    if not _is_reason_code(value):
+        raise ContractValidationError("handoff-invalid", "reason code is outside the canonical namespaces")
+    return value
 
 
 def validate_dependency_key(value: object) -> str:
@@ -328,6 +398,7 @@ def _is_leap_year(year: int) -> bool:
 
 
 def validate_timestamp(value: object, name: str) -> str:
+    """Validate UTC second precision; leap-second notation is unsupported."""
     text = validate_text(value, name, max_length=20)
     match = _TIMESTAMP_RE.fullmatch(text)
     if match is None:
@@ -364,7 +435,7 @@ class _NormalizationBudget:
 def validate_and_normalize_json(value: object, *, max_bytes: int = MAX_INPUT_BYTES) -> Any:
     if type(max_bytes) is not int or max_bytes < 1:
         raise TypeError("max_bytes must be a positive built-in integer")
-    budget = _NormalizationBudget(max_bytes)
+    budget = _NormalizationBudget(min(max_bytes, MAX_INPUT_BYTES))
     return _normalize_json(value, path="$", depth=0, budget=budget)
 
 
@@ -425,7 +496,13 @@ def _normalize_json(
             if index:
                 budget.consume_bytes(1)
             validate_text(key, f"{path} key", max_length=128)
-            if is_secret_like_key(key):
+            # Preserve the Coach receipt's canonical negative telemetry, not
+            # credential data. No other value, key spelling, or path qualifies.
+            negative_credential_telemetry = (
+                path == "$.side_effects" and key == "credentials_initialized"
+                and value[key] is False
+            )
+            if is_secret_like_key(key) and not negative_credential_telemetry:
                 raise ContractValidationError("authority-secret-field", f"{path} contains a secret-like key")
             budget.consume_bytes(_encoded_scalar_size(key) + 1)
             normalized_dict[key] = _normalize_json(
@@ -439,8 +516,10 @@ def _normalize_json(
 
 
 def canonical_json_bytes(value: object) -> bytes:
-    built_in = thaw_json(value) if type(value) in {FrozenObject, FrozenArray} else validate_and_normalize_json(value)
-    return _canonical_json_bytes_unchecked(built_in)
+    """Canonical serialization of validated contract data, not arbitrary JSON."""
+    if type(value) in (FrozenObject, FrozenArray):
+        value = thaw_json(value)
+    return _canonical_json_bytes_unchecked(validate_and_normalize_json(value))
 
 
 def _canonical_json_bytes_unchecked(value: object) -> bytes:
@@ -457,25 +536,48 @@ def canonical_size(value: object) -> int:
     return len(canonical_json_bytes(value))
 
 
+def _sha256_bytes(encoded: bytes) -> str:
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def sha256_hex(value: object) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    """Hash canonical contract JSON; invalid/oversized input is rejected."""
+    return _sha256_bytes(canonical_json_bytes(value))
 
 
 def freeze_json(value: object) -> Any:
+    """Freeze already normalized input; use validate_and_normalize_json first."""
+    return _freeze_json(value, 0, _NormalizationBudget(MAX_INPUT_BYTES))
+
+
+def _freeze_json(value: object, depth: int, budget: _NormalizationBudget) -> Any:
+    if depth > MAX_NESTING_DEPTH:
+        raise ContractValidationError("handoff-oversized", "input exceeds the nesting-depth bound")
+    budget.consume_item()
     if value is None or type(value) in {bool, int, float, str}:
         return value
     if type(value) is list:
-        return FrozenArray(tuple(freeze_json(item) for item in value))
+        values = validate_bounded_list(value, "frozen JSON array", MAX_JSON_ITEMS)
+        return FrozenArray(tuple(_freeze_json(item, depth + 1, budget) for item in values))
     if type(value) is dict:
-        return FrozenObject(tuple((key, freeze_json(value[key])) for key in sorted(value)))
+        if len(value) > MAX_JSON_ITEMS:
+            raise ContractValidationError("handoff-oversized", "frozen JSON exceeds the item-count bound")
+        return FrozenObject(tuple((key, _freeze_json(value[key], depth + 1, budget)) for key in sorted(value)))
     raise TypeError("freeze_json requires normalized built-in JSON values")
 
 
 def thaw_json(value: object) -> Any:
+    return _thaw_json(value, 0, _NormalizationBudget(MAX_INPUT_BYTES))
+
+
+def _thaw_json(value: object, depth: int, budget: _NormalizationBudget) -> Any:
+    if depth > MAX_NESTING_DEPTH:
+        raise ContractValidationError("handoff-oversized", "frozen JSON exceeds the nesting-depth bound")
+    budget.consume_item()
     if type(value) is FrozenObject:
-        return {key: thaw_json(item) for key, item in value.items}
+        return {key: _thaw_json(item, depth + 1, budget) for key, item in value.items}
     if type(value) is FrozenArray:
-        return [thaw_json(item) for item in value.items]
+        return [_thaw_json(item, depth + 1, budget) for item in value.items]
     if value is None or type(value) in {bool, int, float, str}:
         return value
     raise TypeError("unsupported frozen JSON value")
@@ -515,7 +617,10 @@ def canonical_reason_codes(values: object, maximum: int = MAX_REASONS) -> tuple[
 def sanitize_detail(value: object) -> str:
     if type(value) is not str:
         return "validation detail unavailable"
-    cleaned = _CONTROL_RE.sub(" ", value)
+    # Redact before truncating so a credential crossing the output boundary
+    # cannot leave a partial secret in the result. Work over a bounded prefix.
+    cleaned = _CONTROL_RE.sub(" ", value[:MAX_DETAIL_LENGTH * 2])
+    cleaned = _SECRET_DETAIL_RE.sub("[redacted]", cleaned)
     cleaned = _UNSAFE_TEXT_RE.sub("[redacted]", cleaned)
     return cleaned[:MAX_DETAIL_LENGTH]
 
@@ -538,15 +643,21 @@ def resolve_status(
 ) -> ValidationStatus:
     reasons = canonical_reason_codes(reason_codes, MAX_REASONS)
     blocker_codes = canonical_reason_codes(blockers, MAX_BLOCKERS)
-    unknown = (set(reasons) | set(blocker_codes)) - _KNOWN_REASON_CODES
-    if unknown:
+    reasons_set, blockers_set = set(reasons), set(blocker_codes)
+    if (reasons_set | blockers_set) - _KNOWN_REASON_CODES:
         raise ContractValidationError("handoff-invalid", "reason code has no governed status mapping")
-    if set(reasons) & _INVALID_REASON_CODES or set(blocker_codes) & _INVALID_REASON_CODES:
+    return _status_from_codes(reasons_set, blockers_set, stale=stale, manual_review=manual_review)
+
+
+def _status_from_codes(
+    reasons: set[str], blockers: set[str], *, stale: bool = False, manual_review: bool = False,
+) -> ValidationStatus:
+    if (reasons | blockers) & _INVALID_REASON_CODES:
         return ValidationStatus.INVALID
-    if blocker_codes or set(reasons) & _BLOCKED_REASON_CODES:
+    if blockers or reasons & _BLOCKED_REASON_CODES:
         return ValidationStatus.BLOCKED
-    if stale or set(reasons) & _STALE_REASON_CODES:
+    if stale or reasons & _STALE_REASON_CODES:
         return ValidationStatus.STALE
-    if manual_review or set(reasons) & _MANUAL_REVIEW_REASON_CODES:
+    if manual_review or reasons & _MANUAL_REVIEW_REASON_CODES:
         return ValidationStatus.MANUAL_REVIEW_REQUIRED
     return ValidationStatus.VALID
