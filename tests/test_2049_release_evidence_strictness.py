@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from scripts import agent_os_release_run_core as release_core
 
 MODULE = Path(__file__).parents[1] / "scripts" / "agent-os-release-run.py"
 spec = importlib.util.spec_from_file_location("release_run_strictness", MODULE)
@@ -34,11 +33,11 @@ def test_release_evidence_rejects_non_string_canonical_text(field):
 @pytest.mark.parametrize("value", ["run:123", ["run:123", 456], {"run": "123"}])
 def test_source_identifiers_reject_scalar_or_non_string_shapes(value):
     with pytest.raises(TypeError):
-        release_core._source_identifier_strings(value)
+        release_run._source_identifier_strings(value)
 
 
 def test_source_identifiers_preserve_valid_string_collection():
-    assert release_core._source_identifier_strings(["run:123", "job:456"]) == (
+    assert release_run._source_identifier_strings(["run:123", "job:456"]) == (
         "run:123",
         "job:456",
     )
