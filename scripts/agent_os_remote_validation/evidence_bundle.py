@@ -14,7 +14,7 @@ from scripts.agent_os_execution_capabilities.models import (
     RepositoryIdentity,
 )
 
-from .models import ValidationPlan
+from .models import PrePrValidationPlan, ValidationPlan
 from .selector import (
     _canonical_bytes,
     compute_command_set_digest,
@@ -128,7 +128,7 @@ class ValidationEvidenceBundle:
     invocation_id: str | None
     started_at: str | None
     completed_at: str | None
-    validation_plan: ValidationPlan | None
+    validation_plan: ValidationPlan | PrePrValidationPlan | None
     command_results: tuple[CommandResultEvidence, ...]
     reason_codes: tuple[str, ...]
     details: tuple[str, ...]
@@ -450,7 +450,7 @@ def _validate_plan(
 def _validate_results(
     supplied: tuple[SuppliedCommandResult, ...],
     *,
-    plan: ValidationPlan,
+    plan: ValidationPlan | PrePrValidationPlan,
     expected: dict[str, object],
     bundle_start: datetime | None,
     bundle_end: datetime | None,
@@ -497,7 +497,7 @@ def _result_errors(
     item: object,
     *,
     position: int,
-    plan: ValidationPlan,
+    plan: ValidationPlan | PrePrValidationPlan,
     expected: dict[str, object],
     bundle_start: datetime | None,
     bundle_end: datetime | None,
@@ -581,7 +581,9 @@ def _status_for(
     return "passed", set()
 
 
-def _bundle_payload(bundle: ValidationEvidenceBundle) -> dict[str, object]:
+def _bundle_payload(
+    bundle: ValidationEvidenceBundle, *, serialized_pre_pr_plan: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "schema_name": bundle.schema_name,
         "schema_version": bundle.schema_version,
@@ -613,9 +615,13 @@ def _bundle_payload(bundle: ValidationEvidenceBundle) -> dict[str, object]:
         "started_at": bundle.started_at,
         "completed_at": bundle.completed_at,
         "validation_plan": (
-            serialize_validation_plan(bundle.validation_plan)
-            if bundle.validation_plan is not None
-            else None
+            serialized_pre_pr_plan
+            if serialized_pre_pr_plan is not None
+            else (
+                serialize_validation_plan(bundle.validation_plan)
+                if bundle.validation_plan is not None
+                else None
+            )
         ),
         "command_results": [_result_payload(item) for item in bundle.command_results],
         "reason_codes": list(bundle.reason_codes),
@@ -876,7 +882,7 @@ def _reconstruct_validation_plan(payload: object) -> ValidationPlan | None:
 def _reconstruct_command_results(
     payload: object,
     *,
-    plan: ValidationPlan | None,
+    plan: ValidationPlan | PrePrValidationPlan | None,
     expected: dict[str, object],
     bundle_start: datetime | None,
     bundle_end: datetime | None,
