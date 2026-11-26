@@ -65,6 +65,9 @@ def repo(tmp_path: Path) -> Path:
         "    print('CWD_MARKER ' + os.getcwd())\n"
         "    print('PYTHONPATH_MARKER ' + os.environ.get('PYTHONPATH', ''))\n"
         "    print('COVERAGE_FILE_MARKER ' + os.environ.get('COVERAGE_FILE', ''))\n"
+        "    if 'CI_COVERAGE_DIR' in os.environ: raise SystemExit(42)\n"
+        "    for arg in args:\n"
+        "        if arg.startswith('--cov-'): print('COVERAGE_ARGUMENT ' + arg)\n"
         "    barrier = os.environ.get('PYTEST_BARRIER_DIR')\n"
         "    cwd_name = pathlib.Path.cwd().name\n"
         "    if barrier and cwd_name.startswith('pkg-'):\n"
@@ -683,3 +686,27 @@ def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receip
     for name in ("pkg-pass", "root"):
         assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
     assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
+
+def test_hosted_coverage_reports_are_named_and_do_not_reach_nested_pytest(repo, tmp_path):
+    for name, module in (
+        ("workflow-scheduler", "workflow_scheduler"),
+        ("reusable-capability-registry", "reusable_capability_registry"),
+        ("visual-asset-intake", "visual_asset_intake"),
+    ):
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+    coverage_dir = tmp_path / "coverage"
+    result = run(repo, env={"CI_COVERAGE_DIR": str(coverage_dir)})
+    assert result.returncode == 0, result.stderr + result.stdout
+    arguments = [line.removeprefix("COVERAGE_ARGUMENT ") for line in result.stdout.splitlines()
+                 if line.startswith("COVERAGE_ARGUMENT ")]
+    paths = {arg.removeprefix("--cov-report=json:") for arg in arguments
+             if arg.startswith("--cov-report=json:")}
+    assert paths == {
+        str(coverage_dir / f"{name}.json")
+        for name in ("workflow-scheduler", "reusable-capability-registry", "visual-asset-intake")
+    }
+    assert arguments.count("--cov-branch") == 3
+    assert result.stdout.count("PYTEST_MARKER tests") == 4

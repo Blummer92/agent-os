@@ -17,6 +17,14 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
   rm -f "$CI_JUNIT_DIR/manifest.tsv" || { echo "Runner error: cannot replace stale validation manifest" >&2; exit 2; }
 fi
 
+# Keep nested test-runner fixtures out of the outer hosted artifact directory.
+coverage_dir="${CI_COVERAGE_DIR:-}"
+unset CI_COVERAGE_DIR
+case "$coverage_dir" in
+  ''|/*) ;;
+  *) coverage_dir="$ROOT_DIR/$coverage_dir" ;;
+esac
+
 runner_error() {
   echo "Runner error: $1" >&2
   exit 2
@@ -450,6 +458,11 @@ run_pytest_suite() {
       coverage_report="$(coverage_report_for_suite "$suite_name")"
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
+    fi
+    if [ -n "$coverage_dir" ] && [ -n "$coverage_target" ]; then
+      local report_path="$coverage_dir/${suite_name##*/}.json"
+      command+=("--cov-config=$ROOT_DIR/scripts/ci-branch-coverage.ini" "--cov-branch" "--cov-report=json:$report_path")
+      display+=" --cov-branch --cov-report=json:$report_path"
     fi
     command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
     [ -n "${CI_JUNIT_DIR:-}" ] && display+=" --junitxml=$suite_junit_path"

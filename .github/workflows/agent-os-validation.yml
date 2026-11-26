@@ -973,6 +973,7 @@ jobs:
         id: aggregate
         env:
           CI_JUNIT_DIR: ${{ runner.temp }}/junit-aggregate
+          CI_COVERAGE_DIR: ${{ runner.temp }}/branch-coverage
           # Subtest receipt binding (JUnit counter repair): the producer
           # records the workflow run id, attempt and authoritative head
           # in each per-suite receipt, so the collector can verify the
@@ -982,7 +983,28 @@ jobs:
           CI_JUNIT_RUN_ID: ${{ github.run_id }}
           CI_JUNIT_RUN_ATTEMPT: ${{ github.run_attempt }}
           CI_JUNIT_HEAD_SHA: ${{ steps.authority.outputs.head_sha || github.sha }}
-        run: bash ./scripts/validate-all.sh
+        run: |
+          set -euo pipefail
+          # Remove only the fixed files this attempt owns. A prior attempt
+          # must never satisfy this attempt's evidence requirement.
+          mkdir -p -- "$CI_COVERAGE_DIR"
+          rm -f -- "$CI_COVERAGE_DIR"/{workflow-scheduler,reusable-capability-registry,visual-asset-intake,coverage-receipt}.json
+          validation_status=0
+          bash ./scripts/validate-all.sh || validation_status=$?
+          coverage_status=0
+          python scripts/agent_os_ci_branch_coverage.py "$CI_COVERAGE_DIR" \
+            --validation-exit "$validation_status" || coverage_status=$?
+          if [ "$validation_status" -ne 0 ]; then exit "$validation_status"; fi
+          exit "$coverage_status"
+
+      - name: Upload branch coverage evidence
+        if: ${{ always() && (steps.aggregate.outcome == 'success' || steps.aggregate.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: branch-coverage-aggregate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/branch-coverage/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Record not-executed infrastructure receipt
         # Only when a pre-aggregate step failed and the aggregate step
