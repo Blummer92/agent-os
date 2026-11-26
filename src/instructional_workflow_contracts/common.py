@@ -496,7 +496,13 @@ def _normalize_json(
             if index:
                 budget.consume_bytes(1)
             validate_text(key, f"{path} key", max_length=128)
-            if is_secret_like_key(key):
+            # Preserve the Coach receipt's canonical negative telemetry, not
+            # credential data. No other value, key spelling, or path qualifies.
+            negative_credential_telemetry = (
+                path == "$.side_effects" and key == "credentials_initialized"
+                and value[key] is False
+            )
+            if is_secret_like_key(key) and not negative_credential_telemetry:
                 raise ContractValidationError("authority-secret-field", f"{path} contains a secret-like key")
             budget.consume_bytes(_encoded_scalar_size(key) + 1)
             normalized_dict[key] = _normalize_json(

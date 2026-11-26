@@ -33,6 +33,8 @@ mcp>=2.3,<2.4
 coverage[toml]>=7.16.2
 
 # Local editable packages (development convenience only; wheel tests prove packaging)
+# Execution-service preflight checks the checkout Navigation Registry distribution.
+-e .
 -e ./src
 -e ./08_Tooling/agent-memory-context-manager
 # workflow-scheduler declares this local distribution (#1300); it is not on an

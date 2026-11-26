@@ -146,3 +146,28 @@ def test_aos_4123_04_serialized_credential_diagnostic(layers):
     cleaned = sanitize_detail(f"diagnostic {raw}")
     assert "[redacted]" in cleaned
     assert "synthetic-first" not in cleaned and "synthetic-last" not in cleaned
+
+
+def test_coach_negative_credential_telemetry_retains_canonical_receipt_bytes():
+    assert canonical_json_bytes({"side_effects": {"credentials_initialized": False}}) == (
+        b'{"side_effects":{"credentials_initialized":false}}'
+    )
+
+
+@pytest.mark.parametrize("payload", [
+    {"side_effects": {"credentials_initialized": True}},
+    {"side_effects": {"credentials_initialized": 0}},
+    {"side_effects": {"credentials_initialized": None}},
+    {"side_effects": {"credentials_initialized": "synthetic-credential"}},
+    {"side_effects": {"credentials_initialized": {"value": "synthetic-credential"}}},
+    {"side_effects": {"credentials": False}},
+    {"side_effects": {"token": False}},
+    {"side_effects": {"other": {"credentials_initialized": False}}},
+    {"other": {"credentials_initialized": False}},
+    {"credentials_initialized": False},
+])
+def test_credential_telemetry_exception_is_exact_and_value_free(payload):
+    with pytest.raises(ContractValidationError) as caught:
+        canonical_json_bytes(payload)
+    assert caught.value.reason_code == "authority-secret-field"
+    assert "synthetic-credential" not in caught.value.detail

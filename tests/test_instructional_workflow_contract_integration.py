@@ -20,7 +20,7 @@ from instructional_workflow_contracts import AuthorityEvidence, ValidationStatus
 FIXTURES = Path(__file__).parent / "fixtures" / "instructional_workflow_contracts"
 PACKAGE = Path(__file__).parents[1] / "src" / "instructional_workflow_contracts"
 COMPONENT_BLOBS = {
-    "common.py": "4a7e01d089b9c8a13ec68a4c05ef51ec3fddce4b",  # reviewed shared record/validation invariant repair
+    "common.py": "78ac1efea0a7e7dc54b3efd1a726945261f1bb7b",  # reviewed shared record/validation invariant repair
     "handoff.py": "b616580b0febaa2cab2f85a9327a5f62922289ae",
     "material_requirement.py": "a54c0dfc2f03642818c8655f44837bd7a4e253b0",
     "artifact_manifest.py": "913829ab8e22f3865597ee08bd6826357f9dfd21",

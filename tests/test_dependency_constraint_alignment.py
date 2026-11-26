@@ -207,3 +207,14 @@ def test_guard_rejects_split_mcp_minor_updates_in_either_direction() -> None:
     assert not _is_satisfiable(old, new)
     assert not _is_satisfiable(new, old)
     assert _is_satisfiable(new, new)
+
+
+def test_dev_install_supplies_the_canonical_navigation_registry_distribution() -> None:
+    """The execution-service preflight checks distribution metadata, not sys.path."""
+    registry = _distribution_pyprojects()["agent-os-navigation-registry"]
+    editable_paths = set()
+    for raw in DEV_REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+        fields = raw.split("#", 1)[0].split()
+        if len(fields) == 2 and fields[0] == "-e":
+            editable_paths.add((ROOT / fields[1].split("[", 1)[0]).resolve())
+    assert registry.parent in editable_paths, "requirements-dev.txt must install the local Navigation Registry"
