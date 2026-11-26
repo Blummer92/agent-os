@@ -31,6 +31,7 @@ from .coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
+    _EXECUTED_REVISION_REASON,
     _LIBRARY_TIE_REASON,
     _NOTION_EXECUTOR_REASON,
     _PR_REFRESH_REASON,
@@ -472,6 +473,7 @@ _GENERIC_REASONS = frozenset({
     # task-level review; never manufacture a new approved relevance class.
     "notion-writer-readback-text-match",
     "github-rest-evidence-text-match",
+    _EXECUTED_REVISION_REASON,
 })
 
 

@@ -1,0 +1,38 @@
+{
+ "about": "Frozen row inputs for the offline probes. LL-98 metadata and text are the retained offline readback. The #4102 row is HYPOTHETICAL: the returned draft text (comment 7198014711) placed under LL-98's exact metadata, to build a same-metadata near-miss. It does not exist in the catalog.",
+ "shared_metadata": {
+  "Status": "New",
+  "Surface Before Work?": true,
+  "Area": "Governance",
+  "Learning Type": "QA feedback",
+  "Applies To": [],
+  "last_edited_time": "2026-11-26T13:34:00.000Z"
+ },
+ "rows": {
+  "LL-98": {
+   "number": 98,
+   "provenance": "retained offline readback",
+   "Lesson Learned": "Verify CKR2 relevance fixes against the exact code revision executed",
+   "Guardrail": "Never treat a main-branch CKR6 result as proof that an unmerged PR's matcher works. Preserve fail-closed abstention, provenance checks, retrieval limits, and authorization boundaries.",
+   "What To Do Next Time": "When validating an unmerged CKR2 relevance fix, record the SHA actually executed. Compare positive and negative lesson-selection fixtures against both main and the exact PR head. Independently verify lesson applicability before interpreting a no-match result as a matcher defect.",
+   "Source Link": "https://github.com/Blummer92/agent-os/pull/4125"
+  },
+  "D-4102": {
+   "number": 4102,
+   "provenance": "HYPOTHETICAL row from returned draft (comment 7198014711); the number is a probe label, not a Lesson ID",
+   "Lesson Learned": "Keep pull-request head execution out of workflows that process trusted post-merge evidence.",
+   "Guardrail": "Do not treat read-only token permissions or passing PR tests as proof of workflow isolation. This rule does not require splitting a workflow whose triggers all run at the same trust level.",
+   "What To Do Next Time": "Put PR-head tests in a PR-only workflow. Keep trusted processing in a separate workflow pinned to trusted source. Parse both definitions in a regression test and assert trigger, checkout, and cache isolation.",
+   "Source Link": "https://github.com/Blummer92/agent-os/issues/3418"
+  }
+ },
+ "hypothetical_requests": {
+  "controlled-vocab": {
+   "about": "HYPOTHETICAL request using the only generic controlled terms LL-98 normalizes to (ecosystem agent-os, capability quality-assurance). Not a live request.",
+   "task_reference": "How do we verify that CKR evidence came from the code revision that actually ran, rather than the PR SHA named in the request?",
+   "ecosystem_hints": ["agent-os"],
+   "capability_keywords": ["quality-assurance"],
+   "specialized_knowledge_required": true
+  }
+ }
+}
