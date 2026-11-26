@@ -7,19 +7,22 @@ set -u
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || exit 2
 
+junit_dir="${CI_JUNIT_DIR:-}"
+unset CI_JUNIT_DIR
+
 # Keep public evidence paths stable across package subprocess cwd changes.
-if [ -n "${CI_JUNIT_DIR:-}" ]; then
-  case "$CI_JUNIT_DIR" in
+if [ -n "${junit_dir:-}" ]; then
+  case "$junit_dir" in
     /*) ;;
-    *) CI_JUNIT_DIR="$ROOT_DIR/$CI_JUNIT_DIR" ;;
+    *) junit_dir="$ROOT_DIR/$junit_dir" ;;
   esac
-  mkdir -p "$CI_JUNIT_DIR" || { echo "Runner error: cannot prepare CI_JUNIT_DIR" >&2; exit 2; }
-  rm -f "$CI_JUNIT_DIR/manifest.tsv" || { echo "Runner error: cannot replace stale validation manifest" >&2; exit 2; }
+  mkdir -p "$junit_dir" || { echo "Runner error: cannot prepare junit_dir" >&2; exit 2; }
+  rm -f "$junit_dir/manifest.tsv" || { echo "Runner error: cannot replace stale validation manifest" >&2; exit 2; }
 fi
 
 # Keep nested test-runner fixtures out of the outer hosted artifact directory.
 coverage_dir="${CI_COVERAGE_DIR:-}"
-unset CI_COVERAGE_DIR
+unset CI_COVERAGE_DIR COVERAGE_FILE COVERAGE_RCFILE COVERAGE_PROCESS_START
 case "$coverage_dir" in
   ''|/*) ;;
   *) coverage_dir="$ROOT_DIR/$coverage_dir" ;;
@@ -87,6 +90,22 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   else
     runner_error "python3 or python is required."
   fi
+fi
+
+# Test discovery and execution share these stable settings.
+export PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 TZ=UTC LC_ALL=C.UTF-8 CI=true
+unset PYTEST_PLUGINS PYTEST_DEBUG PYTEST_CURRENT_TEST
+
+# PYTEST_ADDOPTS would silently narrow every pytest invocation below --
+# the completeness collections, the real suite runs, and the focused
+# runs -- because it applies identically to all of them. The
+# completeness check cannot detect it (both collections would narrow
+# together), so an authoritative run must not have it set at all.
+# Unset it loudly rather than failing: a local operator may have it
+# set for an unrelated reason, and the run stays valid without it.
+if [ -n "${PYTEST_ADDOPTS:-}" ]; then
+  echo "PYTEST_ADDOPTS is set in this environment; unsetting it so the authoritative run is not silently narrowed." >&2
+  unset PYTEST_ADDOPTS
 fi
 
 if ! "$PYTHON_BIN" -m pytest --version >/dev/null 2>&1; then
@@ -205,13 +224,6 @@ record_failure() {
 }
 
 timer_now_us() {
-  if [ -n "${EPOCHREALTIME:-}" ]; then
-    local seconds="${EPOCHREALTIME%.*}"
-    local fraction="${EPOCHREALTIME#*.}000000"
-    printf '%s%s\n' "$seconds" "${fraction:0:6}"
-    return 0
-  fi
-
   "$PYTHON_BIN" - <<'PY' 2>/dev/null
 import time
 print(time.monotonic_ns() // 1000)
@@ -267,7 +279,7 @@ python_path_with_src() {
   fi
 }
 
-# CI_JUNIT_DIR is opt-in: unset locally, set by CI to collect real JUnit.
+# junit_dir is opt-in: unset locally, set by CI to collect real JUnit.
 # When set, every pytest invocation gets a unique --junitxml path and a
 # manifest.tsv is written at the end. Default local behaviour is unchanged.
 junit_key() {
@@ -277,9 +289,9 @@ junit_key() {
 }
 
 junit_path_for() {
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
-    mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
-    printf '%s/%s.xml' "$CI_JUNIT_DIR" "$(junit_key "$1")"
+  if [ -n "${junit_dir:-}" ]; then
+    mkdir -p "$junit_dir" || runner_error "cannot prepare junit_dir: $junit_dir"
+    printf '%s/%s.xml' "$junit_dir" "$(junit_key "$1")"
   fi
 }
 
@@ -358,7 +370,7 @@ run_focused_target() {
     command+=("--maxfail=$focused_maxfail")
     display+=" --maxfail=$focused_maxfail"
   fi
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+  if [ -n "${junit_dir:-}" ]; then
     local focused_junit_path
     focused_junit_path="$(junit_path_for "focused__$target")"
     command+=("--junitxml=$focused_junit_path")
@@ -386,7 +398,7 @@ run_focused_target() {
     run_check "focused: $target" "$suite_dir" "$display" "${command[@]}"
     focused_code=$?
   fi
-  if [ "$focused_code" -eq 0 ] && [ -n "${CI_JUNIT_DIR:-}" ]; then
+  if [ "$focused_code" -eq 0 ] && [ -n "${junit_dir:-}" ]; then
     if ! verify_junit "$focused_junit_path" --require-executed; then
       echo "focused JUnit missing, malformed or failed: $target" >&2
       check_results[${#check_results[@]}-1]="FAIL|focused: $target|$check_display|2"
@@ -401,36 +413,46 @@ is_python_pytest_suite() {
   [ -n "$first" ]
 }
 
-coverage_target_for_suite() {
-  # Bounded coverage: other suites keep their existing pytest command.
-  case "$1" in
-    "08_Tooling/workflow-scheduler") printf '%s' 'src/workflow_scheduler' ;;
-    "08_Tooling/reusable-capability-registry") printf '%s' 'src/reusable_capability_registry' ;;
-    "08_Tooling/visual-asset-intake") printf '%s' 'src/visual_asset_intake' ;;
-  esac
+# Coverage scope is shared with the independent report checker.
+coverage_field_for_suite() {
+  local requested="$1" field="$2" name package display
+  [ -f "$ROOT_DIR/scripts/ci-coverage-suites.tsv" ] || return 0
+  while IFS=$'\t' read -r name package display; do
+    if [ "$requested" = "08_Tooling/$name" ]; then
+      if [ "$field" = "target" ]; then printf 'src/%s' "$package"; else printf '%s' "$display"; fi
+      return
+    fi
+  done < "$ROOT_DIR/scripts/ci-coverage-suites.tsv"
 }
-
-coverage_report_for_suite() {
-  if [ "$1" = "08_Tooling/workflow-scheduler" ]; then
-    printf 'term'
-  else
-    printf 'term-missing'
-  fi
-}
+coverage_target_for_suite() { coverage_field_for_suite "$1" target; }
+coverage_report_for_suite() { coverage_field_for_suite "$1" report; }
 
 # With these plugins disabled pytest itself rejects --setup-only/--setup-plan
 # (exit 4, "unrecognized arguments") from any config source; both options write
 # passing-looking JUnit without running test bodies.
 PYTEST_EXECUTION_GUARD=(-p no:setuponly -p no:setupplan)
 
+
+
+
 # Every suite writes JUnit so its executed tests can be reconciled against the
-# reference collection: published under CI_JUNIT_DIR when set (and shown in the
+# reference collection: published under junit_dir when set (and shown in the
 # command text), otherwise a private runner temp file (not shown, not published).
 suite_junit_path_for() {
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
+  if [ -n "${junit_dir:-}" ]; then
     junit_path_for "$1"
   else
     printf '%s/junit/%s.xml' "$parallel_tmp" "$(junit_key "$1")"
+  fi
+}
+
+# The running command and its summary use exactly the same hosted options.
+# Populate the caller's local array (compatible with Bash 3.2).
+set_hosted_coverage_options() {
+  local suite_name="$1"
+  if [ -n "$coverage_dir" ] && [ -n "$2" ]; then
+    hosted_options=("--cov-config=$ROOT_DIR/scripts/ci-branch-coverage.ini" "--cov-branch"
+      "--cov-report=json:$coverage_dir/${suite_name##*/}.json")
   fi
 }
 
@@ -450,22 +472,19 @@ run_pytest_suite() {
     local coverage_target
     local coverage_report
     coverage_target="$(coverage_target_for_suite "$suite_name")"
-    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
-      # Preserve the canonical scheduler coverage invocation (#2126).
-      command+=("--cov=src/workflow_scheduler" "--cov-report=term")
-      display+=" --cov=src/workflow_scheduler --cov-report=term"
-    elif [ -n "$coverage_target" ]; then
+    if [ -n "$coverage_target" ]; then
       coverage_report="$(coverage_report_for_suite "$suite_name")"
       command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
-    if [ -n "$coverage_dir" ] && [ -n "$coverage_target" ]; then
-      local report_path="$coverage_dir/${suite_name##*/}.json"
-      command+=("--cov-config=$ROOT_DIR/scripts/ci-branch-coverage.ini" "--cov-branch" "--cov-report=json:$report_path")
-      display+=" --cov-branch --cov-report=json:$report_path"
+    local hosted_options=()
+    set_hosted_coverage_options "$suite_name" "$coverage_target"
+    if [ -n "${hosted_options[0]:-}" ]; then
+      command+=("${hosted_options[@]}")
+      display+=" ${hosted_options[*]}"
     fi
     command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
-    [ -n "${CI_JUNIT_DIR:-}" ] && display+=" --junitxml=$suite_junit_path"
+    [ -n "${junit_dir:-}" ] && display+=" --junitxml=$suite_junit_path"
     display+=" $guard_display"
     local src_dir
     local pythonpath_value
@@ -483,7 +502,7 @@ run_pytest_suite() {
     local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
     local plain_command=("$PYTHON_BIN" -m pytest tests)
     plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
-    [ -n "${CI_JUNIT_DIR:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
+    [ -n "${junit_dir:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
     plain_display+=" $guard_display"
     run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
@@ -501,17 +520,44 @@ suite_command_text() {
       coverage_report="$(coverage_report_for_suite "$suite_name")"
       display+=" --cov=$coverage_target --cov-report=$coverage_report"
     fi
-    if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    local hosted_options=()
+    set_hosted_coverage_options "$suite_name" "$coverage_target"
+    if [ -n "${hosted_options[0]:-}" ]; then
+      display+=" ${hosted_options[*]}"
+    fi
+    if [ -n "${junit_dir:-}" ]; then
       display+=" --junitxml=$(junit_path_for "$suite_name")"
     fi
     printf '%s %s' "$display" "${PYTEST_EXECUTION_GUARD[*]}"
   else
     local plain="cd $suite_dir && $PYTHON_BIN -m pytest tests"
-    if [ -n "${CI_JUNIT_DIR:-}" ]; then
+    if [ -n "${junit_dir:-}" ]; then
       plain+=" --junitxml=$(junit_path_for "$suite_name")"
     fi
     printf '%s %s' "$plain" "${PYTEST_EXECUTION_GUARD[*]}"
   fi
+}
+
+artifact_sha256() {
+  local path="$1" digest
+  if [ ! -f "$path" ]; then printf '%s' missing; return 0; fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(sha256sum < "$path")" || return 1
+  else
+    digest="$(shasum -a 256 < "$path")" || return 1
+  fi
+  digest="${digest%% *}"
+  [[ "$digest" =~ ^[a-f0-9]{64}$ ]] || return 1
+  printf '%s' "$digest"
+}
+
+suite_fingerprints() {
+  local name="$1" junit coverage=not-applicable
+  junit="$(artifact_sha256 "$(suite_junit_path_for "$name")")" || return 1
+  if [ -n "$(coverage_target_for_suite "$name")" ]; then
+    coverage="$(artifact_sha256 "$coverage_dir/${name##*/}.json")" || return 1
+  fi
+  printf '%s|%s' "$junit" "$coverage"
 }
 
 run_captured_suite() {
@@ -527,6 +573,12 @@ run_captured_suite() {
   run_pytest_suite "$suite_dir" "$suite_name" >"$output_file" 2>&1
   code=$?
   ended_us="$(timer_now_us || true)"
+  if [ -n "$coverage_dir" ]; then
+    suite_fingerprints "$suite_name" >"$parallel_tmp/hash-$(junit_key "$suite_name")" || {
+      echo "could not capture fingerprints: $suite_name" >>"$output_file"
+      if [ "$code" -eq 0 ]; then code=2; fi
+    }
+  fi
   printf '%s|%s|%s\n' "$code" "$started_us" "$ended_us" >"$status_file" || return 2
   return 0
 }
@@ -546,9 +598,9 @@ check_test_completeness() {
   local args=("$PYTHON_BIN" scripts/agent_os_ci_test_completeness.py --suite-dir "$suite_dir" --suite-name "$suite_name" --python-bin "$PYTHON_BIN" --junit "$junit_path")
   local display="$PYTHON_BIN scripts/agent_os_ci_test_completeness.py --suite-dir $suite_dir --suite-name $suite_name --python-bin $PYTHON_BIN --junit $junit_path"
   local receipt=""
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
-    mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
-    receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$suite_name").json"
+  if [ -n "${junit_dir:-}" ]; then
+    mkdir -p "$junit_dir" || runner_error "cannot prepare junit_dir: $junit_dir"
+    receipt="$junit_dir/test-completeness-$(junit_key "$suite_name").json"
     rm -f "$receipt" || runner_error "cannot replace stale completeness receipt: $receipt"
     args+=(--receipt "$receipt")
     display+=" --receipt $receipt"
@@ -618,7 +670,7 @@ consume_captured_suite() {
 # pytest 9 subtest receipt (JUnit counter repair). After a suite's pytest
 # run, extract the terminal summary's explicit subtests-passed segment
 # and the JUnit file's own digest/totals into
-# CI_JUNIT_DIR/junit-subtest-receipt-<suite>.json. The collector accepts
+# junit_dir/junit-subtest-receipt-<suite>.json. The collector accepts
 # a declared-tests surplus only with such a source-bound receipt; without
 # one the surplus stays rejected. A receipt is written only when the
 # summary explicitly reports passing subtests -- absence is never read
@@ -630,11 +682,11 @@ consume_captured_suite() {
 write_subtest_receipt() {
   local suite_name="$1"
   local output_file="$2"
-  [ -n "${CI_JUNIT_DIR:-}" ] || return 0
+  [ -n "${junit_dir:-}" ] || return 0
   local junit_path receipt_path
   junit_path="$(suite_junit_path_for "$suite_name")"
   [ -n "$junit_path" ] && [ -f "$junit_path" ] || return 0
-  receipt_path="$CI_JUNIT_DIR/junit-subtest-receipt-$(junit_key "$suite_name").json"
+  receipt_path="$junit_dir/junit-subtest-receipt-$(junit_key "$suite_name").json"
   local receipt_args=()
   [ -n "${CI_JUNIT_RUN_ID:-}" ] && receipt_args+=(--run-id "$CI_JUNIT_RUN_ID")
   [ -n "${CI_JUNIT_RUN_ATTEMPT:-}" ] && receipt_args+=(--run-attempt "$CI_JUNIT_RUN_ATTEMPT")
@@ -648,17 +700,6 @@ write_subtest_receipt() {
 
 aggregate_started_us="$(timer_now_us || true)"
 
-# PYTEST_ADDOPTS would silently narrow every pytest invocation below --
-# the completeness collections, the real suite runs, and the focused
-# runs -- because it applies identically to all of them. The
-# completeness check cannot detect it (both collections would narrow
-# together), so an authoritative run must not have it set at all.
-# Unset it loudly rather than failing: a local operator may have it
-# set for an unrelated reason, and the run stays valid without it.
-if [ -n "${PYTEST_ADDOPTS:-}" ]; then
-  echo "PYTEST_ADDOPTS is set in this environment; unsetting it so the authoritative run is not silently narrowed." >&2
-  unset PYTEST_ADDOPTS
-fi
 
 echo "AGGREGATE VALIDATION START"
 echo "Repository: $ROOT_DIR"
@@ -784,8 +825,8 @@ for index in "${schedule_indices[@]}"; do
   output_file="$parallel_tmp/output-$index"
   status_file="$parallel_tmp/status-$index"
   rm -f "$(suite_junit_path_for "$suite_name")" || runner_error "cannot replace stale suite JUnit evidence"
-  if [ -n "${CI_JUNIT_DIR:-}" ]; then
-    rm -f "$CI_JUNIT_DIR/junit-subtest-receipt-$(junit_key "$suite_name").json" || runner_error "cannot replace stale subtest evidence"
+  if [ -n "${junit_dir:-}" ]; then
+    rm -f "$junit_dir/junit-subtest-receipt-$(junit_key "$suite_name").json" || runner_error "cannot replace stale subtest evidence"
   fi
   captured_commands[$index]="$(suite_command_text "$suite_dir" "$suite_name")"
   captured_outputs[$index]="$output_file"
@@ -816,10 +857,12 @@ flush_parallel_batch
 for index in "${!suite_names[@]}"; do
   consume_captured_suite "${suite_names[$index]}" "${captured_commands[$index]}" "${captured_outputs[$index]}" "${captured_statuses[$index]}"
 done
-if [ -n "${CI_JUNIT_DIR:-}" ]; then
-  mkdir -p "$CI_JUNIT_DIR" || runner_error "cannot prepare CI_JUNIT_DIR: $CI_JUNIT_DIR"
-  manifest_file="$CI_JUNIT_DIR/manifest.tsv"
-  printf 'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification\n' > "$manifest_file" || runner_error "cannot write validation manifest"
+if [ -n "${junit_dir:-}" ]; then
+  mkdir -p "$junit_dir" || runner_error "cannot prepare junit_dir: $junit_dir"
+  manifest_file="$junit_dir/manifest.tsv"
+  manifest_header=$'suite_name\tjunit_file\tjunit_exists\tstatus\texit_code\tclassification'
+  [ -z "$coverage_dir" ] || manifest_header+=$'\tcommand\tjunit_sha256\tcoverage_sha256'
+  printf '%s\n' "$manifest_header" > "$manifest_file" || runner_error "cannot write validation manifest"
   for result in "${check_results[@]}"; do
     IFS='|' read -r status name command_text code <<< "$result"
     case "$name" in
@@ -836,32 +879,32 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
     esac
     if [[ "$name" == "test selection completeness: "* ]]; then
       # The completeness check has no JUnit file of its own; its evidence
-      # is the test-completeness-<suite>.json receipt in CI_JUNIT_DIR, so
+      # is the test-completeness-<suite>.json receipt in junit_dir, so
       # the row points at the receipt and records whether it exists.
       # Exit 1 proves an omission only with an INCOMPLETE receipt from
       # this attempt. Uncaught helper exceptions also exit 1 but have
       # no comparison evidence; they must be TEST_COLLECTION_ERROR.
       completeness_suite="${name#test selection completeness: }"
       junit_file="test-completeness-$(junit_key "$completeness_suite").json"
-      if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
+      if [ -f "$junit_dir/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       if [ "$status" = "PASS" ] && [ "$code" = "0" ] && [ "$junit_exists" = "yes" ]; then
         classification="COMPLETE"
-      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$CI_JUNIT_DIR/$junit_file"; then
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"OUTCOME_FAILED"' "$junit_dir/$junit_file"; then
         classification="TEST_OUTCOME_FAILED"
-      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$CI_JUNIT_DIR/$junit_file"; then
+      elif [ "$code" = "1" ] && [ "$junit_exists" = "yes" ] && grep -Eq '^[[:space:]]*"verdict"[[:space:]]*:[[:space:]]*"INCOMPLETE"' "$junit_dir/$junit_file"; then
         classification="TEST_SELECTION_INCOMPLETE"
       else
         classification="TEST_COLLECTION_ERROR"
       fi
     elif [ "$code" = "5" ]; then
       # pytest exit 5 = no tests collected: never a pass, never a generic failure.
-      if [ -f "$CI_JUNIT_DIR/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
+      if [ -f "$junit_dir/$junit_file" ]; then junit_exists="yes"; else junit_exists="no"; fi
       classification="ZERO_COLLECTED"
-    elif [ -f "$CI_JUNIT_DIR/$junit_file" ]; then
+    elif [ -f "$junit_dir/$junit_file" ]; then
       junit_exists="yes"
       if [ "$status" = "PASS" ]; then classification="EXECUTED_PASS"; else classification="EXECUTED_FAIL"; fi
       if [ "$classification" = "EXECUTED_PASS" ]; then
-        verify_junit "$CI_JUNIT_DIR/$junit_file"
+        verify_junit "$junit_dir/$junit_file"
         junit_verdict=$?
         if [ "$junit_verdict" -ne 0 ]; then
           status="FAIL"
@@ -879,7 +922,7 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
         case "$name" in
           "focused: "*) ;; # Explicit focused selections have no completeness receipt.
           *)
-            outcome_receipt="$CI_JUNIT_DIR/test-completeness-$(junit_key "$name").json"
+            outcome_receipt="$junit_dir/test-completeness-$(junit_key "$name").json"
             if [ ! -f "$outcome_receipt" ]; then
               status="FAIL"
               classification="TEST_COLLECTION_ERROR"
@@ -901,7 +944,37 @@ if [ -n "${CI_JUNIT_DIR:-}" ]; then
         record_failure "$name (missing JUnit)" "$command_text" 2
       fi
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification" >> "$manifest_file" || runner_error "cannot append validation manifest"
+    junit_digest=not-applicable
+    coverage_digest=not-applicable
+    if [ -n "$coverage_dir" ]; then
+      case "$name" in
+        "focused: "*|"test selection completeness: "*)
+          junit_digest="$(artifact_sha256 "$junit_dir/$junit_file")" || junit_digest=unavailable
+          ;;
+        *)
+          fingerprint_file="$parallel_tmp/hash-$(junit_key "$name")"
+          captured="$(cat "$fingerprint_file" 2>/dev/null)" || captured=""
+          actual="$(suite_fingerprints "$name")" || actual=""
+          if [ -n "$captured" ] && [ "$captured" = "$actual" ]; then
+            IFS='|' read -r junit_digest coverage_digest <<< "$actual"
+          else
+            junit_digest=unverified
+            coverage_digest=unverified
+            if [ "$status" = "PASS" ]; then
+              status="FAIL"
+              code=2
+              classification="TEST_COLLECTION_ERROR"
+              record_failure "$name (artifact changed or fingerprint missing)" "$command_text" 2
+            fi
+          fi
+          ;;
+      esac
+    fi
+    manifest_row=("$name" "$junit_file" "$junit_exists" "$status" "$code" "$classification")
+    if [ -n "$coverage_dir" ]; then
+      manifest_row+=("$command_text" "$junit_digest" "$coverage_digest")
+    fi
+    (IFS=$'\t'; printf '%s\n' "${manifest_row[*]}") >> "$manifest_file" || runner_error "cannot append validation manifest"
   done
 fi
 

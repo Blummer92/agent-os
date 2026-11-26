@@ -65,7 +65,10 @@ def _assert_dependency_cache_parity(content: str) -> None:
 
 def test_validation_gate_executes_only_canonical_aggregate_command():
     content = WORKFLOW.read_text(encoding="utf-8")
-    assert content.count("./scripts/validate-all.sh") == 1
+    steps = yaml.safe_load(content)["jobs"]["validate"]["steps"]
+    script = next(step["run"] for step in steps if step.get("id") == "aggregate")
+    assert script == "bash ./scripts/ci-local.sh --hosted"
+    assert (ROOT / "scripts/ci-local.sh").read_text().count("./scripts/validate-all.sh") == 1
     assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in content
     assert "Cloud Build validation migration notice" not in content
 
@@ -195,12 +198,11 @@ def test_pre_aggregate_failure_writes_not_executed_receipt_before_upload():
 def test_scheduler_validation_is_owned_by_the_canonical_aggregate_runner():
     assert not (ROOT / ".github/workflows/workflow-scheduler-validation.yml").exists()
     content = AGGREGATE_RUNNER.read_text(encoding="utf-8")
-    assert 'suite_name" = "08_Tooling/workflow-scheduler"' in content
-    # The runner appends coverage flags to the executed command exactly once and
-    # mirrors them into the operator-visible display string; only the executed
-    # command proves single ownership (#2126).
-    assert content.count('command+=("--cov=src/workflow_scheduler" "--cov-report=term")') == 1
-    assert content.count("--cov=src/workflow_scheduler") == 2
+    rows = (ROOT / "scripts/ci-coverage-suites.tsv").read_text().splitlines()
+    assert [line.split("\t") for line in rows if line.startswith("workflow-scheduler\t")] == [
+        ["workflow-scheduler", "workflow_scheduler", "term"]
+    ]
+    # The runner tests assert the actual emitted arguments for this scope.
     assert "--cov-fail-under" not in content
 
 
@@ -283,9 +285,10 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
     aggregate_runner = AGGREGATE_RUNNER.read_text(encoding="utf-8")
     assert "python -m pip install -r requirements-dev.txt" in aggregate_workflow
     assert "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt" in aggregate_workflow
-    assert "./scripts/validate-all.sh" in aggregate_workflow
-    assert "--cov=src/workflow_scheduler" in aggregate_runner
-    assert "--cov-report=term" in aggregate_runner
+    assert "bash ./scripts/ci-local.sh --hosted" in aggregate_workflow
+    assert (ROOT / "scripts/ci-local.sh").read_text().count("./scripts/validate-all.sh") == 1
+    scope = (ROOT / "scripts/ci-coverage-suites.tsv").read_text().splitlines()
+    assert "workflow-scheduler\tworkflow_scheduler\tterm" in scope
 
 
 def test_cloud_build_does_not_use_github_actions_cache_configuration():

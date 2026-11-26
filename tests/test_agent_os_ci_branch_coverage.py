@@ -5,17 +5,14 @@ import os
 import shutil
 import subprocess
 import sys
+from scripts.agent_os_ci_branch_coverage import load_scope
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORTS = {
-    "workflow-scheduler.json": "workflow_scheduler",
-    "reusable-capability-registry.json": "reusable_capability_registry",
-    "visual-asset-intake.json": "visual_asset_intake",
-}
+REPORTS = {f"{suite}.json": package for suite, package in load_scope().items()}
 HEAD = "a" * 40
 
 
@@ -41,10 +38,12 @@ def _create_source_tree(root):
         (source / "core.py").write_text("VALUE = 1\n")
 
 
-def check(reports, **identity):
+def check(reports, validation_exit="0", **identity):
+    command = [sys.executable, str(ROOT / "scripts/agent_os_ci_branch_coverage.py"), str(reports)]
+    if validation_exit is not None:
+        command.extend(("--validation-exit", validation_exit))
     return subprocess.run(
-        [sys.executable, str(ROOT / "scripts/agent_os_ci_branch_coverage.py"), str(reports),
-         "--validation-exit", "0"],
+        command,
         cwd=reports / "repo",
         env={**os.environ, "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132",
              "CI_JUNIT_RUN_ATTEMPT": "2", **identity},
@@ -63,6 +62,8 @@ def test_at_exact_floor_records_every_report_and_identity(reports):
         assert result == {
             "status": "pass", "covered": 88, "total": 110, "tool_version": "7.16.2",
             "source_files": 1, "report_sha256": hashlib.sha256((reports / name).read_bytes()).hexdigest(),
+            "reason_code": None, "missing_files": [], "extra_files": [],
+            "missing_file_count": 0, "extra_file_count": 0,
         }
 
 
@@ -121,9 +122,10 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
     aggregate = next(s for s in steps if s.get("id") == "aggregate")
     assert aggregate["env"]["CI_COVERAGE_DIR"] == "${{ runner.temp }}/branch-coverage"
     script = aggregate["run"]
-    assert script.count("bash ./scripts/validate-all.sh") == 1
-    assert "scripts/agent_os_ci_branch_coverage.py" in script
-    assert "validation_status" in script
+    assert script == "bash ./scripts/ci-local.sh --hosted"
+    wrapper = (ROOT / "scripts/ci-local.sh").read_text()
+    assert wrapper.count("bash ./scripts/validate-all.sh") == 1
+    assert "scripts/agent_os_ci_branch_coverage.py" in wrapper
     assert "continue-on-error" not in aggregate
     upload = next(s for s in steps if s.get("name") == "Upload branch coverage evidence")
     assert upload["with"]["name"] == "branch-coverage-aggregate-${{ github.run_attempt }}"
@@ -134,7 +136,7 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
 
 
 @pytest.mark.parametrize("fault,exit_code", [
-    ("none", 0), ("missing", 1), ("low", 1), ("runner-crash", 2),
+    ("none", 0), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2),
 ])
 def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp_path, fault, exit_code):
     # Execute the actual workflow's shell body, not a second implementation
@@ -156,24 +158,34 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
     _create_source_tree(root)
-    shutil.copy(ROOT / "scripts/agent_os_ci_branch_coverage.py", scripts)
+    for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py", "ci-coverage-suites.tsv"):
+        shutil.copy(ROOT / "scripts" / file, scripts)
     (scripts / "validate-all.sh").write_text(
         'cp "$STAGED_REPORTS"/*.json "$CI_COVERAGE_DIR/"\n'
+        'if [ "$FAKE_DIRTY" = "yes" ]; then touch dirty-marker; fi\n'
         'exit "$FAKE_EXIT"\n'
     )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "fixture"], cwd=root, check=True)
     args = ["bash", "-c", workload]
     env = {
-        **os.environ, "CI_COVERAGE_DIR": str(reports), "STAGED_REPORTS": str(staged),
+        **os.environ, "CI_COVERAGE_DIR": str(reports), "CI_JUNIT_DIR": str(tmp_path / "junit"),
+        "STAGED_REPORTS": str(staged),
         "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132", "CI_JUNIT_RUN_ATTEMPT": "2",
         "FAKE_EXIT": "2" if fault == "runner-crash" else "0",
+        "FAKE_DIRTY": "yes" if fault == "dirty-after" else "no",
     }
     result = subprocess.run(args, cwd=root, env=env, text=True,
                             capture_output=True, check=False, timeout=10)
     assert result.returncode == exit_code, result.stdout + result.stderr
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
     assert receipt["status"] == ("pass" if fault == "none" else "fail")
-    assert receipt["validation_exit"] == (2 if fault == "runner-crash" else 0)
-    if fault == "runner-crash":
+    assert receipt["validation_exit"] == (2 if fault in {"runner-crash", "dirty-after"} else 0)
+    if fault == "dirty-after":
+        assert "checkout changed during validation" in result.stderr
+    if fault in {"runner-crash", "dirty-after"}:
         assert receipt["reason_code"] == "coverage-validation-failed"
         assert receipt["reports"]["visual-asset-intake.json"]["status"] == "pass"
 
@@ -227,7 +239,9 @@ def test_file_shape_controls_reject_self_consistent_bad_evidence(reports, fault)
     assert process.returncode == 1, process.stdout + process.stderr
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
     assert receipt["status"] == "fail"
-    assert receipt["reports"][name] == {"status": "fail", "reason_code": "coverage-report-invalid"}
+    assert receipt["reports"][name]["status"] == "fail"
+    assert receipt["reports"][name]["reason_code"] == "coverage-report-invalid"
+    assert receipt["reports"][name]["covered"] is None
 
 
 @pytest.mark.parametrize(("validate_result", "aggregate_outcome", "state"), [
@@ -249,3 +263,94 @@ def test_existing_publisher_rejects_failed_or_missing_aggregate_job(validate_res
         assert run.returncode == expected, run.stdout + run.stderr
         if cmd[-1] == "status":
             assert json.loads(run.stdout)["state"] == state
+
+
+def test_unreadable_inventory_writes_a_failed_receipt(reports, monkeypatch, capsys):
+    from scripts import agent_os_ci_branch_coverage as validator
+
+    original = validator._source_files
+
+    def unreadable(root, suite, package):
+        if suite == "visual-asset-intake":
+            raise PermissionError("test-only invisible path")
+        return original(root, suite, package)
+
+    monkeypatch.chdir(reports / "repo")
+    monkeypatch.setattr(validator, "_source_files", unreadable)
+    monkeypatch.setattr(sys, "argv", ["coverage", str(reports), "--validation-exit", "0"])
+    monkeypatch.setenv("CI_JUNIT_HEAD_SHA", HEAD)
+    monkeypatch.setenv("CI_JUNIT_RUN_ID", "4132")
+    monkeypatch.setenv("CI_JUNIT_RUN_ATTEMPT", "2")
+    assert validator.main() == 1
+    payload = json.loads((reports / "coverage-receipt.json").read_bytes())
+    assert payload["reason_code"] == "coverage-reports-failed"
+    assert payload["reports"]["visual-asset-intake.json"]["reason_code"] == "coverage-report-invalid"
+    assert "invisible path" not in capsys.readouterr().out
+    assert payload["reports"]["workflow-scheduler.json"]["status"] == "pass"
+
+
+def test_file_set_receipt_names_the_difference_and_has_uniform_report_fields(reports):
+    name = "visual-asset-intake.json"
+    path = reports / name
+    data = json.loads(path.read_bytes())
+    actual = "src/visual_asset_intake/core.py"
+    extra = "src/visual_asset_intake/extra.py"
+    data["files"][extra] = data["files"].pop(actual)
+    path.write_text(json.dumps(data))
+    assert check(reports).returncode == 1
+    payload = json.loads((reports / "coverage-receipt.json").read_bytes())
+    assert payload["reason_code"] == "coverage-reports-failed"
+    observed = payload["reports"][name]
+    assert observed["reason_code"] == "coverage-report-file-set-mismatch"
+    assert observed["missing_files"] == [actual]
+    assert observed["extra_files"] == [extra]
+    assert set(observed) == set(payload["reports"]["workflow-scheduler.json"])
+    assert observed["covered"] is None and observed["total"] is None
+
+
+def test_local_wrapper_ignores_inherited_output_and_uses_local_receipt(reports, tmp_path):
+    root = tmp_path / "checkout"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    _create_source_tree(root)
+    for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py",
+                 "ci-coverage-suites.tsv", "agent_os_aggregate_gate.py"):
+        shutil.copy(ROOT / "scripts" / file, scripts)
+    (scripts / "validate-all.sh").write_text(
+        'cp "$STAGED_REPORTS"/*.json "$CI_COVERAGE_DIR/"\n'
+        'printf fixture > "$CI_JUNIT_DIR/manifest.tsv"\n'
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "fixture"], cwd=root, check=True)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    inherited = tmp_path / "outer"
+    inherited.mkdir()
+    sentinel = inherited / "visual-asset-intake.json"
+    sentinel.write_text("do not touch")
+    result = subprocess.run(
+        ["bash", "./scripts/ci-local.sh"], cwd=root,
+        env={**os.environ, "TMPDIR": str(scratch), "CI_COVERAGE_DIR": str(inherited),
+             "CI_JUNIT_DIR": str(inherited), "STAGED_REPORTS": str(reports)},
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sentinel.read_text() == "do not touch"
+    assert list(inherited.iterdir()) == [sentinel]
+    outputs = list(scratch.glob("agent-os-ci.*"))
+    assert len(outputs) == 1
+    receipt = json.loads((outputs[0] / "coverage/coverage-receipt.json").read_text())
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    assert (receipt["origin"], receipt["head_sha"], receipt["status"]) == ("local", head, "pass")
+    assert (outputs[0] / "junit/manifest.tsv").read_text() == "fixture"
+
+@pytest.mark.parametrize("status", [None, "unknown", "256"])
+def test_invalid_runner_exit_always_has_failed_receipt(reports, status):
+    run = check(reports, validation_exit=status)
+    assert run.returncode == 1, run.stdout + run.stderr
+    payload = json.loads((reports / "coverage-receipt.json").read_bytes())
+    assert (payload["status"], payload["reason_code"], payload["validation_exit"]) == (
+        "fail", "coverage-validation-exit-invalid", None
+    )
