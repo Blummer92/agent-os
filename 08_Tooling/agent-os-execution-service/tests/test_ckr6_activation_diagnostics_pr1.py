@@ -228,32 +228,63 @@ def test_ckr6_result_comment_size_limit_preserved():
         }, request_comment_id=123)
 
 
-def _run_insufficient(rows, known=()):
+def _run_insufficient(execute_read, known):
     """Eligible candidates rejected via unmatched capability keywords."""
     return activate_issue_start_lesson_preflight(
         repository="Blummer92/agent-os", issue_number=3418,
         task_reference="issue:#3418", specialized_knowledge_required=True,
         capability_keywords=("no-such-capability-xyz",),
-        known_knowledge_refs=known, execute_read=reader(rows),
+        known_knowledge_refs=known, execute_read=execute_read,
     )
+
+
+def _run_mixed_diagnostics(rows):
+    known = tuple(f"LL-{n}" for n in range(10, 15))
+
+    def execute_read(query):
+        # The exact lookup can only return requested IDs. Other eligible
+        # lessons are visible during the subsequent workspace snapshot.
+        clauses = query["filter"].get("or")
+        if clauses is not None:
+            numbers = {clause["unique_id"]["equals"] for clause in clauses}
+            return reader([
+                item for item in rows
+                if item["properties"]["Lesson ID"]["unique_id"]["number"] in numbers
+            ])(query)
+        return reader(rows)(query)
+
+    result = _run_insufficient(execute_read, known)
+    assert result["retrieval_diagnostics"]["read_count"] == 2
+    assert "incomplete_reason_code" not in result["retrieval_diagnostics"]
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["selected_lesson_ids"] == []
+    return result["rejected_candidate_provenance"]
 
 
 def test_combined_rejections_and_skips_capped_at_five():
     rows = [row(1), row(2), row(3)] + [row(n, status=None) for n in range(10, 15)]
-    result = _run_insufficient(rows, tuple(f"LL-{n}" for n in range(10, 15)))
-    evidence = result["rejected_candidate_provenance"]
+    evidence = _run_mixed_diagnostics(rows)
     assert len(evidence) == MAX_LESSON_RECORDS == 5
     assert [x["lesson_id"] for x in evidence] == ["LL-1", "LL-2", "LL-3", "LL-10", "LL-11"]
 
 
 def test_eligible_rejections_precede_requested_skips_regardless_of_row_order():
     rows = [row(n, status=None) for n in range(10, 15)] + [row(1), row(2), row(3)]
-    result = _run_insufficient(rows, tuple(f"LL-{n}" for n in range(10, 15)))
-    evidence = result["rejected_candidate_provenance"]
+    evidence = _run_mixed_diagnostics(rows)
     assert [x["provenance"] for x in evidence] == (
         ["canonical-github-ref-present"] * 3
         + ["normalization-skip:ambiguous-status-vocabulary"] * 2
     )
+
+
+def test_exact_lookup_out_of_scope_row_discards_provisional_diagnostics():
+    result = _run_insufficient(reader([row(10, status=None), row(1)]), ("LL-10",))
+    diagnostics = result["retrieval_diagnostics"]
+    assert diagnostics["incomplete_reason_code"] == "known-reference-identity-mismatch"
+    assert diagnostics["read_count"] == 1
+    assert result["selected_lesson_ids"] == []
+    assert result["rejected_candidate_provenance"] == []
+    assert result["substantial_hypothesis_admissible"] is False
 
 
 def _surface_unchecked(number=999):
