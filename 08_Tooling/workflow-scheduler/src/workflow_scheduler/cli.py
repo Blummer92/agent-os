@@ -432,6 +432,18 @@ class WorkflowSchedulerCLI:
                 error="Workflow is paused; resume it with resume-workflow before running.",
             )
 
+        if (
+            workflow.mode is WorkflowMode.PRODUCTION
+            and getattr(self.executor.adapter, "simulation_only", False) is True
+        ):
+            return self._format_response(
+                status="blocked",
+                blockers=["production_adapter_required"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error="Production workflows require a real execution adapter.",
+            )
+
         if workflow.status != WorkflowStatus.RUNNING:
             workflow.mark_running()
             if self.repository.update_workflow(workflow):

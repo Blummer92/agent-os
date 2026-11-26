@@ -333,6 +333,8 @@ class SQLiteRepository:
         landed. Existing callers that ignore the return value keep
         working, with the DB row unchanged on refusal. A repository-loaded
         snapshot must still match both the status and timestamp it read.
+        Completion compares actual settled task identities under a SQLite
+        write transaction; the number of completed tasks alone is not proof.
         """
         with self._lock:
             old_status, old_stamp = getattr(workflow, "_repository_snapshot", (None, None))
@@ -341,52 +343,65 @@ class SQLiteRepository:
             cursor = conn.cursor()
 
             task_ids = workflow.tasks
-            cursor.execute(
-                """
-                UPDATE workflows
-                SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
-                WHERE workflow_id = ?
-                  AND (? IS NULL OR (status = ? AND updated_at = ?))
-                  AND status NOT IN ('completed','failed','cancelled','governance_blocked')
-                  AND (NOT ? OR (? > 0 AND ? = (
-                    SELECT COUNT(*) FROM tasks WHERE workflow_id = workflows.workflow_id
-                  ) AND NOT EXISTS (
-                    SELECT 1 FROM tasks
-                    WHERE workflow_id = workflows.workflow_id
-                      AND (status != 'completed' OR execution_claim_token IS NOT NULL
-                           OR lease_lock IS NOT NULL)
-                  )))
-                  AND (
-                    status = ?
-                    OR (status = 'draft' AND ? = 'pending')
-                    OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
-                    OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
-                    OR (status = 'paused' AND ? IN ('running','cancelled'))
-                  )
-                """,
-                (
-                    workflow.status.value,
-                    json.dumps(task_ids),
-                    json.dumps(workflow.dependencies),
-                    json.dumps(workflow.metadata),
-                    new_stamp,
-                    workflow.workflow_id,
-                    old_status, old_status, old_stamp,
-                    workflow.status is WorkflowStatus.COMPLETED,
-                    len(task_ids), len(task_ids),
-                    workflow.status.value,
-                    workflow.status.value,
-                    workflow.status.value,
-                    workflow.status.value,
-                    workflow.status.value,
-                ),
-            )
-            conn.commit()
+            with conn:
+                if workflow.status is WorkflowStatus.COMPLETED:
+                    conn.execute("BEGIN IMMEDIATE")
+                    if not self._completion_matches_persisted_tasks(cursor, workflow.workflow_id, task_ids):
+                        return False
+                cursor.execute(
+                    """
+                    UPDATE workflows
+                    SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
+                    WHERE workflow_id = ?
+                      AND (? IS NULL OR (status = ? AND updated_at = ?))
+                      AND status NOT IN ('completed','failed','cancelled','governance_blocked')
+                      AND (
+                        status = ?
+                        OR (status = 'draft' AND ? = 'pending')
+                        OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
+                        OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
+                        OR (status = 'paused' AND ? IN ('running','cancelled'))
+                      )
+                    """,
+                    (
+                        workflow.status.value,
+                        json.dumps(task_ids),
+                        json.dumps(workflow.dependencies),
+                        json.dumps(workflow.metadata),
+                        new_stamp,
+                        workflow.workflow_id,
+                        old_status, old_status, old_stamp,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                    ),
+                )
             if cursor.rowcount != 1:
                 return False
             _remember(workflow, workflow.status.value, new_stamp)
             workflow.updated_at = parse_utc_storage(new_stamp)
             return True
+
+    @staticmethod
+    def _completion_matches_persisted_tasks(cursor, workflow_id: str, task_ids: list[str]) -> bool:
+        if not task_ids:
+            return False
+        plan = cursor.execute(
+            "SELECT tasks FROM workflows WHERE workflow_id = ?", (workflow_id,),
+        ).fetchone()
+        if plan is None or json.loads(plan["tasks"]) != task_ids:
+            return False
+        rows = cursor.execute(
+            "SELECT id, status, execution_claim_token, lease_lock FROM tasks WHERE workflow_id = ?",
+            (workflow_id,),
+        ).fetchall()
+        return {row["id"] for row in rows} == set(task_ids) and all(
+            row["status"] == TaskStatus.COMPLETED.value
+            and row["execution_claim_token"] is None and row["lease_lock"] is None
+            for row in rows
+        )
 
     def create_task(self, task: Task) -> None:
         """Store task in database."""
@@ -572,8 +587,10 @@ class SQLiteRepository:
     ) -> str | None:
         """Single-winner claim across connections and processes.
 
-        Running tasks are not automatically stolen after a timeout.
-        Recovery requires a separately proven, fenced procedure.
+        Direct/legacy callers can still claim standalone tasks and tasks in
+        draft or pending plans. A registered stopped parent always fences new
+        dispatch. CLI dispatch additionally requires RUNNING. Running tasks
+        are not automatically stolen after a timeout.
         """
         token = uuid.uuid4().hex
         now = utc_storage_string(utc_now())
@@ -588,6 +605,9 @@ class SQLiteRepository:
                 "AND (? IS NULL OR (status = ? AND updated_at = ?)) "
                 "AND (NOT ? OR EXISTS (SELECT 1 FROM workflows "
                 "WHERE workflow_id = tasks.workflow_id AND status = 'running')) "
+                "AND NOT EXISTS (SELECT 1 FROM workflows "
+                "WHERE workflow_id = tasks.workflow_id "
+                "AND status NOT IN ('draft','pending','running')) "
                 "AND status IN (?, ?, ?, ?, ?)",
                 (
                     TaskStatus.RUNNING.value, now, token, now, task_id,

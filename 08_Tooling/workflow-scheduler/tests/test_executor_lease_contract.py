@@ -515,3 +515,79 @@ def test_empty_parallel_batch_does_not_construct_worker_pool(open_repo, monkeypa
     adapter = Adapter(SUCCESS)
     result = Executor(adapter, repo, AuditLogger(repo), max_workers=2).execute_many([])
     assert result == {} and not adapter.calls and not repo.claims
+
+
+@pytest.mark.parametrize("parent_state", ["paused", "cancelled", "failed", "governance_blocked"])
+@pytest.mark.parametrize("after_read", [False, True], ids=["already-stopped", "stops-at-claim"])
+def test_direct_execution_respects_durable_parent_state(open_repo, monkeypatch, parent_state, after_read):
+    from workflow_scheduler.models import WorkflowPlan
+
+    worker, controller = open_repo(), open_repo(SQLiteRepository)
+    task = task_for(worker)
+    workflow = WorkflowPlan(task.workflow_id, "Plan", "owner", tasks=[task.id])
+    controller.create_workflow(workflow)
+    workflow.mark_running()
+    assert controller.update_workflow(workflow)
+
+    def stop_parent():
+        getattr(workflow, f"mark_{parent_state}")()
+        assert controller.update_workflow(workflow)
+
+    if after_read:
+        claim = worker.try_claim_execution
+
+        def stop_then_claim(task_id, **options):
+            stop_parent()
+            return claim(task_id, **options)
+
+        monkeypatch.setattr(worker, "try_claim_execution", stop_then_claim)
+    else:
+        stop_parent()
+
+    receipt, adapter = run_with(worker, task, SUCCESS)
+    observed = controller.get_task(task.id)
+    assert controller.get_workflow(task.workflow_id).status.value == parent_state
+    assert not receipt.success and receipt.status != "pass"
+    assert adapter.calls == [] and worker.claims == [(task.id, None)]
+    assert observed.status is task.status and observed.lease_lock is None
+    assert not any(event == "task_completed" for event, _ in worker.events)
+
+
+@pytest.mark.parametrize("parent_state", ["standalone", "draft", "pending", "running"])
+def test_direct_execution_preserves_legacy_runnable_parent_states(open_repo, parent_state):
+    from workflow_scheduler.models import WorkflowPlan
+
+    repo = open_repo()
+    task = task_for(repo)
+    if parent_state != "standalone":
+        workflow = WorkflowPlan(task.workflow_id, "Plan", "owner", tasks=[task.id])
+        if parent_state != "draft":
+            getattr(workflow, f"mark_{parent_state}")()
+        repo.create_workflow(workflow)
+    receipt, adapter = run_with(repo, task, SUCCESS)
+    assert receipt.success and len(adapter.calls) == 1
+    observed = repo.get_task(task.id)
+    assert observed.status is TaskStatus.COMPLETED and observed.lease_lock is None
+
+
+def test_completed_parent_cannot_claim_a_new_task(open_repo):
+    from workflow_scheduler.models import WorkflowPlan, WorkflowStatus
+
+    repo = open_repo()
+    prior = task_for(repo, task_id="prior")
+    workflow = WorkflowPlan(prior.workflow_id, "Plan", "owner", tasks=[prior.id])
+    repo.create_workflow(workflow)
+    workflow.mark_running()
+    assert repo.update_workflow(workflow)
+    receipt, _ = run_with(repo, prior, SUCCESS)
+    assert receipt.success
+    workflow.mark_completed(completed_task_ids={prior.id})
+    assert repo.update_workflow(workflow)
+
+    extra = task_for(repo, task_id="extra")
+    receipt, adapter = run_with(repo, extra, SUCCESS)
+    assert repo.get_workflow(prior.workflow_id).status is WorkflowStatus.COMPLETED
+    assert not receipt.success and adapter.calls == []
+    assert repo.claims[-1] == (extra.id, None)
+    observed = repo.get_task(extra.id)
+    assert observed.status is extra.status and observed.lease_lock is None

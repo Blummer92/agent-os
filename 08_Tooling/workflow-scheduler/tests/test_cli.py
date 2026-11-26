@@ -407,3 +407,32 @@ def test_cli_entrypoint_missing_read_does_not_create_db(tmp_path, command, args,
     assert_wire_shape(result)
     assert_failure(result, expected_check)
     assert not db.exists()
+
+
+@pytest.mark.parametrize("use_real_adapter", [False, True], ids=["no-op", "observed-work"])
+def test_production_workflow_needs_a_non_noop_adapter(cli, tmp_path, workflow_data, use_real_adapter):
+    workflow_data["mode"] = "Production"
+    created = cli.create_workflow(write_plan(tmp_path, workflow_data))
+    assert created["status"] == "pass"
+    workflow_id = created["workflow_id"]
+    noop = cli.executor.adapter
+    recorder = RecordingAdapter()
+    if use_real_adapter:
+        cli.executor.adapter = recorder
+
+    result = cli.run_workflow(workflow_id)
+    workflow = cli.repository.get_workflow(workflow_id)
+    tasks = cli.repository.list_workflow_tasks(workflow_id)
+    assert not noop.get_execution_log()
+    if use_real_adapter:
+        assert result["status"] == "pass" and result["completed"] == 2
+        assert recorder.task_ids == ["task-1", "task-2"]
+        assert workflow.status is WorkflowStatus.COMPLETED
+        assert all(task.status is TaskStatus.COMPLETED for task in tasks)
+    else:
+        assert result["status"] == "blocked"
+        assert set(result["blockers"]) == {"production_adapter_required"}
+        assert workflow.status is WorkflowStatus.DRAFT
+        assert len(tasks) == 2 and all(
+            task.status is TaskStatus.DRAFT and task.lease_lock is None for task in tasks
+        )
