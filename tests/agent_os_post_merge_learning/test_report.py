@@ -1,50 +1,20 @@
 """Read-only post-merge report: positive and hard-negative cases."""
 from copy import deepcopy
-import unittest
+import io
+import urllib.error
+from unittest.mock import patch
 from scripts.agent_os_post_merge_learning import report
+from report_fixtures import (
+    ASSOCIATION, DETAIL, REPO, SHA, VALIDATION, ReportCase, commit, commits_page, pr, run,
+)
 
-SHA = "f" * 40
-REPO = "Blummer92/agent-os"
-
-def commit(n, msg):
-    return {"sha": f"{n:040x}", "commit": {"message": msg}}
-
-def pr(n=2, merged=True, sha=SHA):
-    return {"number": 4101, "commits": n, "merged_at": "2026-11-23T23:39:56Z" if merged else None,
-            "merged": merged, "merge_commit_sha": sha,
-            "base": {"ref": "main", "repo": {"full_name": REPO}}}
-
-def run(sha=SHA, conclusion="success"):
-    return {"head_sha": sha, "name": "Agent OS Validation Gate", "event": "push",
-            "head_branch": "main", "status": "completed", "conclusion": conclusion,
-            "html_url": "https://github.com/Blummer92/agent-os/actions/runs/100"}
-
-class Reader:
-    repository = REPO
-    def __init__(self, records, metadata=None, validation=None):
-        self.records = records
-        self.metadata = metadata if metadata is not None else pr(len(records))
-        self.validation = validation if validation is not None else run()
-        self.requests = []
-    def get(self, path):
-        self.requests.append(path)
-        if path == "/pulls/4101": return self.metadata
-        if path.startswith("/pulls/4101/commits?"):
-            page = int(path.rsplit("page=", 1)[1])
-            return self.records[(page - 1)*100:page*100]
-        if path == "/actions/runs/100": return self.validation
-        if path == f"/commits/{SHA}/pulls?per_page=100": return [self.metadata]
-        if "/reviews?" in path or "/comments?" in path: return []
-        if "/check-runs?filter=all&per_page=100&page=" in path:
-            return {"total_count": 0, "check_runs": []}
-        if "/statuses?per_page=100&page=" in path: return []
-        if "/timeline?per_page=100&page=" in path: return []
-        raise AssertionError(path)
-
-class TestLearning(unittest.TestCase):
+class TestLearning(ReportCase):
     def test_positive_review_lead_never_publishes(self):
         records = [commit(1, "fix(ckr2): reject title echo"), commit(2, "test(ckr2): hard negative")]
-        result = report.build_report(Reader(records), SHA, 4101, 100)
+        reader = self.reader(records)
+        result = report.build_report(reader, SHA, 4101, 100)
+        self.assertEqual(reader.requests, [DETAIL, commits_page(1), VALIDATION])
+        self.assertEqual(result["all_commit_shas"], [r["sha"] for r in records])
         self.assertEqual(result["commit_count"], 2)
         self.assertEqual(result["validation"]["state"], "success")
         self.assertEqual(result["review_leads"][0]["scope"], "ckr2")
@@ -53,7 +23,7 @@ class TestLearning(unittest.TestCase):
         self.assertFalse(result["publication_authorized"])
 
     def test_summary_provides_one_manual_lesson_draft_checklist(self):
-        reader = Reader([commit(1, "fix(api): repair"), commit(2, "fix(ckr2): repair")])
+        reader = self.reader([commit(1, "fix(api): repair"), commit(2, "fix(ckr2): repair")])
         result = report.build_report(reader, SHA, 4101, 100)
         self.assertEqual(len(result["review_leads"]), 2)
         before = deepcopy(result)
@@ -75,165 +45,185 @@ class TestLearning(unittest.TestCase):
         for conclusion in ("success", "failure"):
             with self.subTest(conclusion=conclusion):
                 result = report.build_report(
-                    Reader(records, validation=run(conclusion=conclusion)), SHA, 4101, 100
+                    self.reader(records, validation=run(conclusion=conclusion)), SHA, 4101, 100
                 )
                 self.assertEqual(result["review_leads"], [])
                 self.assertNotIn("Draft review checklist", report.render_summary(result))
 
     def test_positive_ordinary_pr_creates_no_lead(self):
-        result = report.build_report(Reader([commit(1, "feat(api): feature"),
+        result = report.build_report(self.reader([commit(1, "feat(api): feature"),
                                              commit(2, "test(api): coverage")]), SHA, 4101, 100)
         self.assertEqual(result["status"], "no-repair-leads-observed")
         self.assertEqual(result["review_leads"], [])
 
     def test_negative_failed_validation_never_publishes(self):
-        result = report.build_report(Reader([commit(1, "fix(api): repair")],
+        result = report.build_report(self.reader([commit(1, "fix(api): repair")],
                                             validation=run(conclusion="failure")), SHA, 4101, 100)
         self.assertEqual(result["validation"]["state"], "failure")
         self.assertFalse(result["publication_authorized"])
 
     def test_negative_wrong_validation_identity(self):
-        with self.assertRaisesRegex(report.EvidenceError, "validation-run-identity-mismatch"):
-            report.build_report(Reader([commit(1, "fix(api): repair")],
+        with self.evidence_error("validation-run-identity-mismatch"):
+            report.build_report(self.reader([commit(1, "fix(api): repair")],
                                        validation=run(sha="0"*40)), SHA, 4101, 100)
 
     def test_negative_unmerged_and_wrong_sha(self):
-        for metadata in (pr(1, merged=False), pr(1, sha="0"*40)):
-            with self.subTest(metadata=metadata), self.assertRaises(report.EvidenceError):
-                report.build_report(Reader([commit(1, "fix(api): repair")], metadata=metadata), SHA, 4101, 100)
+        for metadata, code in ((pr(1, merged=False), "pr-not-merged"),
+                               (pr(1, sha="0"*40), "merge-sha-mismatch")):
+            with self.subTest(metadata=metadata), self.evidence_error(code):
+                report.build_report(self.reader([commit(1, "fix(api): repair")], metadata=metadata), SHA, 4101, 100)
 
     def test_negative_incomplete_history(self):
-        with self.assertRaisesRegex(report.EvidenceError, "commit-history-incomplete"):
-            report.build_report(Reader([commit(1, "fix(api): repair")], metadata=pr(2)), SHA, 4101, 100)
+        with self.evidence_error("commit-history-incomplete"):
+            report.build_report(self.reader([commit(1, "fix(api): repair")], metadata=pr(2)), SHA, 4101, 100)
 
     def test_negative_duplicate_commit(self):
         c = commit(1, "fix(api): repair")
-        with self.assertRaisesRegex(report.EvidenceError, "commit-history-identity-invalid"):
-            report.build_report(Reader([c, c]), SHA, 4101, 100)
+        with self.evidence_error("commit-history-identity-invalid"):
+            report.build_report(self.reader([c, c]), SHA, 4101, 100)
 
     def test_positive_pagination(self):
         records = [commit(i, "feat(api): routine") for i in range(1, 203)]
-        reader = Reader(records)
+        reader = self.reader(records)
         result = report.build_report(reader, SHA, 4101, None)
         self.assertEqual(result["commit_count"], 202)
-        self.assertIn("/pulls/4101/commits?per_page=100&page=3", reader.requests)
+        self.assertEqual(reader.requests, [DETAIL, commits_page(1), commits_page(2), commits_page(3)])
+        self.assertEqual(result["all_commit_shas"], [row["sha"] for row in records])
 
     def test_negative_budget(self):
-        with self.assertRaisesRegex(report.EvidenceError, "commit-count-out-of-bounds"):
-            report.build_report(Reader([], metadata=pr(251)), SHA, 4101, 100)
+        with self.evidence_error("commit-count-out-of-bounds"):
+            report.build_report(self.reader([], metadata=pr(251)), SHA, 4101, 100)
 
-    def test_positive_non_merge_push(self):
-        reader = Reader([])
-        def exact_get(path):
-            self.assertEqual(path, f"/commits/{SHA}/pulls?per_page=100")
-            return []
-        reader.get = exact_get
-        self.assertEqual(report.build_report(reader, SHA, None, 100)["status"], "not-applicable")
+    def test_automatic_no_merge_has_no_history_reads(self):
+        reader = self.reader([], associations=[])
+        result = report.build_report(reader, SHA, None, 100)
+        self.assertEqual(result["status"], "not-applicable")
+        self.assertEqual(reader.requests, [ASSOCIATION])
+        self.assertIs(result["publication_authorized"], False)
+        self.assertIsNone(result["lesson_proposal"])
 
     def test_automatic_report_resolves_compact_association_before_review(self):
-        records = [commit(1, "fix(api): repair")]
-        for detail in (pr(1), {**pr(1), "number": 123}):
-            with self.subTest(detail=detail):
-                reader = Reader(records, metadata=detail)
-                get = reader.get
-                def compact(path):
-                    if path == f"/commits/{SHA}/pulls?per_page=100":
-                        reader.requests.append(path)
-                        return [{"number": 4101, "merged_at": pr(1)["merged_at"],
-                                 "merge_commit_sha": SHA}]
-                    return get(path)
-                reader.get = compact
-                if detail["number"] != 4101:
-                    with self.assertRaisesRegex(report.EvidenceError, "requested-pr-identity-mismatch"):
-                        report.build_report(reader, SHA, None, 100)
-                    self.assertEqual(len(reader.requests), 2)
-                else:
-                    result = report.build_report(reader, SHA, None, 100)
-                    self.assertEqual(result["pr_number"], 4101)
-                    self.assertEqual(reader.requests, [
-                        f"/commits/{SHA}/pulls?per_page=100", "/pulls/4101",
-                        "/pulls/4101/commits?per_page=100&page=1", "/actions/runs/100",
-                    ])
-                    self.assertIn("Draft review checklist", report.render_summary(result))
-                    self.assertIsNone(result["lesson_proposal"])
+        rows = [commit(1, "fix(api): repair")]
+        compact = {"number": 4101, "merged_at": pr()["merged_at"], "merge_commit_sha": SHA}
+        reader = self.reader(rows, associations=[compact])
+        result = report.build_report(reader, SHA, None, 100)
+        self.assertEqual(result["pr_number"], 4101)
+        self.assertEqual(reader.requests, [ASSOCIATION, DETAIL, commits_page(1), VALIDATION])
+        self.assertIn("Draft review checklist", report.render_summary(result))
+        self.assertIsNone(result["lesson_proposal"])
+
+    def test_automatic_mismatched_detail_stops_after_two_reads(self):
+        compact = {"number": 4101, "merged_at": pr()["merged_at"], "merge_commit_sha": SHA}
+        reader = self.reader([], metadata={**pr(1), "number": 123}, associations=[compact])
+        with self.evidence_error("requested-pr-identity-mismatch"):
+            report.build_report(reader, SHA, None, 100)
+        self.assertEqual(reader.requests, [ASSOCIATION, DETAIL])
 
     def test_automatic_invalid_associated_number_does_not_fetch_detail(self):
-        reader = Reader([])
-        def malformed(path):
-            self.assertEqual(path, f"/commits/{SHA}/pulls?per_page=100")
-            return [{"number": True, "merged_at": pr(1)["merged_at"], "merge_commit_sha": SHA}]
-        reader.get = malformed
-        with self.assertRaisesRegex(report.EvidenceError, "pr-number-invalid"):
-            report.build_report(reader, SHA, None, 100)
+        for number in (True, False, "4101", 4101.0, None, 0):
+            with self.subTest(number=number):
+                compact = {"number": number, "merged_at": pr()["merged_at"], "merge_commit_sha": SHA}
+                reader = self.reader([], associations=[compact])
+                with self.evidence_error("pr-number-invalid"):
+                    report.build_report(reader, SHA, None, 100)
+                self.assertEqual(reader.requests, [ASSOCIATION])
 
     def test_negative_bounded_evidence(self):
         records = [commit(i, "fix(api): repair") for i in range(1, 27)]
-        lead = report.build_report(Reader(records), SHA, 4101, 100)["review_leads"][0]
+        lead = report.build_report(self.reader(records), SHA, 4101, 100)["review_leads"][0]
         self.assertTrue(lead["evidence_truncated"])
         self.assertEqual(len(lead["evidence_refs"]), 20)
         self.assertFalse(lead["reusable_rule_proven"])
 
     def test_negative_invalid_message(self):
-        with self.assertRaisesRegex(report.EvidenceError, "commit-message-invalid"):
-            report.build_report(Reader([{"sha": "1"*40, "commit": {"message": 3}}]), SHA, 4101, 100)
+        with self.evidence_error("commit-message-invalid"):
+            report.build_report(self.reader([{"sha": "1"*40, "commit": {"message": 3}}]), SHA, 4101, 100)
 
 
-    def test_invalid_commit_counts_fail_as_metadata(self):
-        for count in (0, True, False, -1):
-            with self.subTest(count=count), self.assertRaisesRegex(report.EvidenceError, "pr-metadata-invalid"):
-                report._validate_pr({**pr(1), "commits": count}, REPO, SHA)
+    def test_invalid_commit_counts_stop_before_history(self):
+        for count in (0, True, False, -1, "1", 1.0, None, 251):
+            code = "commit-count-out-of-bounds" if count == 251 else "pr-metadata-invalid"
+            with self.subTest(count=count), self.evidence_error(code):
+                reader = self.reader([], metadata={**pr(1), "commits": count})
+                try:
+                    report.build_report(reader, SHA, 4101, 100)
+                finally:
+                    self.assertEqual(reader.requests, [DETAIL])
 
-    def test_terminal_validation_non_success_and_pending_conflict(self):
-        for state in ("neutral", "action_required", "stale", "startup_failure"):
-            self.assertEqual(report._validate_run({**run(), "conclusion": state}, SHA)["state"], state)
-        for bad in ({**run(), "conclusion": None},
-                    {**run(), "status": "queued", "conclusion": "success"}):
-            with self.assertRaises(report.EvidenceError):
-                report._validate_run(bad, SHA)
+    def test_validation_status_matrix(self):
+        rows = [commit(1, "docs(api): note")]
+        for expected in ("neutral", "action_required", "stale", "startup_failure",
+                         "cancelled", "timed_out", "failure", "skipped"):
+            with self.subTest(conclusion=expected):
+                reader = self.reader(rows, validation=run(conclusion=expected))
+                result = report.build_report(reader, SHA, 4101, 100)
+                self.assertEqual(result["validation"]["state"], expected)
+                self.assertEqual(result["status"], "review-needed")
+                self.assertIsNone(result["lesson_proposal"])
+        reader = self.reader(rows, validation={**run(conclusion=None), "status": "queued"})
+        self.assertEqual(report.build_report(reader, SHA, 4101, 100)["validation"]["state"], "pending")
+        reader = self.reader(rows, validation=None)
+        self.assertEqual(report.build_report(reader, SHA, 4101, None)["validation"]["state"], "not-observed")
+        self.assertEqual(reader.requests, [DETAIL, commits_page(1)])
+
+    def test_validation_status_conflicts(self):
+        for bad, code in (
+            ({**run(), "conclusion": None}, "validation-run-status-invalid"),
+            ({**run(), "status": "queued"}, "validation-run-status-conflict"),
+            ({**run(), "status": ""}, "validation-run-status-invalid"),
+        ):
+            with self.subTest(bad=bad), self.evidence_error(code):
+                reader = self.reader([commit(1, "docs(api): note")], validation=bad)
+                report.build_report(reader, SHA, 4101, 100)
+
+    def test_validation_checks_each_identity_field(self):
+        for field, value in (("head_sha", "0"*40), ("name", "Other run"),
+                             ("event", "pull_request"), ("head_branch", "dev")):
+            with self.subTest(field=field), self.evidence_error("validation-run-identity-mismatch"):
+                reader = self.reader([commit(1, "docs(api): note")], validation={**run(), field: value})
+                report.build_report(reader, SHA, 4101, 100)
+
+    def test_sha_rejects_non_hex_wrong_length_and_non_string(self):
+        for value in ("z"*40, "f"*39, "f"*41, 123, None, SHA+"\n"):
+            with self.subTest(value=value), self.evidence_error("invalid-sha"):
+                reader = self.reader([])
+                try:
+                    report.build_report(reader, value, 4101, None)
+                finally:
+                    self.assertEqual(reader.requests, [])
 
     def test_explicit_validation_run_must_not_be_missing(self):
-        reader = Reader([commit(1, "fix(api): repair")])
-        original = reader.get
-        reader.get = lambda path: None if path == "/actions/runs/100" else original(path)
-        with self.assertRaisesRegex(report.EvidenceError, "validation-run-evidence-missing"):
+        reader = self.reader([commit(1, "fix(api): repair")], validation=None)
+        with self.evidence_error("validation-run-evidence-missing"):
             report.build_report(reader, SHA, 4101, 100)
-
-    def test_no_historical_ci_or_discussion_fetch(self):
-        reader = Reader([commit(1, "fix(api): repair")])
-        result = report.build_report(reader, SHA, 4101, 100)
-        self.assertFalse(result["historical_ci_or_review_examined"])
-        self.assertFalse(result["historical_head_coverage_complete"])
-        self.assertNotIn("supporting_evidence", result)
-        self.assertFalse(any("/check-runs" in path or "/statuses" in path
-                             or "/reviews" in path or "/timeline" in path
-                             or "/comments" in path for path in reader.requests))
+        self.assertEqual(reader.requests, [DETAIL, commits_page(1), VALIDATION])
 
     def test_bad_commit_row_fails_closed(self):
-        reader = Reader([commit(1, "fix(api): repair")])
-        reader.records = ["not-a-commit"]
-        with self.assertRaisesRegex(report.EvidenceError, "commit-list-malformed"):
+        reader = self.reader([commit(1, "fix(api): repair")])
+        reader.responses[commits_page(1)] = ["not-a-commit"]
+        with self.evidence_error("commit-list-malformed"):
             report.build_report(reader, SHA, 4101, 100)
 
     def test_uppercase_sha_normalizes(self):
         self.assertEqual(report._sha("F" * 40), SHA)
-        self.assertEqual(report.build_report(Reader([commit(1, "feat(api): normal")]), "F" * 40, 4101, None)["merge_sha"], SHA)
+        self.assertEqual(report.build_report(self.reader([commit(1, "feat(api): normal")]), "F" * 40, 4101, None)["merge_sha"], SHA)
 
     def test_fix_heavy_evidence_preserves_test_links(self):
         records = [commit(i, "fix(api): repair") for i in range(1, 24)]
         records += [commit(24, "test(api): regression"), commit(25, "test(api): hard negative")]
-        lead = report.build_report(Reader(records), SHA, 4101, None)["review_leads"][0]
+        lead = report.build_report(self.reader(records), SHA, 4101, None)["review_leads"][0]
         self.assertTrue(lead["evidence_truncated"])
         self.assertEqual(len(lead["evidence_refs"]), report.MAX_REFS_PER_GROUP)
-        self.assertTrue(any(ref.endswith("/commit/" + f"{n:040x}") for n in (24, 25) for ref in lead["evidence_refs"]))
+        self.assertEqual(lead["evidence_refs"][:4], [
+            f"https://github.com/{REPO}/commit/{n:040x}" for n in (1, 24, 2, 25)
+        ])
 
     def test_markdown_cell_escaping(self):
-        result = report.build_report(Reader([commit(1, "fix(api): repair")]), SHA, 4101, None)
+        result = report.build_report(self.reader([commit(1, "fix(api): repair")]), SHA, 4101, None)
         result["review_leads"][0]["scope"] = "bad|row\nnext"
         self.assertIn("bad\\|row next", report.render_summary(result))
 
     def test_http_errors_have_bounded_reason_codes(self):
-        import urllib.error
-        from unittest.mock import patch
         reader = report.GitHubReader(REPO, "synthetic-token")
         class Opener:
             def __init__(self, code): self.code = code
@@ -246,8 +236,22 @@ class TestLearning(unittest.TestCase):
                              (429, "github-read-rate-limited"),
                              (502, "github-read-upstream-error")):
             with self.subTest(code=code), patch("urllib.request.build_opener", return_value=Opener(code)):
-                with self.assertRaisesRegex(report.EvidenceError, "^" + reason + "$"):
+                with self.evidence_error(reason):
                     reader.get("/pulls/4101")
 
+    def test_public_reader_get_does_not_send_a_token(self):
+        reader = report.GitHubReader(REPO)
+        with patch("urllib.request.build_opener") as opener:
+            opener.return_value.open.return_value = io.BytesIO(b'{"number":4101}')
+            self.assertEqual(reader.get(DETAIL), {"number": 4101})
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.full_url, f"https://api.github.com/repos/{REPO}{DETAIL}")
+        self.assertFalse(request.has_header("Authorization"))
+
     def test_redirect_handler_refuses_forwarding(self):
-        self.assertIsNone(report._RejectRedirects().redirect_request(None, None, 302, "redirect", {}, "https://evil.invalid"))
+        for code in (301, 302, 303, 307, 308):
+            with self.subTest(code=code):
+                self.assertIsNone(report._RejectRedirects().redirect_request(
+                    None, None, code, "redirect", {}, "https://example.invalid"
+                ))

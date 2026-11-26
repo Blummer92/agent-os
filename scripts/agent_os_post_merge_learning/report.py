@@ -1,6 +1,7 @@
 """Report grouped repair evidence from a *merged*, exact-sha GitHub PR.
 
-This is a deterministic, read-only producer for review, not a lesson writer.
+This bounded, read-only producer fails closed for incomplete evidence.
+It is a review aid, not a lesson writer.
 Commit labels are hints, never evidence that a reusable rule was proven.
 To keep the report bounded, it does not reconstruct historical CI attempts,
 review threads or force-pushed heads.
@@ -29,14 +30,18 @@ from agent_memory_context_manager.ci_review_learning import (
 
 SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-SUBJECT = re.compile(r"^(feat|fix|test|docs|refactor|chore)(?:\(([a-zA-Z0-9_.-]{1,40})\))?!?:\s+(.{1,200})$")
+SUBJECT = re.compile(r"^(feat|fix|test|docs|refactor|chore)(?:\(([a-zA-Z0-9_.-]{1,40})\))?!?:\s+\S")
 MAX_COMMITS = 250
 MAX_REFS_PER_GROUP = 20
 MAX_GROUPS = 25
 
 
 class EvidenceError(Exception):
-    """Missing or inconsistent GitHub proof: never turn into a lesson."""
+    """Stable machine-readable reason for missing or inconsistent proof.
+
+    Codes identify input, GitHub transport, PR/commit identity, validation,
+    or CKR5 evidence failures. Never include provider or exception text.
+    """
 
 
 def _sha(value: Any) -> str:
@@ -62,10 +67,8 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 class GitHubReader:
     """Narrow GET-only GitHub reader; does not expose response bodies in errors."""
 
-    def __init__(self, repository: str, token: str):
+    def __init__(self, repository: str, token: str = ""):
         self.repository = _repo(repository)
-        if not token:
-            raise EvidenceError("github-read-token-missing")
         self.token = token
 
     def get(self, path: str) -> Any:
@@ -75,7 +78,7 @@ class GitHubReader:
             "https://api.github.com/repos/" + self.repository + path,
             headers={
                 "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer " + self.token,
+                **({"Authorization": "Bearer " + self.token} if self.token else {}),
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "agent-os-post-merge-learning",
             },
@@ -109,10 +112,8 @@ class GitHubReader:
 
 
 def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str, Any]]:
-    if not isinstance(declared, int) or isinstance(declared, bool) or not (0 < declared <= MAX_COMMITS):
-        raise EvidenceError("commit-count-out-of-bounds")
     collected: list[dict[str, Any]] = []
-    for page in range(1, 5):
+    for page in range(1, MAX_COMMITS // 100 + 2):
         rows = reader.get(f"/pulls/{number}/commits?per_page=100&page={page}")
         if not isinstance(rows, list) or len(rows) > 100 or any(not isinstance(row, dict) for row in rows):
             raise EvidenceError("commit-list-malformed")
@@ -123,22 +124,25 @@ def _commits(reader: GitHubReader, number: int, declared: int) -> list[dict[str,
             break
     if len(collected) != declared:
         raise EvidenceError("commit-history-incomplete")
-    ids = [_sha(row.get("sha")) for row in collected if isinstance(row, dict)]
-    if len(ids) != declared or len(set(ids)) != declared:
+    try:
+        canonical = [{**row, "sha": _sha(row.get("sha"))} for row in collected]
+    except EvidenceError:
+        raise EvidenceError("commit-history-identity-invalid") from None
+    if len({row["sha"] for row in canonical}) != declared:
         raise EvidenceError("commit-history-identity-invalid")
-    return collected
+    return canonical
 
 
 def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> dict[str, Any] | None:
     number = explicit_number
     if number is None:
         prs = reader.get(f"/commits/{sha}/pulls?per_page=100")
-        if not isinstance(prs, list):
+        if not isinstance(prs, list) or not all(isinstance(p, dict) for p in prs):
             raise EvidenceError("associated-prs-malformed")
-        candidates = [
-            p for p in prs
-            if isinstance(p, dict) and p.get("merged_at") and p.get("merge_commit_sha") == sha
-        ]
+        # A full first page cannot prove this association is unique.
+        if len(prs) >= 100:
+            raise EvidenceError("associated-prs-incomplete")
+        candidates = [p for p in prs if p.get("merged_at") and _matches_sha(p.get("merge_commit_sha"), sha)]
         if not candidates:
             return None
         if len(candidates) != 1:
@@ -155,27 +159,40 @@ def _resolve_pr(reader: GitHubReader, sha: str, explicit_number: int | None) -> 
     return detail
 
 
+def _matches_sha(value: Any, sha: str) -> bool:
+    return isinstance(value, str) and value.lower() == sha
+
+
 def _validate_pr(pr: dict[str, Any], repo: str, sha: str) -> tuple[int, int]:
-    if not isinstance(pr, dict) or not pr.get("merged_at") or pr.get("merged") is False:
+    if not isinstance(pr.get("merged_at"), str) or not pr["merged_at"].strip() or pr.get("merged", True) is not True:
         raise EvidenceError("pr-not-merged")
-    if pr.get("merge_commit_sha") != sha:
+    if not _matches_sha(pr.get("merge_commit_sha"), sha):
         raise EvidenceError("merge-sha-mismatch")
-    if pr.get("base", {}).get("ref") != "main":
+    base = pr.get("base")
+    if not isinstance(base, dict) or base.get("ref") != "main":
         raise EvidenceError("base-not-main")
-    if pr.get("base", {}).get("repo", {}).get("full_name") != repo:
+    base_repo = base.get("repo")
+    if not isinstance(base_repo, dict) or base_repo.get("full_name") != repo:
         raise EvidenceError("base-repository-mismatch")
-    number, count = pr.get("number"), pr.get("commits")
-    # Exact type checks already reject bool; zero is invalid metadata.
-    if (type(number) is not int or number < 1 or type(count) is not int
-            or count <= 0):
+    count = pr.get("commits")
+    if type(count) is not int or count <= 0:
         raise EvidenceError("pr-metadata-invalid")
-    return number, count
+    if count > MAX_COMMITS:
+        raise EvidenceError("commit-count-out-of-bounds")
+    # The detail number has already been bound by _resolve_pr.
+    return pr["number"], count
 
 
-def _validate_run(run: dict[str, Any] | None, sha: str) -> dict[str, Any]:
+def _validate_run(run: dict[str, Any] | None, sha: str) -> str:
     if run is None:
-        return {"state": "not-observed", "run_url": None}
-    if not isinstance(run, dict) or run.get("head_sha") != sha or run.get("name") != "Agent OS Validation Gate" or run.get("event") != "push" or run.get("head_branch") != "main":
+        return "not-observed"
+    if (
+        not isinstance(run, dict)
+        or not _matches_sha(run.get("head_sha"), sha)
+        or run.get("name") != "Agent OS Validation Gate"
+        or run.get("event") != "push"
+        or run.get("head_branch") != "main"
+    ):
         raise EvidenceError("validation-run-identity-mismatch")
     status = run.get("status")
     conclusion = run.get("conclusion")
@@ -190,23 +207,23 @@ def _validate_run(run: dict[str, Any] | None, sha: str) -> dict[str, Any]:
         state = "pending"
     else:
         raise EvidenceError("validation-run-status-invalid")
-    return {"state": state, "run_url": run.get("html_url")}
+    return state
 
 
-def _subject(entry: dict[str, Any]) -> tuple[str, str] | None:
+def _subject(entry: dict[str, Any]) -> tuple[str, str | None] | None:
     commit = entry.get("commit")
     if not isinstance(commit, dict) or not isinstance(commit.get("message"), str):
         raise EvidenceError("commit-message-invalid")
-    line = commit["message"].split("\n", 1)[0]
-    match = SUBJECT.fullmatch(line)
+    line = re.split(r"\r\n?|\n", commit["message"], maxsplit=1)[0]
+    match = SUBJECT.match(line)
     if match is None:
         return None
-    kind, scope, _description = match.groups()
-    return kind, (scope or "unscoped").casefold()
+    kind, scope = match.groups()
+    return kind, scope.casefold() if scope is not None else None
 
 
 def _group_history(commits: list[dict[str, Any]], repository: str, number: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    groups: dict[str, dict[str, Any]] = {}
+    groups: dict[str | None, dict[str, list[str]]] = {}
     kinds: dict[str, int] = {k: 0 for k in ("feat", "fix", "test", "docs", "refactor", "chore", "unclassified")}
     for entry in commits:
         parsed = _subject(entry)
@@ -217,16 +234,15 @@ def _group_history(commits: list[dict[str, Any]], repository: str, number: int) 
         kinds[kind] += 1
         if kind not in ("fix", "test"):
             continue
-        group = groups.setdefault(scope, {"scope": scope, "fix_shas": [], "test_shas": []})
-        group[f"{kind}_shas"].append(entry["sha"])
-    if len(groups) > MAX_GROUPS:
+        group = groups.setdefault(scope, {"fix": [], "test": []})
+        group[kind].append(entry["sha"])
+    leads = [(scope, group) for scope, group in groups.items() if group["fix"]]
+    if len(leads) > MAX_GROUPS:
         raise EvidenceError("learning-group-budget-exceeded")
     results = []
-    for scope, group in sorted(groups.items()):
-        if not group["fix_shas"]:
-            continue
-        fix_shas = group["fix_shas"]
-        test_shas = group["test_shas"]
+    for scope_key, group in sorted(leads, key=lambda item: item[0] or "unscoped"):
+        scope = scope_key or "unscoped"
+        fix_shas, test_shas = group["fix"], group["test"]
         # Interleave fix and test evidence: a fix-heavy PR must not erase
         # its regression test references at the bounded evidence limit.
         truncated = len(fix_shas) + len(test_shas) > MAX_REFS_PER_GROUP
@@ -242,7 +258,8 @@ def _group_history(commits: list[dict[str, Any]], repository: str, number: int) 
         # guardrail or lesson novelty. Reviewers must supply independent proof.
         outcome = StructuredLearningOutcome(
             source_reference=f"https://github.com/{repository}/pull/{number}",
-            signal=LearningSignal.REPEATED_REPAIR if len(fix_shas) > 1 else LearningSignal.SUBSTANTIVE_REVIEW_FINDING,
+            signal=(LearningSignal.REPEATED_REPAIR if scope_key is not None and len(fix_shas) > 1
+                    else LearningSignal.SUBSTANTIVE_REVIEW_FINDING),
             failure_signature=f"postmerge-unverified-scope:{scope}",
             ecosystem="agent-os",
             capability_kind="post-merge-learning-triage",
@@ -268,24 +285,35 @@ def _group_history(commits: list[dict[str, Any]], repository: str, number: int) 
 
 def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validation_run_id: int | None) -> dict[str, Any]:
     sha = _sha(sha)
+    if validation_run_id is not None and (type(validation_run_id) is not int or validation_run_id < 1):
+        raise EvidenceError("validation-run-id-invalid")
     repo = reader.repository
     pr = _resolve_pr(reader, sha, pr_number)
     if pr is None:
-        return {"status": "not-applicable", "reason_code": "push-without-merged-pr", "merge_sha": sha, "authority_created": False}
+        return _no_evidence_receipt("not-applicable", "push-without-merged-pr", sha)
     number, expected_count = _validate_pr(pr, repo, sha)
     commits = _commits(reader, number, expected_count)
-    if validation_run_id is not None and (type(validation_run_id) is not int or validation_run_id < 1):
-        raise EvidenceError("validation-run-id-invalid")
     run = reader.get(f"/actions/runs/{validation_run_id}") if validation_run_id is not None else None
     if validation_run_id is not None and run is None:
         raise EvidenceError("validation-run-evidence-missing")
-    validation = _validate_run(run, sha)
+    if validation_run_id is not None and (
+        not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] != validation_run_id
+    ):
+        raise EvidenceError("validation-run-identity-mismatch")
+    validation = {
+        "state": _validate_run(run, sha),
+        "run_url": (
+            f"https://github.com/{repo}/actions/runs/{validation_run_id}"
+            if validation_run_id is not None else None
+        ),
+    }
     groups, kinds = _group_history(commits, repo, number)
+    analyzer_sha = os.environ.get("GITHUB_SHA")
     return {
         "schema_version": 1, "repository": repo, "pr_number": number,
         "merge_sha": sha, "pr_url": f"https://github.com/{repo}/pull/{number}",
         "listed_commits_complete": True, "historical_head_coverage_complete": False,
-        "analyzer_sha": os.environ.get("GITHUB_SHA") or None,
+        "analyzer_sha": _sha(analyzer_sha) if analyzer_sha and SHA.fullmatch(analyzer_sha) else None,
         "analyzer_workflow_ref": os.environ.get("GITHUB_WORKFLOW_REF") or None,
         "commit_count": expected_count,
         "all_commit_shas": [entry["sha"] for entry in commits],
@@ -303,26 +331,34 @@ def build_report(reader: GitHubReader, sha: str, pr_number: int | None, validati
     }
 
 
-def _markdown_cell(value: str) -> str:
-    """Escape untrusted identifiers in Markdown rows and notes."""
-    return value.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+def _markdown_cell(value: Any) -> str:
+    """Escape Markdown syntax and flatten line breaks in dynamic fields."""
+    flattened = " ".join(str(value).splitlines())
+    return re.sub(r"([\\|`*_{}\[\]()<>!~&])", r"\\\1", flattened)
 
 
 def render_summary(report: dict[str, Any]) -> str:
+    """Render the receipt without mutating it or requesting more evidence."""
+    if report["status"] == "manual-review":
+        reason = _markdown_cell(report["reason_code"])
+        return (
+            "## Post-merge learning: manual review required\n"
+            f"Evidence is incomplete or invalid: {reason}. No lesson created.\n"
+        )
     if report["status"] == "not-applicable":
         return "## Post-merge learning\nNo uniquely linked merged PR was found for this push. No lesson created.\n"
     lines = ["## Read-only post-merge learning analysis", "",
-             f"- PR: {report['pr_url']}", f"- Merge SHA: {report['merge_sha']}",
-             f"- Listed PR commits: **{report['commit_count']}** (historical removed heads not certified)",
-             f"- Exact merge validation: **{report['validation']['state']}**",
+             f"- PR: {_markdown_cell(report['pr_url'])}", f"- Merge SHA: {_markdown_cell(report['merge_sha'])}",
+             f"- Listed PR commits: **{_markdown_cell(report['commit_count'])}** (historical removed heads not certified)",
+             f"- Exact merge validation: **{_markdown_cell(report['validation']['state'])}**",
              f"- Repair review leads: **{len(report['review_leads'])}**",
-             f"- Analyzer revision: **{report.get('analyzer_sha') or 'unavailable'}**",
+             f"- Analyzer revision: **{_markdown_cell(report.get('analyzer_sha') or 'unavailable')}**",
              "- Evidence scope: current merged PR commit list and supplied validation run only.",
              "- Historical CI attempts, code reviews, and removed heads: **not examined**.", "",
              "| Commit scope | Fix commits | Test commits | Disposition |",
              "| --- | ---: | ---: | --- |"]
     for lead in report["review_leads"]:
-        lines.append(f"| {_markdown_cell(lead['scope'])} | {lead['fix_count']} | {lead['test_count']} | Review needed (CKR5: not proven) |")
+        lines.append(f"| {_markdown_cell(lead['scope'])} | {_markdown_cell(lead['fix_count'])} | {_markdown_cell(lead['test_count'])} | Review needed (CKR5: not proven) |")
     if report["review_leads"]:
         lines.extend([
             "", "### Draft review checklist", "",
@@ -340,34 +376,71 @@ def render_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _no_evidence_receipt(status: str, reason: str, sha: str) -> dict[str, Any]:
+    return {
+        "status": status, "reason_code": reason,
+        "merge_sha": sha.lower() if SHA.fullmatch(sha) else None,
+        "authority_created": False, "publication_authorized": False,
+        "notion_write_performed": False, "github_write_performed": False,
+        "lesson_proposal": None, "listed_commits_complete": False,
+        "historical_head_coverage_complete": False, "historical_ci_or_review_examined": False,
+    }
+
+
+def _receipt_json(result: dict[str, Any]) -> str:
+    return json.dumps(result, sort_keys=True, indent=2, allow_nan=False) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
     parser.add_argument("--merge-sha", required=True)
-    parser.add_argument("--pr-number", type=int)
-    parser.add_argument("--validation-run-id", type=int)
+    parser.add_argument("--pr-number")
+    parser.add_argument("--validation-run-id")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
+        number = _optional_decimal(args.pr_number, "pr-number-invalid")
+        run_id = _optional_decimal(args.validation_run_id, "validation-run-id-invalid")
         reader = GitHubReader(args.repository, os.getenv("GITHUB_TOKEN", ""))
-        result = build_report(reader, args.merge_sha, args.pr_number, args.validation_run_id)
-    except EvidenceError as exc:
-        result = {"status": "manual-review", "reason_code": str(exc), "merge_sha": args.merge_sha,
-                  "authority_created": False, "publication_authorized": False,
-                  "notion_write_performed": False, "github_write_performed": False}
+        result = build_report(reader, args.merge_sha, number, run_id)
+        summary, payload = render_summary(result), _receipt_json(result)
+    except Exception as exc:
+        # At the CLI boundary only: never expose unexpected exception text.
+        code = str(exc) if isinstance(exc, EvidenceError) else "report-generation-failed"
+        result = _no_evidence_receipt("manual-review", code, args.merge_sha)
+        summary, payload = render_summary(result), _receipt_json(result)
     path = Path(args.output)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    summary = render_summary(result) if result["status"] != "manual-review" else (
-        "## Post-merge learning: manual review required\nEvidence is incomplete or invalid: " + _markdown_cell(result["reason_code"]) + ". No lesson created.\n"
-    )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
+    except OSError:
+        # An unwritable output path cannot contain a receipt; emit it to stderr.
+        print(_receipt_json(_no_evidence_receipt("manual-review", "receipt-write-failed", args.merge_sha)), file=sys.stderr, end="")
+        return 2
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        with open(summary_path, "a", encoding="utf-8") as fh:
-            fh.write(summary)
-    else:
-        print(summary)
-    return 0 if result["status"] != "manual-review" else 2
+    try:
+        if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write(summary)
+        else:
+            print(summary)
+    except OSError:
+        result = _no_evidence_receipt("manual-review", "summary-write-failed", args.merge_sha)
+        try:
+            path.write_text(_receipt_json(result), encoding="utf-8")
+        except OSError:
+            print(_receipt_json(result), file=sys.stderr, end="")
+        return 2
+    return 2 if result["status"] == "manual-review" else 0
+
+
+def _optional_decimal(value: str | None, reason: str) -> int | None:
+    if value is None:
+        return None
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", value):
+        raise EvidenceError(reason)
+    return int(value)
 
 
 if __name__ == "__main__":

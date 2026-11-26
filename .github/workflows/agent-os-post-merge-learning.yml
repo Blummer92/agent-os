@@ -24,10 +24,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
-  actions: read
-  checks: read
 
 jobs:
   premerge_tests:
@@ -37,14 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+      - name: Install existing workflow-test YAML parser
+        run: python -m pip install "PyYAML==6.0.3"
       - name: Run exact PR revision regression suite
         env:
-          PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
-        run: python -m unittest discover -s tests/agent_os_post_merge_learning -p 'test_*.py' -v
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
+        run: python tests/agent_os_post_merge_learning/run_suite.py
 
   review:
     name: Post-merge learning evidence (read only)
@@ -59,16 +58,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
+      - name: Install existing workflow-test YAML parser
+        run: python -m pip install "PyYAML==6.0.3"
       - name: Positive and hard-negative tests
         env:
-          PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
-        run: python -m unittest discover -s tests/agent_os_post_merge_learning -p 'test_*.py' -v
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
+        run: python tests/agent_os_post_merge_learning/run_suite.py
       # Manual review exits 2 by design: an incomplete report is never green.
       # The always-run upload step preserves the bounded JSON receipt.
       - name: Read-only exact-merge analysis
         env:
           PYTHONPATH: ${{ github.workspace }}/08_Tooling/agent-memory-context-manager/src
-          GITHUB_TOKEN: ${{ github.token }}
+          # All evidence endpoints are public; do not inject a token.
           REPOSITORY: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           RUN_MERGE_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -83,19 +84,19 @@ jobs:
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
             args+=(--merge-sha "$RUN_MERGE_SHA" --validation-run-id "$RUN_ID")
           else
-            [[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]
-            [[ "$INPUT_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]
             args+=(--pr-number "$INPUT_PR" --merge-sha "$INPUT_MERGE_SHA")
             if [[ -n "$INPUT_VALIDATION_RUN_ID" ]]; then
-              [[ "$INPUT_VALIDATION_RUN_ID" =~ ^[1-9][0-9]*$ ]]
               args+=(--validation-run-id "$INPUT_VALIDATION_RUN_ID")
             fi
           fi
           python -m scripts.agent_os_post_merge_learning.report "${args[@]}"
+      - name: Require evidence receipt
+        if: always()
+        run: test -s "$RUNNER_TEMP/post-merge-learning/report.json"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: post-merge-learning-${{ github.run_id }}
           path: ${{ runner.temp }}/post-merge-learning/report.json
-          if-no-files-found: warn
+          if-no-files-found: error
