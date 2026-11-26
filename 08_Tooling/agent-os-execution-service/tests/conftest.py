@@ -1,9 +1,13 @@
 """Test-run-only bootstrap for the canonical in-repo Navigation Registry."""
+from importlib.metadata import version as installed_version
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sys
+import tomllib
 
 import pytest
+from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 
 def _ancestor(marker):
@@ -11,6 +15,21 @@ def _ancestor(marker):
         if (parent / marker).is_file():
             return parent
     raise pytest.UsageError(f"execution-service test setup: missing {marker}")
+
+
+def _runtime_version(name, repository):
+    # This suite deliberately imports the checkout registry, not an installed
+    # copy. Check the version of the same source the suite will actually use.
+    if canonicalize_name(name) != "agent-os-navigation-registry":
+        return installed_version(name)
+    metadata = repository / "pyproject.toml"
+    try:
+        project = tomllib.loads(metadata.read_text(encoding="utf-8"))["project"]
+        if project["name"] == "agent-os-navigation-registry" and type(project["version"]) is str:
+            return str(Version(project["version"]))
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    raise pytest.UsageError(f"execution-service tests require valid Navigation Registry metadata in {metadata}")
 
 
 def _prefer_paths(*paths):
@@ -40,7 +59,10 @@ def pytest_configure(config):
     spec.loader.exec_module(helper)
 
     project = package / "pyproject.toml"
-    missing = helper.runtime_dependency_mismatches(project_file=project)
+    missing = helper.runtime_dependency_mismatches(
+        project_file=project,
+        version_getter=lambda name: _runtime_version(name, repository),
+    )
     if missing:
         config._execution_service_runtime_skip = (
             "execution-service test environment: " + "; ".join(missing)

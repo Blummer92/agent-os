@@ -73,7 +73,10 @@ def test_reports_all_direct_runtime_mismatches():
 
 
 @pytest.mark.parametrize("runtime_installed", [False, True])
-def test_bootstrap_checks_runtime_before_import_and_prioritizes_registry(tmp_path, runtime_installed):
+@pytest.mark.parametrize("registry_version", ["0.1.0", "0.2.0"])
+def test_bootstrap_checks_runtime_before_import_and_prioritizes_registry(
+    tmp_path, runtime_installed, registry_version,
+):
     import os
     import shutil
     import subprocess
@@ -83,13 +86,19 @@ def test_bootstrap_checks_runtime_before_import_and_prioritizes_registry(tmp_pat
     package = repository / "arbitrary" / "nesting" / "execution-service"
     suite = package / "tests"
     suite.mkdir(parents=True)
+    (repository / "pyproject.toml").write_text(
+        f'[project]\nname = "agent-os-navigation-registry"\nversion = "{registry_version}"\n'
+    )
     (repository / "src/navigation_registry").mkdir(parents=True)
     (repository / "src/navigation_registry/__init__.py").write_text("OWNER = 'canonical'\n")
     (package / "navigation_registry").mkdir()
     (package / "navigation_registry/__init__.py").write_text("raise AssertionError('shadow registry')\n")
     shutil.copyfile(PROJECT_FILE.with_name("runtime_dependency_preflight.py"), package / "runtime_dependency_preflight.py")
     shutil.copyfile(Path(__file__).with_name("conftest.py"), suite / "conftest.py")
-    (package / "pyproject.toml").write_text('[project]\ndependencies = ["example-one==1", "example-two==1"]\n')
+    (package / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["example-one==1", "example-two==1", '
+        '"agent-os-navigation-registry>=0.1,<0.2"]\n'
+    )
     (suite / "test_integration.py").write_text(
         "from navigation_registry import OWNER\n\n"
         "def test_integration():\n    assert OWNER == 'canonical'\n"
@@ -109,12 +118,15 @@ def test_bootstrap_checks_runtime_before_import_and_prioritizes_registry(tmp_pat
         capture_output=True, text=True, timeout=15, check=False,
     )
     output = outcome.stdout + outcome.stderr
-    if runtime_installed:
+    if runtime_installed and registry_version == "0.1.0":
         assert outcome.returncode == 0, output
         assert "1 passed" in output
     else:
         assert outcome.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, output
         assert "1 skipped" in output
-        assert "example-one is not installed" in output
-        assert "example-two is not installed" in output
+        if not runtime_installed:
+            assert "example-one is not installed" in output
+            assert "example-two is not installed" in output
+        if registry_version == "0.2.0":
+            assert "agent-os-navigation-registry 0.2.0 does not satisfy" in output
         assert "shadow registry" not in output
