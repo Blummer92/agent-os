@@ -65,9 +65,12 @@ _SECRET_KEY_RE = re.compile(
     rf"(?:^|[_-]){_SECRET_LABEL}(?:$|[_-])|^(?:tokens?|bearer|sessions?)$",
     re.IGNORECASE,
 )
+# A diagnostic may contain a serialized string, not a parseable document.
+# After a credential label, discard the bounded suffix rather than guessing
+# where a value ends inside nested or multiply escaped quotes.
 _SECRET_DETAIL_RE = re.compile(
-    rf"""(?<![\w-])(?:[\w-]*?[_-])?(?:{_SECRET_LABEL}|tokens?|sessions?|bearer)["']?\s*[:=]\s*"""
-    r"""(?:Bearer\s+[^\s,;}]+|"(?:\\.|[^"\\])*(?:"|\\?$)|'(?:\\.|[^'\\])*(?:'|\\?$)|[^\s,;}]+)|\bBearer\s+[A-Za-z0-9._~+/=-]+""",
+    rf"(?:(?<![\w-])(?:[\w-]*?[_-])?(?:{_SECRET_LABEL}|tokens?|sessions?|bearer|authorization)"
+    r"(?:\\*[\"'])?\s*[:=]|\bBearer\s+).*$",
     re.IGNORECASE,
 )
 

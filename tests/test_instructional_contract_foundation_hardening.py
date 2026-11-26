@@ -119,3 +119,30 @@ def test_freezing_and_thawing_refuse_overdeep_inputs():
 ])
 def test_escaped_quote_does_not_end_redaction_early(text):
     assert "synthetic-suffix" not in sanitize_detail(text)
+
+
+@pytest.mark.parametrize("value", [
+    '"synthetic-first synthetic-last"',
+    r'"synthetic-first\"synthetic-last"',
+    r'\"synthetic-first synthetic-last\"',
+    r'\\"synthetic-first synthetic-last\\"',
+    r"""'"synthetic-first" 'inside' synthetic-last'""",
+    r'''"synthetic-first "nested" synthetic-last"''',
+    r'''{"item": "synthetic-first", "detail": "synthetic-last"}''',
+], ids=["plain", "escaped-quote", "escaped-wrapper", "double-escaped-wrapper", "nested-single", "nested-double", "nested-object"])
+def test_aos_4123_04_credential_diagnostic_consumes_entire_value(value):
+    cleaned = sanitize_detail(f"diagnostic password={value}")
+    assert cleaned.startswith("diagnostic [redacted]")
+    assert "synthetic-first" not in cleaned and "synthetic-last" not in cleaned
+
+
+@pytest.mark.parametrize("layers", [1, 2, 3])
+def test_aos_4123_04_serialized_credential_diagnostic(layers):
+    import json
+
+    raw = {"api_key": 'synthetic-first "inside" synthetic-last'}
+    for _ in range(layers):
+        raw = json.dumps(raw)
+    cleaned = sanitize_detail(f"diagnostic {raw}")
+    assert "[redacted]" in cleaned
+    assert "synthetic-first" not in cleaned and "synthetic-last" not in cleaned
