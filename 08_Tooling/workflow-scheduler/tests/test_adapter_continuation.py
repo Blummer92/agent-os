@@ -138,8 +138,9 @@ def test_request_persistence_error_rolls_back_deferral_and_retains_claim(tmp_pat
 
     adapter = ObservingAdapter(support.DEFER)
     with support.open_cli(db, adapter) as cli:
-        with pytest.raises(sqlite3.IntegrityError, match="s8 injected insert failure"):
-            cli.run_workflow("wf")
+        result = cli.run_workflow("wf")
+        assert result["status"] == "blocked"
+        expect_blockers(result, "tasks_executing_elsewhere")
         assert adapter.calls == ["t0"] and len(observations) == 1
         assert cli.repository.get_approval_request("t0") is None
         # Check the writer before close can implicitly roll back and mask a bug.
@@ -206,8 +207,9 @@ def test_racing_request_rolls_back_claimed_deferral(tmp_path, same_id):
                 return super().update_claimed_task(task, token, approval_request=approval_request)
 
         with support.open_cli(db, adapter, repository_type=RacingRepository) as cli:
-            with pytest.raises(RuntimeError, match="task update refused; no workflow wait committed"):
-                cli.run_workflow("wf")
+            result = cli.run_workflow("wf")
+            assert result["status"] == "blocked"
+            expect_blockers(result, "tasks_executing_elsewhere")
             assert adapter.calls == ["t0"] and len(inserted) == 1
             assert_held_without_dispatch(peer.repository)
             visible = peer.repository.get_approval_request("t0")
