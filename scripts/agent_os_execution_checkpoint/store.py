@@ -12,6 +12,8 @@ the Git-tracked working tree.
 from __future__ import annotations
 
 import os
+import stat
+from contextlib import contextmanager, suppress
 import tempfile
 import time
 from dataclasses import dataclass
@@ -141,83 +143,115 @@ def _reject_symlink(path: Path) -> None:
         raise CheckpointStoreUnavailable(f"refusing a symlinked store path: {path}")
 
 
-def _atomic_write(
-    directory: Path, filename: str, payload: bytes
-) -> tuple[Path, bool]:
-    """Publish content atomically without ever overwriting an existing record.
-
-    ``tempfile.mkstemp`` creates the temporary file with exclusive ``O_EXCL``
-    semantics. ``os.link`` then publishes that completed file atomically and
-    fails if the content-addressed destination already exists.
-
-    Returns ``(path, already_present)``. Identical existing bytes are an
-    idempotent success; different existing bytes are an integrity conflict.
-    """
-
-    final_path = directory / filename
-    _reject_symlink(final_path)
-
-    descriptor = None
-    temp_name = None
+@contextmanager
+def _open_directory(directory: Path, *, create: bool = False):
+    """Walk pinned descriptors; never look through a symlink component."""
+    path = directory.absolute()
     try:
-        descriptor, temp_name = tempfile.mkstemp(
-            dir=os.fspath(directory), prefix=".tmp-", suffix=".json"
-        )
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        descriptor = None
-
-        try:
-            os.link(temp_name, os.fspath(final_path))
-        except FileExistsError:
-            _reject_symlink(final_path)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(path.anchor, flags)
+    except (OSError, AttributeError) as exc:
+        raise CheckpointStoreUnavailable("secure directory open unavailable") from exc
+    try:
+        for name in path.parts[1:]:
+            if name == "..":
+                raise CheckpointStoreUnavailable("refusing parent traversal in store path")
             try:
-                existing = final_path.read_bytes()
-            except OSError as exc:
-                raise CheckpointStoreUnavailable(
-                    f"unable to verify existing content at {final_path}"
-                ) from exc
-            if existing == payload:
-                return final_path, True
-            raise CheckpointStoreIntegrityConflict(
-                f"content-addressed path already holds different content: {final_path}"
-            ) from None
-        except OSError as exc:
-            raise CheckpointStoreUnavailable(
-                f"unable to publish {final_path}"
-            ) from exc
-
-        return final_path, False
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if temp_name is not None:
-            try:
-                os.remove(temp_name)
+                child = os.open(name, flags, dir_fd=fd)
             except FileNotFoundError:
-                pass
+                if not create:
+                    raise
+                try:
+                    os.mkdir(name, mode=0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise CheckpointStoreUnavailable(f"unable to use store directory {directory}") from exc
+    finally:
+        os.close(fd)
+
+
+def _read_at(fd: int, filename: str, max_bytes: int) -> bytes:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(filename, flags, dir_fd=fd), "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise CheckpointStoreUnavailable("refusing non-regular store record")
+        return handle.read(max_bytes + 1)
+
+
+def _read_immutable_record(directory: Path, filename: str, max_bytes: int) -> bytes:
+    with _open_directory(directory) as fd:
+        return _read_at(fd, filename, max_bytes)
+
+
+def _atomic_write(
+    directory: Path, filename: str, payload: bytes, *, capacity: tuple[int, int] | None = None,
+) -> tuple[Path, bool]:
+    """Publish without overwrite; under a capacity policy lock the namespace."""
+    if not filename or Path(filename).name != filename or filename in {".", ".."}:
+        raise ValueError("store record filename must be a single path component")
+    target = directory / filename
+    with _open_directory(directory, create=True) as fd:
+        if capacity is not None:
+            try:
+                import fcntl
+            except ImportError as exc:
+                raise CheckpointStoreUnavailable("secure capacity locking unavailable") from exc
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            existing = _read_at(fd, filename, len(payload))
+        except FileNotFoundError:
+            pass
+        else:
+            if existing != payload:
+                raise CheckpointStoreIntegrityConflict(f"content-addressed path already holds different content: {target}")
+            return target, True
+        if capacity is not None:
+            count, total = _existing_records_footprint(fd)
+            if count >= capacity[0] or total + len(payload) > capacity[1]:
+                raise CheckpointStoreCapacityExceeded(f"store is at capacity: {directory}")
+        temp_name = ".tmp-" + os.urandom(16).hex()
+        temp = os.open(temp_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        try:
+            with os.fdopen(temp, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temp_name, filename, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+            except FileExistsError:
+                if _read_at(fd, filename, len(payload)) != payload:
+                    raise CheckpointStoreIntegrityConflict(f"content-addressed path holds different content: {target}") from None
+                return target, True
+            return target, False
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temp_name, dir_fd=fd)
 
 
 def _ensure_dir(path: Path) -> None:
-    _reject_symlink(path)
+    with _open_directory(path, create=True):
+        pass
+
+
+def _existing_records_footprint(checkpoints_dir: Path | int) -> tuple[int, int]:
+    count = total_bytes = 0
     try:
-        path.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise CheckpointStoreUnavailable(f"unable to create {path}") from exc
-    _reject_symlink(path)
-
-
-def _existing_records_footprint(checkpoints_dir: Path) -> tuple[int, int]:
-    if not checkpoints_dir.exists():
+        with os.scandir(checkpoints_dir) as entries:
+            for entry in entries:
+                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False):
+                    count += 1
+                    total_bytes += entry.stat(follow_symlinks=False).st_size
+    except FileNotFoundError:
+        if isinstance(checkpoints_dir, int):
+            raise
         return 0, 0
-    count = 0
-    total_bytes = 0
-    for entry in checkpoints_dir.iterdir():
-        if entry.is_file() and entry.suffix == ".json":
-            count += 1
-            total_bytes += entry.stat().st_size
     return count, total_bytes
 
 
@@ -235,7 +269,6 @@ def append_checkpoint(store_root: Path | str, checkpoint: ExecutionCheckpoint) -
         raise TypeError("checkpoint must be an exact ExecutionCheckpoint")
 
     issue_dir = issue_store_dir(Path(store_root), checkpoint.issue_number)
-    _reject_symlink(issue_dir)
     checkpoints_dir = _checkpoints_dir(issue_dir)
     _ensure_dir(checkpoints_dir)
 
@@ -244,15 +277,9 @@ def append_checkpoint(store_root: Path | str, checkpoint: ExecutionCheckpoint) -
     if len(payload) > MAX_SERIALIZED_BYTES:
         raise CheckpointStoreCapacityExceeded("checkpoint exceeds the per-record size bound")
 
-    destination_existed_before_write = (checkpoints_dir / filename).exists()
-    if not destination_existed_before_write:
-        count, total_bytes = _existing_records_footprint(checkpoints_dir)
-        if count + 1 > MAX_RECORDS_PER_ISSUE or total_bytes + len(payload) > MAX_BYTES_PER_ISSUE:
-            raise CheckpointStoreCapacityExceeded(
-                f"issue {checkpoint.issue_number} checkpoint store is at capacity"
-            )
-
-    path, already_present = _atomic_write(checkpoints_dir, filename, payload)
+    path, already_present = _atomic_write(
+        checkpoints_dir, filename, payload, capacity=(MAX_RECORDS_PER_ISSUE, MAX_BYTES_PER_ISSUE),
+    )
 
     try:
         _write_head(issue_dir, checkpoint.checkpoint_id)
@@ -369,14 +396,14 @@ def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
     quarantined: list[QuarantinedEntry] = []
 
     for entry in sorted(checkpoints_dir.iterdir()):
-        if not (entry.is_file() and entry.suffix == ".json"):
+        if entry.suffix != ".json":
             continue
 
         filename_id = _checkpoint_id_from_filename(entry)
 
         try:
-            payload = entry.read_bytes()
-        except OSError as exc:
+            payload = _read_immutable_record(checkpoints_dir, entry.name, MAX_SERIALIZED_BYTES)
+        except (OSError, CheckpointStoreUnavailable) as exc:
             if filename_id is not None:
                 quarantined_ids.add(filename_id)
             quarantined.append(

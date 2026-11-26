@@ -498,11 +498,11 @@ def test_concurrent_identical_publish_is_idempotent(
     payload = store.serialize_checkpoint(checkpoint)
     injected = False
 
-    def competing_identical_publish(source: object, destination: object) -> None:
+    def competing_identical_publish(source: object, destination: object, **_options) -> None:
         nonlocal injected
         assert not injected
         injected = True
-        Path(destination).write_bytes(payload)
+        (store.issue_store_dir(root, checkpoint.issue_number) / "checkpoints" / destination).write_bytes(payload)
         raise FileExistsError("simulated concurrent identical writer")
 
     monkeypatch.setattr(store.os, "link", competing_identical_publish)
@@ -521,9 +521,9 @@ def test_concurrent_different_publish_never_overwrites_existing_content(
     competing_payload = b"competing writer content"
     published_path: Path | None = None
 
-    def competing_different_publish(source: object, destination: object) -> None:
+    def competing_different_publish(source: object, destination: object, **_options) -> None:
         nonlocal published_path
-        published_path = Path(destination)
+        published_path = store.issue_store_dir(root, checkpoint.issue_number) / "checkpoints" / destination
         published_path.write_bytes(competing_payload)
         raise FileExistsError("simulated concurrent different writer")
 
@@ -580,3 +580,52 @@ def test_load_checkpoint_by_id_fails_closed_when_quarantined(tmp_path: Path) -> 
 def test_load_checkpoint_by_id_rejects_empty_id(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
         store.load_checkpoint_by_id(tmp_path, 895, "")
+
+
+def test_capacity_is_shared_by_concurrent_appenders(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event, Lock
+
+    monkeypatch.setattr(store, "MAX_RECORDS_PER_ISSUE", 1)
+    original = store._existing_records_footprint
+    ready, second, guard = Barrier(2), Event(), Lock()
+    observed = []
+
+    def sample(directory):
+        result = original(directory)
+        with guard:
+            observed.append(result)
+            index = len(observed)
+        if index == 1:
+            second.wait(timeout=0.5)
+        else:
+            second.set()
+        return result
+
+    monkeypatch.setattr(store, "_existing_records_footprint", sample)
+
+    def append(checkpoint):
+        ready.wait(timeout=2)
+        try:
+            return store.append_checkpoint(tmp_path, checkpoint).already_present
+        except store.CheckpointStoreCapacityExceeded:
+            return "capacity"
+
+    first = make_checkpoint()
+    second_checkpoint = make_checkpoint(source_sha="8" * 40)
+    assert first.checkpoint_id != second_checkpoint.checkpoint_id
+    with ThreadPoolExecutor(2) as pool:
+        outcomes = list(pool.map(append, [first, second_checkpoint]))
+    assert outcomes.count(False) == outcomes.count("capacity") == 1
+    assert len(observed) == 2 and observed[0][0] == 0 and observed[1][0] == 1
+
+
+def test_exact_load_cannot_follow_a_checkpoint_record_symlink(tmp_path):
+    checkpoint = make_checkpoint()
+    saved = store.append_checkpoint(tmp_path / "trusted", checkpoint)
+    external = tmp_path / "untrusted.json"
+    saved.path.rename(external)
+    saved.path.symlink_to(external)
+    with pytest.raises(store.CheckpointQuarantined):
+        store.load_checkpoint_by_id(tmp_path / "trusted", checkpoint.issue_number, checkpoint.checkpoint_id)
+    assert external.read_bytes() == store.serialize_checkpoint(checkpoint)

@@ -135,3 +135,60 @@ def test_existing_store_namespace_and_no_new_discovery_mechanism() -> None:
     assert provenance_module.STORE_NAMESPACE == "pre-publication-producer-evidence"
     for forbidden in ("latest", "index.json", "sqlite3", "glob("):
         assert forbidden not in source
+
+
+@pytest.mark.parametrize("field,value", [
+    ("extra", "unexpected"), ("planning-handoff", ""), ("source", "different-source"),
+    ("proposal", None),
+])
+def test_fresh_provenance_rejects_weak_stage_identity_before_delegating(monkeypatch, field, value):
+    from types import SimpleNamespace
+    from scripts.agent_os_candidate_packet.proposal_stage import RepositoryProposalStageStatus
+
+    _patch_transports(monkeypatch)
+    provenance = provenance_module.build_candidate_approval_provenance(
+        approval_ready_packet=FakePacket(CandidatePacketPhase.APPROVAL_READY),
+        candidate_context=_context(), repository_proposal_stage_result=FakeProposalStage(),
+    )
+    proposal = SimpleNamespace(repository="Blummer92/agent-os", base_branch="main",
+                               evaluated_repository_sha="a" * 40, proposal_id="proposal", handoff_digest="plan")
+    proof = SimpleNamespace(evidence_id="repository")
+    upstream = SimpleNamespace(status=RepositoryProposalStageStatus.ELIGIBLE, proposal=proposal,
+                               issueplan_current_state_evidence=SimpleNamespace(evidence_id="issueplan", source_snapshot=SimpleNamespace(source_revision="source")),
+                               repository_state_evidence=proof, planning_binding=object())
+    actual = {"source":"source", "issueplan":"issueplan", "repository-evidence":"repository",
+              "proposal":"proposal", "planning-handoff":"plan", "approval-candidate":"approval@1"}
+    actual[field] = value
+    packet = SimpleNamespace(stage_identities=tuple(actual.items()), repository=proposal.repository,
+                             base_branch=proposal.base_branch, base_sha=proposal.evaluated_repository_sha)
+    object.__setattr__(provenance, "repository_proposal_stage_result", upstream)
+    object.__setattr__(provenance, "approval_ready_packet", packet)
+    monkeypatch.setattr(fresh_module, "prepare_approval_projection", lambda *_args, **_kw: pytest.fail(
+        "malformed provenance must not reach approval projection"
+    ))
+    with pytest.raises(fresh_module.FreshPreValidationError, match="candidate-provenance-drift"):
+        fresh_module.prepare_fresh_pre_validation(
+            provenance=provenance, approval_decision=object(),
+            candidate_inputs=SimpleNamespace(repository_state_evidence=proof),
+            evaluated_at="2026-09-12T14:00:00Z", projected_at="2026-09-12T14:00:00Z",
+        )
+
+
+def test_real_preapproval_packet_binds_the_fresh_projection(monkeypatch):
+    from types import SimpleNamespace
+    from tests.agent_os_candidate_packet.test_first_packet_approval_lifecycle import _approval_ready, _candidate_context, _decision
+
+    ready = _approval_ready()
+    stage = ready.proposal_stage_result
+    value = provenance_module.build_candidate_approval_provenance(
+        approval_ready_packet=ready.packet, candidate_context=_candidate_context(), repository_proposal_stage_result=stage,
+    )
+    monkeypatch.setattr(fresh_module, "prepare_pre_validation_stage",
+                        lambda *_: SimpleNamespace(disposition=fresh_module.ValidationStageDisposition.GO))
+    observed = fresh_module.prepare_fresh_pre_validation(
+        provenance=value, approval_decision=_decision(), evaluated_at="2026-10-08T00:07:30Z",
+        projected_at="2026-10-08T00:07:30Z",
+        candidate_inputs=SimpleNamespace(repository_state_evidence=stage.repository_state_evidence),
+    )
+    assert observed.approval_stage_result.projection.proposal_id == stage.proposal.proposal_id
+    assert observed.execution_authorized is False and observed.side_effects_performed is False

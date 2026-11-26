@@ -30,20 +30,17 @@ from scripts.agent_os_candidate_packet.proposal_stage import (
 )
 from scripts.agent_os_execution_checkpoint.identity import canonical_json_bytes
 from scripts.agent_os_execution_checkpoint.store import (
-    CheckpointStoreCapacityExceeded,
-    CheckpointStoreIntegrityConflict,
-    CheckpointStoreUnavailable,
-    _atomic_write,
-    _ensure_dir,
-    _existing_records_footprint,
-    _reject_symlink,
+    CheckpointStoreIntegrityConflict, _atomic_write, _read_immutable_record,
 )
 from scripts.agent_os_issue_acceptance.approval_records import ApprovalKind
 
+from .pre_publication_evidence_capsule import CAPSULE_ID_PREFIX
 from .pre_publication_evidence_store import (
     MAX_CAPSULES,
     MAX_CAPSULE_STORE_BYTES,
     STORE_NAMESPACE,
+    _directory,
+    _filename,
 )
 
 SCHEMA_NAME = "agent-os-candidate-approval-provenance"
@@ -51,7 +48,6 @@ SCHEMA_VERSION = "2.0"
 LEGACY_SCHEMA_VERSION = "1.0"
 SUPPORTED_SCHEMA_VERSIONS = frozenset({LEGACY_SCHEMA_VERSION, SCHEMA_VERSION})
 MAX_BYTES = 1024 * 1024
-_PREFIX = "pre-publication-evidence:"
 
 
 def _context_payload(value: ApprovalCandidateContext) -> dict[str, object]:
@@ -98,7 +94,7 @@ def candidate_approval_provenance_id(value: "CandidateApprovalProvenanceEvidence
     digest = hashlib.sha256(
         domain + canonical_json_bytes(_payload(value, include_id=False))
     ).hexdigest()
-    return _PREFIX + digest
+    return CAPSULE_ID_PREFIX + digest
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -219,51 +215,26 @@ def deserialize_candidate_approval_provenance(payload: bytes | str) -> Candidate
     )
 
 
-def _directory(store_root: Path | str) -> Path:
-    return Path(store_root) / STORE_NAMESPACE
-
-
-def _filename(evidence_id: str) -> str:
-    if type(evidence_id) is not str or not evidence_id.startswith(_PREFIX):
-        raise ValueError("candidate provenance evidence_id malformed")
-    digest = evidence_id.removeprefix(_PREFIX)
-    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
-        raise ValueError("candidate provenance evidence_id malformed")
-    return f"{digest}.json"
-
-
 def append_candidate_approval_provenance(
     store_root: Path | str, value: CandidateApprovalProvenanceEvidence
 ) -> str:
-    directory = _directory(store_root)
-    _reject_symlink(directory)
-    _ensure_dir(directory)
-    payload = serialize_candidate_approval_provenance(value)
-    destination = directory / _filename(value.evidence_id)
-    if not destination.exists():
-        count, total_bytes = _existing_records_footprint(directory)
-        if count + 1 > MAX_CAPSULES or total_bytes + len(payload) > MAX_CAPSULE_STORE_BYTES:
-            raise CheckpointStoreCapacityExceeded("pre-publication evidence store is at capacity")
-    _atomic_write(directory, destination.name, payload)
+    _atomic_write(
+        _directory(store_root), _filename(value.evidence_id), serialize_candidate_approval_provenance(value),
+        capacity=(MAX_CAPSULES, MAX_CAPSULE_STORE_BYTES),
+    )
     return value.evidence_id
 
 
 def load_candidate_approval_provenance(
     store_root: Path | str, evidence_id: str
 ) -> CandidateApprovalProvenanceEvidence:
-    directory = _directory(store_root)
-    _reject_symlink(directory)
-    path = directory / _filename(evidence_id)
-    _reject_symlink(path)
     try:
-        raw = path.read_bytes()
+        raw = _read_immutable_record(_directory(store_root), _filename(evidence_id), MAX_BYTES)
     except FileNotFoundError as exc:
         raise LookupError(evidence_id) from exc
-    except OSError as exc:
-        raise CheckpointStoreUnavailable(f"unable to read {path}") from exc
     try:
         value = deserialize_candidate_approval_provenance(raw)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (TypeError, ValueError) as exc:
         raise CheckpointStoreIntegrityConflict(str(exc)) from exc
     if value.evidence_id != evidence_id:
         raise CheckpointStoreIntegrityConflict("candidate provenance identity mismatch")

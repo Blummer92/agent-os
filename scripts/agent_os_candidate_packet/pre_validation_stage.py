@@ -12,17 +12,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryStateEvidence
-from scripts.agent_os_remote_validation import (
-    PrePrValidationPlan,
-    PrePrValidationSubject,
-    load_rule_map,
-    pre_pr_validation_plan_id,
-    pre_pr_validation_subject_id,
-    select_pre_pr_validation_plan,
-)
-
-from .approval_stage import ApprovalProjectionStageResult, ApprovalProjectionStageStatus
-from .validation_stage import ValidationStageDisposition, ValidationStageResult
+from .approval_stage import ApprovalProjectionStageResult
+from .validation_stage import ValidationStageResult, _prepare_bound_validation
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -81,97 +72,6 @@ def prepare_pre_validation_stage(
     if type(candidate_inputs) is not PreValidationCandidateInputs:
         raise TypeError("candidate_inputs must be exact PreValidationCandidateInputs")
 
-    upstream = approval_projection_stage_result
-    if upstream.status is not ApprovalProjectionStageStatus.COMPLETE:
-        return _blocked("upstream-projection-not-complete")
-    projection = upstream.projection
-    if projection is None or not getattr(projection, "complete", False):
-        return _blocked("upstream-projection-missing")
-
-    repository = getattr(projection, "repository", None)
-    base_branch = getattr(projection, "base_branch", None)
-    base_sha = getattr(projection, "evaluated_repository_sha", None)
-    tested_sha = getattr(projection, "tested_repository_sha", None)
-    evaluator_sha = getattr(projection, "evaluator_commit_sha", None)
-    allowed_files = tuple(getattr(projection, "allowed_files", ()))
-    forbidden_paths = tuple(getattr(projection, "forbidden_paths", ()))
-    required_tests = tuple(getattr(projection, "required_tests", ()))
-
-    identity_repository = (
-        f"{candidate_inputs.repository_identity.owner}/"
-        f"{candidate_inputs.repository_identity.repository}"
-    )
-    if type(repository) is not str or repository.casefold() != identity_repository.casefold():
-        return _blocked("repository-binding-mismatch")
-    if candidate_inputs.tested_sha != tested_sha:
-        return _blocked("tested-sha-mismatch")
-    if candidate_inputs.evaluator_sha != evaluator_sha:
-        return _blocked("evaluator-sha-mismatch")
-    if candidate_inputs.required_tests != required_tests:
-        return _blocked("required-tests-mismatch")
-    if candidate_inputs.repository_state_evidence.tested_sha != tested_sha:
-        return _blocked("repository-evidence-tested-sha-mismatch")
-    if any(path not in allowed_files for path in candidate_inputs.expected_changed_paths):
-        return _blocked("expected-changed-paths-outside-allowlist")
-
-    try:
-        subject = PrePrValidationSubject(
-            repository=repository,
-            issue_number=candidate_inputs.issue_number,
-            invocation_id=candidate_inputs.invocation_id,
-            base_branch=base_branch,
-            base_sha=base_sha,
-            branch=candidate_inputs.candidate_branch,
-            expected_source_sha=candidate_inputs.candidate_sha,
-            tested_sha=candidate_inputs.tested_sha,
-            allowed_files=allowed_files,
-            forbidden_paths=forbidden_paths,
-            required_command_identities=required_tests,
-            approval_id=getattr(projection, "approval_id", ""),
-            approval_revision=getattr(projection, "approval_revision_number", 0),
-            projection_id=getattr(projection, "projection_id", ""),
-            implementation_contract_fingerprint=getattr(
-                projection, "implementation_contract_fingerprint", ""
-            ),
-            expected_changed_paths=candidate_inputs.expected_changed_paths,
-            execution_mode="validation-only",
-            candidate_bound=True,
-        )
-        plan = select_pre_pr_validation_plan(subject, load_rule_map())
-    except (TypeError, ValueError):
-        return _blocked("canonical-validation-construction-failed")
-
-    return ValidationStageResult(
-        disposition=ValidationStageDisposition.GO,
-        subject=subject,
-        validation_plan=plan,
-        subject_id=pre_pr_validation_subject_id(subject),
-        validation_plan_id=pre_pr_validation_plan_id(plan),
-        repository=repository,
-        issue_number=candidate_inputs.issue_number,
-        invocation_id=candidate_inputs.invocation_id,
-        base_sha=base_sha,
-        source_sha=candidate_inputs.candidate_sha,
-        tested_sha=candidate_inputs.tested_sha,
-        evaluator_sha=candidate_inputs.evaluator_sha,
-        candidate_sha=candidate_inputs.candidate_sha,
-    )
-
-
-def _blocked(reason: str) -> ValidationStageResult:
-    return ValidationStageResult(
-        disposition=ValidationStageDisposition.BLOCKED,
-        subject=None,
-        validation_plan=None,
-        subject_id=None,
-        validation_plan_id=None,
-        repository=None,
-        issue_number=None,
-        invocation_id=None,
-        base_sha=None,
-        source_sha=None,
-        tested_sha=None,
-        evaluator_sha=None,
-        candidate_sha=None,
-        reason_codes=(reason,),
+    return _prepare_bound_validation(
+        approval_projection_stage_result, candidate_inputs, first_run=True,
     )
