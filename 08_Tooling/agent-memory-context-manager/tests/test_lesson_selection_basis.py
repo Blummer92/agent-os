@@ -17,17 +17,20 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     MAX_TEXT_CHARS,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
+    RetrievalEscalation,
 )
 from agent_memory_context_manager.lesson_activation_bridge import (
-    _bound_relevant_lessons,
+    _bound_relevant_lessons_with_order,
     normalize_lesson_row,
 )
 from agent_memory_context_manager.lesson_preflight import (
     MAX_LESSON_RECORDS,
     LessonRecordEvidence,
     LessonRetrievalStatus,
+    consume_lesson_preflight,
 )
 from agent_memory_context_manager.lesson_retrieval_orchestrator import (
+    _relevance_miss_counters,
     orchestrate_lesson_retrieval,
 )
 
@@ -147,7 +150,7 @@ def test_p1_generic_threshold_is_max_selected(tied, expected):
 def test_p1_tie_count_covers_the_full_pool_not_the_forwarded_five():
     pool = many(34)
     request = req()
-    assert len(_bound_relevant_lessons(request, pool)) == MAX_LESSON_RECORDS
+    assert len(_bound_relevant_lessons_with_order(request, pool)[0]) == MAX_LESSON_RECORDS
     result = describe(request, pool, identity_route=False)
     assert result.tied_identities == 34
     assert result.basis == "generic-tie-lexical-cut"
@@ -171,9 +174,10 @@ def test_only_the_best_bucket_is_counted():
     assert result.basis == "generic-unique"
 
 
-def test_p4_title_echo_is_a_title_in_library_hints_without_library_name():
+@pytest.mark.parametrize("library_name", [None, "unrelated-library"])
+def test_p4_title_echo_is_a_title_in_library_hints_without_a_matching_library_name(library_name):
     title = "Distinctive lesson title"
-    pool = [lesson(30, title=title), *many(5)]
+    pool = [lesson(30, title=title, library_name=library_name), *many(5)]
     result = describe(req(library_hints=(title,)), pool, identity_route=False)
     assert (result.basis, result.best_bucket, result.tied_identities) == (
         "title-echo", 3, 1,
@@ -334,8 +338,33 @@ def test_c5_selection_limits_are_pinned():
 
 def test_bound_relevant_lessons_is_unchanged_in_behavior():
     pool = many(34)
-    bounded = _bound_relevant_lessons(req(), pool)
+    bounded, _ = _bound_relevant_lessons_with_order(req(), pool)
     assert len({item.lesson_id for item in bounded}) == MAX_LESSON_RECORDS
+
+
+def test_coverage_can_reorder_a_sufficient_prior_set_without_making_it_authoritative():
+    # The frozen pre-coverage cut is already sufficient once archived rows
+    # are excluded; that is not a refusal that the coverage route must replay.
+    pool = [
+        lesson(n, title=title, library_name=library, archived=archived)
+        for n, (title, library, archived) in enumerate((
+            ("e", "c", True), ("a", "e", False), ("d", "c", False),
+            ("e", "d", True), ("b", "c", False), ("d", "a", False),
+            ("b", "e", False), ("b", "d", False),
+        ), 10)
+    ]
+    query = req(task="review", library_hints=("a", "b", "c", "d", "e"))
+    prior = consume_lesson_preflight(
+        query, tuple(pool[:5]), _ranked_order=tuple(row.lesson_id for row in pool[:5]),
+    )
+    assert prior.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert prior.selected_lesson_ids == ("LL-11", "LL-12", "LL-14")
+
+    bounded, order = _bound_relevant_lessons_with_order(query, pool)
+    actual = consume_lesson_preflight(query, bounded, _ranked_order=order)
+    assert actual.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert actual.selected_lesson_ids == ("LL-11", "LL-17", "LL-12")
+    assert actual.authority_created is False
 
 
 # --- orchestrator integration: diagnostics only ---
@@ -493,6 +522,39 @@ def test_incomplete_pagination_is_not_evaluated_and_keeps_its_reason_code(page, 
     assert _diag(result).get("best_bucket_tied_identities") == 0
 
 
+def test_sufficient_snapshot_retains_no_escalation_or_authority():
+    result = orchestrate_lesson_retrieval(req(), execute_read=_reader(_rows(1)))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+    assert result.selected_lesson_ids == ("LL-10",)
+    assert result.retrieval_escalation is RetrievalEscalation.NONE
+    assert "miss_capability_rows" not in _diag(result)
+    assert result.authority_created is False
+
+
+def test_observational_miss_counters_tally_distinct_signals_without_echo():
+    pool = [
+        lesson(11, title="Title Signal", ecosystem="python", capability_kind="testing"),
+        lesson(12, title="Other", ecosystem="other", library_name="Library Signal", capability_kind="other", keywords=()),
+        lesson(13, title="Another", ecosystem="python", library_name="Only Path", capability_kind="other", keywords=()),
+        lesson(14, title="Unrelated", ecosystem="other", library_name="No Signal", capability_kind="other", keywords=()),
+    ]
+    query = req(
+        ecosystem_hints=(" PYTHON ",), capability_keywords=(" TESTING ",),
+        library_hints=(" TITLE SIGNAL ", " LIBRARY SIGNAL ", "Missing Library"),
+        target_path_hints=("src/ONLY PATH/runner.py",),
+    )
+    expected = {
+        "miss_ecosystem_rows": 2,
+        "miss_capability_rows": 1,
+        "miss_exact_library_rows": 2,
+        "miss_target_path_rows": 1,
+        "miss_library_hints_not_named": 1,
+    }
+    assert _relevance_miss_counters(query, pool) == expected
+    assert _relevance_miss_counters(query, list(reversed(pool))) == expected
+    assert _relevance_miss_counters(req(capability_keywords=()), pool) == dict.fromkeys(expected, 0)
+
+
 def test_complete_empty_snapshot_is_a_completed_evaluation_no_relevant_signal():
     result = orchestrate_lesson_retrieval(req(), execute_read=_reader([]))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
@@ -512,6 +574,9 @@ def test_complete_no_match_snapshot_is_a_completed_evaluation_no_relevant_signal
     assert _diag(result).get("selection_basis") == "no-relevant-signal"
     assert _diag(result).get("best_bucket_tied_identities") == 0
     assert _diag(result).get("observed_rows") == 12
+    assert result.candidate_count == MAX_CANDIDATES
+    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
+    assert _diag(result)["miss_capability_rows"] == 0
 
 
 def test_empty_and_no_match_differ_from_failure_only_in_the_basis_not_in_status():

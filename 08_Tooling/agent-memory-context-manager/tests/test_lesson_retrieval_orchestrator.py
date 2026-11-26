@@ -574,35 +574,106 @@ def test_identical_sub_queries_reached_from_two_alternatives_are_read_once():
     assert len(keys) == len({str(k) for k in keys})
 
 
-def test_partition_rules_enumerate_every_controlled_value_and_every_alternative():
-    from agent_memory_context_manager.lesson_retrieval_orchestrator import _partition_queries
+def test_known_reference_overflow_stops_without_partitioning_or_partial_selection():
+    calls = []
 
-    base = [
-        {"property": "Surface Before Work?", "checkbox": {"equals": True}},
-        {"property": "Status", "select": {"does_not_equal": "Archived note"}},
-    ]
-    lt = {"property": "Learning Type", "select": {"equals": "Testing lesson"}}
-    area = {"property": "Area", "select": {"equals": "Testing"}}
-    alts = [
-        {"property": "Area", "select": {"equals": name}}
-        for name in ("Automation", "Dashboard", "Testing")
-    ]
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row("LL-2")] * (MAX_RETRIEVAL_ROWS + 1), "has_more": False}
 
-    parts, crossed = _partition_queries({"filter": {"and": [*base, lt]}}, crossed=False)
-    assert crossed is True
-    assert sorted(p["filter"]["and"][-1]["select"]["equals"] for p in parts) == sorted(
-        ["Curriculum", "Automation", "Dashboard", "Governance", "Documentation", "Testing"]
+    result = orchestrate_lesson_retrieval(request(known_knowledge_refs=("LL-2",)), execute_read=read)
+    assert len(calls) == 1
+    assert calls[0]["filter"]["or"] == [{"property": "Lesson ID", "unique_id": {"equals": 2}}]
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "known-reference"
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
+    assert result.retrieval_diagnostics["normalized_rows"] == 0
+    assert result.selected_lesson_ids == ()
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("extra,more,read_total", [(0, False, 2), (1, False, 2), (0, True, 2)])
+def test_known_reference_cumulative_row_boundary(extra, more, read_total):
+    calls = []
+    held = _lesson_row("LL-2")
+
+    def read(query):
+        calls.append(query)
+        if len(calls) == 1:
+            return {"results": [held] * (MAX_RETRIEVAL_ROWS - 1),
+                    "has_more": True, "next_cursor": "first continuation"}
+        if len(calls) == 2:
+            return {"results": [held] * (1 + extra), "has_more": more,
+                    "next_cursor": "second continuation" if more else None}
+        pytest.fail("known-reference accepted a continuation past the row cap")
+
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=("LL-2",)), execute_read=read,
     )
-    parts, crossed = _partition_queries({"filter": {"and": [*base, area]}}, crossed=False)
-    assert len(parts) == 6 and crossed is True
-    parts, crossed = _partition_queries({"filter": {"and": [*base, {"or": alts}]}}, crossed=False)
-    assert [p["filter"]["and"][-1] for p in parts] == alts and crossed is False
-    # A crossed cell and an unrecognized clause are never split further.
-    assert _partition_queries({"filter": {"and": [*base, area, lt]}}, crossed=True)[0] == []
-    title = {"property": "Lesson Learned", "title": {"contains": "x"}}
-    assert _partition_queries({"filter": {"and": [*base, title]}}, crossed=False)[0] == []
+    assert len(calls) == read_total
+    assert calls[1]["start_cursor"] == "first continuation"
+    assert result.retrieval_diagnostics["read_count"] == read_total
+    if extra or more:
+        assert result.selected_lesson_ids == ()
+        assert result.retrieval_diagnostics["incomplete_reason_code"] == "row-bound-exceeded"
+        assert result.retrieval_diagnostics["normalized_rows"] == 0
+    else:
+        assert result.selected_lesson_ids == ("LL-2",)
+        assert result.retrieval_diagnostics["normalized_rows"] == MAX_RETRIEVAL_ROWS
+        assert "incomplete_reason_code" not in result.retrieval_diagnostics
 
 
+@pytest.mark.parametrize("ids", [("LL-42",), ("LL-2", "LL-42")])
+def test_known_reference_scope_rejects_provider_rows_for_unrequested_ids(ids):
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row(identity) for identity in ids], "has_more": False}
+
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=("LL-2",)), execute_read=read,
+    )
+    assert len(calls) == 1
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "known-reference-identity-mismatch"
+    assert result.authority_created is False
+
+
+def test_recorded_known_reference_is_not_dispatched_twice():
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row("LL-2")], "has_more": False}
+
+    original = request(known_knowledge_refs=("LL-2",))
+    prior = record_retrieval_attempt(original, RetrievalEscalation.KNOWN_REFERENCE)
+    result = orchestrate_lesson_retrieval(prior, execute_read=read)
+    assert len(calls) == 1
+    assert calls[0] == build_escalation_query(prior, RetrievalEscalation.WORKSPACE_SEARCH)
+    assert result.selected_lesson_ids == ("LL-2",)
+    assert result.retrieval_diagnostics["selection_basis"] != "identity-scoped"
+    assert prior.attempted_retrieval == (RetrievalEscalation.KNOWN_REFERENCE,)
+
+
+def test_recorded_snapshot_cannot_be_dispatched_twice():
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row("LL-2")], "has_more": False}
+
+    prior = record_retrieval_attempt(request(), RetrievalEscalation.WORKSPACE_SEARCH)
+    result = orchestrate_lesson_retrieval(prior, execute_read=read)
+    assert calls == []
+    assert result.selected_lesson_ids == ()
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.retrieval_escalation is RetrievalEscalation.MANUAL_REVIEW
+    assert result.retrieval_diagnostics["read_count"] == 0
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
 
 
 # --- independent-QA checklist additions (coverage, conflicts, boundaries, P6) ---
@@ -654,20 +725,28 @@ def test_identical_record_returned_by_two_cells_collapses_to_one(monkeypatch):
 
 
 @pytest.mark.parametrize("capability", [
-    (), ("testing",), ("CKR6 mutation boundary",), ("fail-closed lesson preflight", "scheduling"),
+    (), ("testing",), ("CKR6 mutation boundary",),
+    ("fail-closed lesson preflight", "scheduling"),
     ("failure-avoidance", "quality-assurance", "deployment", "authorization-routing"),
 ])
-def test_p6_broad_and_title_fallback_queries_have_no_partition_shape(capability):
-    # Proof for the claimed P6 equivalence: for every request shape below, the
-    # unpartitioned steps expose no OR/Area/Learning Type last clause, so the
-    # partitioner would return nothing even if the step were marked partitionable.
-    from agent_memory_context_manager.lesson_retrieval_orchestrator import (
-        _partition_queries, build_escalation_query)
+def test_incomplete_snapshot_never_falls_back_to_a_partition(capability):
+    calls = []
 
-    for eco in ((), ("python",), ("python", "agent-os")):
-        req = request(ecosystem_hints=eco, capability_keywords=capability)
-        broad = build_escalation_query(req, RetrievalEscalation.WORKSPACE_SEARCH)
-        assert _partition_queries(broad, crossed=False)[0] == []
+    def read(query):
+        calls.append(query)
+        return {"results": [_lesson_row("LL-2")], "has_more": True}
+
+    result = orchestrate_lesson_retrieval(
+        request(capability_keywords=capability, specialized_knowledge_required=True),
+        execute_read=read,
+    )
+    assert len(calls) == 1
+    assert calls[0]["page_size"] == 100
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == "workspace"
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "missing-cursor"
+    assert result.retrieval_diagnostics["normalized_rows"] == 0
+    assert result.selected_lesson_ids == ()
+    assert result.authority_created is False
 
 
 # --- count-consistent replay (INFERRED distribution within measured bounds) ---
@@ -767,41 +846,23 @@ def test_count_consistent_generated_rows_use_controlled_vocabulary_and_normalize
 
 
 
-def test_terminal_query_bucket_has_only_closed_controlled_values():
-    import agent_memory_context_manager.lesson_retrieval_orchestrator as orch
-    base = {"filter": {"and": [
-        {"property": "Surface Before Work?", "checkbox": {"equals": True}},
-        {"property": "Status", "select": {"does_not_equal": "Archived note"}},
-    ]}}
-    assert orch._terminal_query_bucket(base) == "workspace"
-    query = {**base, "filter": {"and": [
-        *base["filter"]["and"],
-        {"or": [{"property": "Area", "select": {"equals": "Testing"}},
-                {"property": "Learning Type", "select": {"equals": "Testing lesson"}}]},
-    ]}}
-    assert orch._terminal_query_bucket(query) == "broad-or"
-    query["filter"]["and"][-1] = {"property": "Area", "select": {"equals": "Testing"}}
-    assert orch._terminal_query_bucket(query) == "area:Testing"
-    query["filter"]["and"].append(
-        {"property": "Learning Type", "select": {"equals": "Testing lesson"}}
+@pytest.mark.parametrize("refs,route", [((), "workspace"), (("LL-2",), "known-reference")])
+def test_terminal_query_bucket_reports_actual_route_not_caller_text(refs, route):
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        return {"results": [], "has_more": "SYNTHETIC_INVALID"}
+
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=refs, task_reference="SYNTHETIC_CALLER_MARKER"),
+        execute_read=read,
     )
-    assert orch._terminal_query_bucket(query) == "area:Testing/type:Testing lesson"
-    reversed_query = {"filter": {"and": [
-        *base["filter"]["and"],
-        {"property": "Learning Type", "select": {"equals": "Testing lesson"}},
-        {"property": "Area", "select": {"equals": "Testing"}},
-    ]}}
-    assert orch._terminal_query_bucket(reversed_query) == (
-        "area:Testing/type:Testing lesson"
-    )
-    reversed_query["filter"]["and"][-1]["select"]["equals"] = "SENSITIVE_UNTRUSTED"
-    assert orch._terminal_query_bucket(reversed_query) == "unobserved"
-    query["filter"]["and"][-1]["select"]["equals"] = "SENSITIVE_UNTRUSTED"
-    assert orch._terminal_query_bucket(query) == "unobserved"
-    assert orch._terminal_query_bucket({"filter": {"or": []}}) == "known-reference"
-
-
-
+    assert len(calls) == 1
+    assert result.retrieval_diagnostics["terminal_query_bucket"] == route
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
+    assert "SYNTHETIC" not in str(result.retrieval_diagnostics)
 
 
 
@@ -1540,3 +1601,26 @@ def test_ckr11_real_adapter_forwards_opaque_cursor_verbatim_to_provider_post():
     assert [b.get("start_cursor") for b in bodies] == [None, "  page-two  "]
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert "LL-9001" in result.selected_lesson_ids
+
+
+@pytest.mark.parametrize("refs,route", [(("LL-2",), "known-reference"), ((), "workspace")])
+@pytest.mark.parametrize("fail_on", [1, 2])
+def test_failed_provider_read_is_counted_once_and_cannot_admit_partial_data(refs, route, fail_on):
+    calls = []
+
+    def read(query):
+        calls.append(query)
+        if len(calls) == fail_on:
+            raise TimeoutError("controlled offline timeout")
+        return {"results": [_lesson_row("LL-2")], "has_more": True, "next_cursor": "cursor"}
+
+    result = orchestrate_lesson_retrieval(
+        request(known_knowledge_refs=refs, specialized_knowledge_required=True), execute_read=read,
+    )
+    assert len(calls) == fail_on
+    assert result.retrieval_diagnostics["read_count"] == fail_on
+    assert result.retrieval_diagnostics["selection_basis"] == "not-evaluated"
+    assert result.retrieval_diagnostics["normalized_rows"] == 0
+    assert "lesson-read-timeout" in result.selection_reason_codes
+    assert result.selected_lesson_ids == ()
+    assert result.authority_created is False

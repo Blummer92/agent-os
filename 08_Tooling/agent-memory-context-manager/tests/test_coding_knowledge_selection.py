@@ -819,3 +819,115 @@ def test_library_coverage_never_crosses_relevance_buckets():
     assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
     assert result.knowledge_refs == ("a", "b", "c")
     assert result.reason_codes == ("required-library-uncovered",)
+
+
+@pytest.mark.parametrize("args, message", [
+    ((None, ()), "request must be a CodingKnowledgeRequest"),
+    ((request(), [candidate()]), "candidates must be a tuple"),
+    ((request(), (None,)), "candidates must contain CodingKnowledgeCandidate values"),
+], ids=["request", "pool", "entry"])
+def test_selector_requires_exact_request_and_candidate_shapes(args, message):
+    with pytest.raises(TypeError) as error:
+        select_coding_knowledge(*args)
+    assert str(error.value) == message
+
+
+@pytest.mark.parametrize("hints", [
+    {"library_hints": ("hypothesis",)},
+    {"capability_keywords": ("property-based-testing",)},
+    {"target_path_hints": ("tests/hypothesis/check.py",)},
+    {"known_knowledge_refs": ("hypothesis",)},
+], ids=["library", "capability", "path", "known-reference"])
+def test_each_explicit_hint_independently_requires_retrieval(hints):
+    req = CodingKnowledgeRequest(task_reference="coverage", **hints)
+    result = select_coding_knowledge(req, ())
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.knowledge_refs == ()
+    assert result.recommended_escalation is (
+        RetrievalEscalation.KNOWN_REFERENCE if "known_knowledge_refs" in hints
+        else RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    )
+
+
+@pytest.mark.parametrize("case", ["guardrail-only", "primary-negation", "guardrail-negation", "avoid-negation"])
+def test_pr_refresh_requires_directionally_consistent_primary_guidance(case):
+    lesson = _LL80_REFRESH
+    if case == "guardrail-only":
+        lesson = replace(lesson, use_when=("Document the branch state.", lesson.use_when[0]))
+    else:
+        contradiction = "Do not use git merge-tree for PR refresh reconciliation."
+        fields = {
+            "primary-negation": {"use_when": (contradiction,)},
+            "guardrail-negation": {"use_when": (*lesson.use_when, contradiction)},
+            "avoid-negation": {"avoid_when": (contradiction,)},
+        }
+        lesson = replace(lesson, **fields[case])
+    result = select_coding_knowledge(_pr_refresh_request(), (lesson,))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.knowledge_refs == ()
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"name": "Reconciliation of a stale website"},
+    {"use_when": ("For stale PRs, use the deterministic git reconciliation path.",)},
+    {"use_when": ("For stale PR refresh, use the deterministic reconciliation path.",)},
+], ids=["missing-pr-title", "missing-refresh-advice", "missing-git-advice"])
+def test_pr_refresh_title_and_each_mechanism_signal_are_independent(changes):
+    actual = select_coding_knowledge(_pr_refresh_request(), (replace(_LL61_REFRESH, **changes),))
+    assert actual.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert actual.reason_codes == ("no-relevant-candidate",)
+    assert actual.selected == ()
+
+
+def test_exact_pair_of_pr_refresh_hints_is_enough_without_other_metadata():
+    actual = select_coding_knowledge(
+        _pr_refresh_request(capability_keywords=("branch refresh", "merge-tree fallback")),
+        (_LL61_REFRESH,),
+    )
+    assert actual.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert actual.selected[0].reason_codes == ("pr-refresh-reconciliation-text-match",)
+
+
+def test_attempted_known_reference_escalates_and_does_not_repeat_it():
+    result = select_coding_knowledge(
+        request(known_knowledge_refs=("LL-10",),
+                attempted_retrieval=(RetrievalEscalation.KNOWN_REFERENCE,)), (),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert result.selected == ()
+
+
+@pytest.mark.parametrize("conflicting,expected", [
+    (True, "canonical-authority-conflict"),
+    (False, "stale-relevant-candidate"),
+])
+def test_hold_precedence_does_not_depend_on_candidate_order(conflicting, expected):
+    items = (
+        candidate("a", library_name="hypothesis", currentness=KnowledgeCurrentness.UNVERIFIABLE),
+        candidate("b", library_name="hypothesis", currentness=KnowledgeCurrentness.STALE),
+        candidate("c", library_name="hypothesis", authority_conflict=conflicting),
+    )
+    for order in permutations(items):
+        result = select_coding_knowledge(request(), order)
+        assert result.sufficiency_status is SufficiencyStatus.MANUAL_REVIEW
+        assert result.reason_codes == (expected,)
+        assert result.selected == ()
+
+
+@pytest.mark.parametrize("changes,expected", [
+    ({"name": "PR refresh checklist"}, False),
+    ({"use_when": ("Git refresh must use the governed procedure.",)}, False),
+    ({"use_when": ("Git refresh requires the governed deterministic reconciliation path. "
+                    "Never push before checking conflicts.",)}, True),
+], ids=["title-needs-reconciliation", "primary-needs-reconciliation", "unrelated-caution-keeps-canonical-match"])
+def test_canonical_pr_refresh_requires_title_context_but_keeps_unrelated_caution(changes, expected):
+    result = select_coding_knowledge(_pr_refresh_request(), (replace(_LL61_REFRESH, **changes),))
+    if expected:
+        assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+        assert result.selected[0].reason_codes == ("pr-refresh-reconciliation-text-match",)
+    else:
+        assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+        assert result.selected == ()

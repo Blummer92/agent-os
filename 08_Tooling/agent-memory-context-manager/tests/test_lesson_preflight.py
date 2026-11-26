@@ -1,3 +1,5 @@
+import pytest
+
 from agent_memory_context_manager.coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
@@ -362,3 +364,77 @@ def test_pr_a06_consumer_budget_counts_distinct_ids_not_records():
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.candidate_count == 6
     assert result.selected_count == 3
+
+
+@pytest.mark.parametrize("bad_context", ["none", None], ids=["plain-string", "null"])
+def test_public_plans_reject_untyped_repair_context(bad_context):
+    with pytest.raises(TypeError, match="repair_context must be a RepairContext value"):
+        plan_lesson_preflight(request(), repair_context=bad_context)
+    with pytest.raises(TypeError, match="repair_context must be a RepairContext value"):
+        plan_repair_retry_boundary(bad_context)
+
+
+@pytest.mark.parametrize("req, lessons, available, expected", [
+    (None, (), True, "request must be a CodingKnowledgeRequest"),
+    (request(), [lesson()], True, "lessons must be a tuple of LessonRecordEvidence values"),
+    (request(), (None,), True, "lessons must be a tuple of LessonRecordEvidence values"),
+    (request(), (), 1, "retrieval_available must be bool"),
+], ids=["request", "lesson-sequence", "lesson-entry", "available-number"])
+def test_consumer_rejects_untyped_input_before_selection(req, lessons, available, expected):
+    with pytest.raises(TypeError) as error:
+        consume_lesson_preflight(req, lessons, retrieval_available=available)
+    assert str(error.value) == expected
+
+
+@pytest.mark.parametrize("attempts", [[], (None,)], ids=["list", "null-attempt"])
+def test_retry_plan_rejects_untyped_attempt_evidence(attempts):
+    with pytest.raises(TypeError, match="prior_attempts must be a tuple of FailedRepairAttempt values"):
+        plan_repair_retry_boundary(RepairContext.NONE, attempts)
+
+
+def test_consumer_rejects_unapproved_status_even_without_archive_flag():
+    result = consume_lesson_preflight(request(), (lesson(status="Backlog", archived=False),))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.candidate_count == 0
+    assert result.selected_count == 0
+
+
+@pytest.mark.parametrize("conflict,expected", [(True, 1), (False, 0)])
+def test_currentness_and_authority_diagnostic_counts_actual_eligible_holds(conflict, expected):
+    result = consume_lesson_preflight(
+        request(), (lesson(authority_conflict=conflict),)
+    )
+    assert result.stale_or_conflicting_count == expected
+
+
+def test_rejected_provenance_includes_all_five_bounded_candidates():
+    lessons = tuple(
+        lesson(lesson_id=f"LL-{n}", currentness=KnowledgeCurrentness.STALE)
+        for n in range(5)
+    )
+    result = consume_lesson_preflight(request(), lessons)
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert tuple(p["lesson_id"] for p in result.rejected_candidate_provenance) == tuple(
+        item.lesson_id for item in lessons
+    )
+
+
+class _IdentitySubclass(str):
+    pass
+
+
+@pytest.mark.parametrize("order", [["lesson:authorization-currentness"],
+    (_IdentitySubclass("lesson:authorization-currentness"),)],
+    ids=["list", "str-subclass"])
+def test_consumer_rejects_lookalike_frozen_rank_before_skipping_retrieval(order):
+    result = consume_lesson_preflight(
+        request(specialized_knowledge_required=False), (lesson(),), _ranked_order=order,
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selected_lesson_ids == ()
+    assert result.selection_reason_codes == ("upstream-ranking-order-mismatch",)
+
+
+def test_invalid_request_cannot_reach_the_early_rank_plan_fallback():
+    with pytest.raises(TypeError, match="request must be a CodingKnowledgeRequest"):
+        consume_lesson_preflight(None, (lesson(),), _ranked_order=())

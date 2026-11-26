@@ -1,3 +1,5 @@
+import pytest
+
 from agent_memory_context_manager.coding_knowledge_selection import CodingKnowledgeRequest
 from agent_memory_context_manager.lesson_preflight import (
     FailedRepairAttempt,
@@ -141,3 +143,60 @@ def test_no_relevant_lesson_is_distinct_from_capability_failure():
     assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
     assert result.lesson_disposition is RepairLessonDisposition.NO_RELEVANT_LESSON
     assert result.boundary.mutation_admissible is False
+
+
+@pytest.mark.parametrize("field,value,error", [
+    ("request", None, TypeError),
+    ("attempt", None, TypeError),
+    ("repair_context", RepairContext.NONE, ValueError),
+    ("repair_context", "failed-pr-repair", ValueError),
+])
+def test_bad_retry_context_cannot_dispatch_a_read(field, value, error):
+    calls = []
+    inputs = {"request": request(), "attempt": failed(),
+              "repair_context": RepairContext.FAILED_PR_REPAIR}
+    inputs[field] = value
+    with pytest.raises(error):
+        activate_repair_retry_lessons(
+            **inputs, execute_read=lambda query: calls.append(query),
+        )
+    assert calls == []
+
+
+def test_sparse_repair_forces_retrieval_and_records_only_the_current_attempt():
+    query = request(ecosystem_hints=(), capability_keywords=())
+    previous = failed("this-attempt")
+    calls = []
+    result = activate_repair_retry_lessons(
+        query, previous, execute_read=lambda item: (calls.append(item) or {"results": [], "has_more": False}),
+    )
+    assert len(calls) == 1
+    assert result.attempt.attempt_id == previous.attempt_id
+    assert previous.retry_reentry_outcome is None
+    assert query.specialized_knowledge_required is None
+    assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
+    assert result.lesson_disposition is RepairLessonDisposition.NO_RELEVANT_LESSON
+    assert result.boundary.mutation_admissible is False
+
+
+@pytest.mark.parametrize("case,disposition", [
+    ("missing-primary", RepairLessonDisposition.UNVERIFIABLE_RELEVANT_LESSON),
+    ("conflicting-revision", RepairLessonDisposition.CANDIDATE_DATA_DEFECT),
+])
+def test_repair_activation_reports_distinct_source_defects_without_admitting(case, disposition):
+    first, second = live_row(), live_row()
+    if case == "missing-primary":
+        first["properties"]["Source Link"]["url"] = None
+        rows = [first]
+    else:
+        second["last_edited_time"] = "2026-09-05T19:00:00Z"
+        rows = [first, second]
+    result = activate_repair_retry_lessons(
+        request(), failed(), execute_read=lambda _: {"results": rows, "has_more": False},
+    )
+    assert result.lesson_disposition is disposition
+    assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
+    assert result.boundary.mutation_admissible is False
+    assert result.boundary.blocking_attempt_id == "attempt-1"
+    assert result.lesson_result.selected_lesson_ids == ()
+    assert result.lesson_result.authority_created is False

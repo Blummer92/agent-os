@@ -98,7 +98,9 @@ The memory/context package itself performs zero Notion writes, Notion schema/vie
 
 ### Bounded retrieval
 
-Provider responses are capped by `MAX_RETRIEVAL_ROWS`, and the selector receives at most `MAX_LESSON_RECORDS` after deterministic relevance narrowing. The executable escalation sequence has a fixed maximum of four calls when a known reference exists and three otherwise. Exhaustion terminates at CKR2 `manual-review`; no query can repeat indefinitely because every executed step is recorded before the next recommendation is calculated.
+The current orchestrator optionally performs an exact-ID lookup (at most 25 rows over five pages), then, if needed, one complete workspace snapshot (at most 500 rows over five 100-row pages). Both share the fetch budget. The legacy activation bridge performs one exact or filtered query with the 25-row bound. A route already recorded in the request ledger is not dispatched again. Incomplete reads cannot reach selection.
+
+An exact-ID response may contain only usable lessons with requested provider ID numbers. Canonical GitHub/source shape and controlled governance file paths are checked before handing evidence to CKR2. Supporting references cannot replace a missing primary source. The selector receives at most `MAX_LESSON_RECORDS` distinct identities after deterministic narrowing.
 
 ## Validation
 

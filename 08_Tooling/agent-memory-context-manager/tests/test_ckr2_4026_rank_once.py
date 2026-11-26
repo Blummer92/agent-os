@@ -143,7 +143,7 @@ def test_rank_once_production_snapshot_preserves_original_priority(kind, monkeyp
 
 
 def test_full_population_scores_are_not_recomputed_after_cut(monkeypatch):
-    original = bridge.contextual_tie_scores
+    original = cks.contextual_tie_scores
     observed = []
 
     def full_population(request, tied):
@@ -151,11 +151,7 @@ def test_full_population_scores_are_not_recomputed_after_cut(monkeypatch):
         observed.append(len(bound))
         return original(request, bound)
 
-    def forbidden_second_pass(_request, _tied):
-        raise AssertionError("Second CKR2 contextual rescore was called")
-
-    monkeypatch.setattr(bridge, "contextual_tie_scores", full_population)
-    monkeypatch.setattr(cks, "contextual_tie_scores", forbidden_second_pass)
+    monkeypatch.setattr(cks, "contextual_tie_scores", full_population)
     result, ranked = _replay_with_rank_receipt(monkeypatch, request(), _rows())
     assert ranked.selected_lesson_ids == ("LL-50", "LL-18", "LL-9")
     _assert_generic_abstention(result)
@@ -466,3 +462,21 @@ def test_rank_once_multi_library_coverage_survives_bridge_and_preflight():
     result = consume_lesson_preflight(req, bounded, _ranked_order=order)
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.selected_lesson_ids == ("a", "b", "z")
+
+
+class _StringSubclass(str):
+    """Equal to a trusted ID by value, but not its serialized input type."""
+
+
+@pytest.mark.parametrize("order", [
+    ["high", "low"],
+    (_StringSubclass("high"), "low"),
+], ids=["list-plan", "non-exact-identity-type"])
+def test_ckr2_rejects_type_lookalikes_for_frozen_ranking(order):
+    outcome = cks._select_coding_knowledge(
+        request(library_hints=("pinned-lib",)), _direct_candidates(), _ranked_order=order
+    )
+    assert outcome.sufficiency_status is cks.SufficiencyStatus.MANUAL_REVIEW
+    assert outcome.reason_codes == ("upstream-ranking-order-mismatch",)
+    assert outcome.selected == ()
+    assert outcome.authority_created is False

@@ -605,3 +605,16 @@ def test_missing_has_more_on_single_snapshot_page_fails_closed():
     assert result.selected_lesson_ids == ()
     assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-pagination"
     assert "lesson-read-incomplete" in result.selection_reason_codes
+
+
+@pytest.mark.parametrize("page", [None, [], {"results": {}, "has_more": False}],
+                         ids=["null-page", "list-page", "non-list-results"])
+def test_snapshot_rejects_malformed_provider_page_envelopes(page):
+    result = orchestrate_lesson_retrieval(
+        _ckr6_testing_request(), execute_read=lambda _: page,
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+    assert result.selected_lesson_ids == ()
+    assert result.retrieval_diagnostics["normalized_rows"] == 0
+    assert result.retrieval_diagnostics["incomplete_reason_code"] == "malformed-page"
+    assert result.retrieval_diagnostics["read_count"] == 1

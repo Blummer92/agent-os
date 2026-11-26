@@ -106,7 +106,7 @@ def replay(kind="original", input_rows=None):
     production did at the pinned before-state.
     """
     req = request(kind)
-    bounded = bridge._bound_relevant_lessons(req, candidates(input_rows))
+    bounded, _ = bridge._bound_relevant_lessons_with_order(req, candidates(input_rows))
     return consume_lesson_preflight(req, bounded)
 
 
@@ -179,7 +179,6 @@ def test_legacy_pre4066_lexical_counterfactual(monkeypatch):
     # Monkeypatching scores to zero models the earlier lexical tie mechanism.
     # It is not a live pre-merge read or a second production checkout.
     zero = lambda _req, tied: [0] * len(list(tied))
-    monkeypatch.setattr(bridge, "contextual_tie_scores", zero)
     monkeypatch.setattr(cks, "contextual_tie_scores", zero)
     result = replay()
     assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT

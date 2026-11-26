@@ -444,3 +444,34 @@ def test_historical_git_refresh_cannot_qualify_from_guardrail_alone():
     )
     result, _ = _replay_public_request(req, [item])
     assert result.selected_lesson_ids == ()
+
+
+@pytest.mark.parametrize("testing", [False, True])
+def test_library_coverage_explicit_avoid_when_contradiction_vetoes_primary(testing):
+    candidate = _as_selection_candidate(normalize_lesson_row(row()))
+    candidate = replace(
+        candidate,
+        avoid_when=("Never preserve explicitly requested library coverage.",),
+    )
+    result = select_coding_knowledge(request(testing=testing), (candidate,))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("shape", [{"ecosystem": "calendar"}, {"use_when": ()}],
+                         ids=["unrelated-ecosystem", "no-primary"])
+def test_library_tie_exact_title_cannot_replace_the_other_bound_signals(shape):
+    lesson = _as_selection_candidate(normalize_lesson_row(row()))
+    result = select_coding_knowledge(request(), (replace(lesson, **shape),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
+
+
+def test_library_tie_match_requires_explicit_request_ecosystem():
+    lesson = _as_selection_candidate(normalize_lesson_row(row()))
+    result = select_coding_knowledge(
+        replace(request(), ecosystem_hints=("calendar",)), (lesson,)
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.selected == ()
