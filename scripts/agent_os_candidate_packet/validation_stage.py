@@ -12,7 +12,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from scripts.agent_os_execution_capabilities import (
     RepositoryIdentity,
@@ -29,17 +29,12 @@ from scripts.agent_os_remote_validation import (
     serialize_pre_pr_validation_plan,
 )
 from scripts.agent_os_remote_validation.selector import deserialize_pre_pr_validation_plan
-from scripts.agent_os_remote_validation.models import paths_overlap
-from scripts.agent_os_issue_acceptance.approved_execution_projection import ApprovedExecutionProjection
 
 from .approval_stage import (
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
 from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
-
-if TYPE_CHECKING:
-    from .pre_validation_stage import PreValidationCandidateInputs
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -369,124 +364,97 @@ def prepare_validation_stage(
     if type(candidate_runtime_inputs) is not CandidateRuntimeInputs:
         raise TypeError("candidate_runtime_inputs must be exact CandidateRuntimeInputs")
 
-    return _prepare_bound_validation(approval_projection_stage_result, candidate_runtime_inputs)
-
-
-def _prepare_bound_validation(
-    upstream: ApprovalProjectionStageResult,
-    inputs: CandidateRuntimeInputs | PreValidationCandidateInputs,
-    *,
-    first_run: bool = False,
-) -> ValidationStageResult:
-    """Bind approved facts once for the runtime and the first-run stage."""
-    identity = inputs.repository_identity
-    slug = f"{identity.owner}/{identity.repository}"
-    state = inputs.repository_state_evidence
-    base_facts: dict[str, Any] = dict(
-        repository=slug, issue_number=inputs.issue_number, invocation_id=inputs.invocation_id,
-        source_sha=inputs.candidate_sha, tested_sha=inputs.tested_sha,
-        evaluator_sha=inputs.evaluator_sha, candidate_sha=inputs.candidate_sha,
-    )
-
-    def blocked(reason: str) -> ValidationStageResult:
-        return _blocked(reason, **base_facts) if first_run else _blocked(reason)
-
+    upstream = approval_projection_stage_result
     if upstream.status is not ApprovalProjectionStageStatus.COMPLETE:
-        return blocked("upstream-projection-not-complete")
+        return _blocked("upstream-projection-not-complete")
     projection = upstream.projection
-    if type(projection) is not ApprovedExecutionProjection or projection.complete is not True:
-        return blocked("upstream-projection-missing")
-    if any(getattr(projection, name) is not False for name in (
-        "authoritative", "execution_authorized", "side_effects_performed",
-    )):
-        return blocked("upstream-projection-authority")
-    for name in ("approval_id", "projection_id", "implementation_contract_fingerprint",
-                 "proposal_id", "repository_state_evidence_id"):
-        value = getattr(projection, name)
-        if type(value) is not str or not value.strip():
-            return blocked(name.replace("_", "-") + "-missing")
-    if type(projection.approval_revision_number) is not int or projection.approval_revision_number < 2:
-        return blocked("approval-revision-invalid")
-    if type(projection.repository) is not str or projection.repository.casefold() != slug.casefold():
-        return blocked("repository-binding-mismatch")
-    if not all(type(items) is tuple and all(type(item) is str and item for item in items)
-               for items in (projection.allowed_files, projection.forbidden_paths)):
-        return blocked("projection-paths-invalid")
-    if type(projection.required_tests) is not tuple or not all(
-        type(item) is str and item for item in projection.required_tests
-    ):
-        return blocked("projection-required-tests-invalid")
-    if first_run and not inputs.expected_changed_paths:
-        return blocked("expected-changed-paths-missing")
-    if first_run and not inputs.required_tests:
-        return blocked("required-tests-missing")
-    if inputs.tested_sha != projection.tested_repository_sha:
-        return blocked("tested-sha-mismatch")
-    if inputs.evaluator_sha != projection.evaluator_commit_sha:
-        return blocked("evaluator-sha-mismatch")
-    if tuple(sorted(set(projection.required_tests))) != inputs.required_tests:
-        return blocked("required-tests-mismatch")
-    if state.tested_sha != inputs.tested_sha:
-        return blocked("repository-evidence-tested-sha-mismatch")
-    if first_run and state.evidence_id != projection.repository_state_evidence_id:
-        return blocked("repository-state-evidence-id-mismatch")
-    if first_run and state.head_ref in (inputs.candidate_branch, "refs/heads/" + inputs.candidate_branch):
-        if inputs.candidate_sha != state.head_sha:
-            return blocked("candidate-head-sha-mismatch")
-    if any(paths_overlap(path, fence)
-           for path in inputs.expected_changed_paths for fence in projection.forbidden_paths):
-        return blocked("expected-changed-paths-forbidden")
-    if any(path not in projection.allowed_files for path in inputs.expected_changed_paths):
-        return blocked("expected-changed-paths-outside-allowlist")
+    if projection is None or not getattr(projection, "complete", False):
+        return _blocked("upstream-projection-missing")
 
-    try:
-        rules = load_rule_map()
-    except OSError:
-        return blocked("validation-rule-map-unavailable")
-    except ValueError:
-        return blocked("validation-rule-map-invalid")
-    repository = rules.get("repository")
-    if type(repository) is not str or repository.casefold() != slug.casefold():
-        return blocked("validation-rule-repository-mismatch")
+    repository = getattr(projection, "repository", None)
+    base_branch = getattr(projection, "base_branch", None)
+    base_sha = getattr(projection, "evaluated_repository_sha", None)
+    tested_sha = getattr(projection, "tested_repository_sha", None)
+    evaluator_sha = getattr(projection, "evaluator_commit_sha", None)
+    allowed_files = tuple(getattr(projection, "allowed_files", ()))
+    forbidden_paths = tuple(getattr(projection, "forbidden_paths", ()))
+    required_tests = tuple(getattr(projection, "required_tests", ()))
+
+    identity_repository = (
+        f"{candidate_runtime_inputs.repository_identity.owner}/"
+        f"{candidate_runtime_inputs.repository_identity.repository}"
+    )
+    if type(repository) is not str or repository.casefold() != identity_repository.casefold():
+        return _blocked("repository-binding-mismatch")
+    if candidate_runtime_inputs.tested_sha != tested_sha:
+        return _blocked("tested-sha-mismatch")
+    if candidate_runtime_inputs.evaluator_sha != evaluator_sha:
+        return _blocked("evaluator-sha-mismatch")
+    if candidate_runtime_inputs.required_tests != required_tests:
+        return _blocked("required-tests-mismatch")
+    if candidate_runtime_inputs.repository_state_evidence.tested_sha != tested_sha:
+        return _blocked("repository-evidence-tested-sha-mismatch")
+    if any(path not in allowed_files for path in candidate_runtime_inputs.expected_changed_paths):
+        return _blocked("expected-changed-paths-outside-allowlist")
+
     try:
         subject = PrePrValidationSubject(
-            repository=repository, issue_number=inputs.issue_number,
-            invocation_id=inputs.invocation_id, base_branch=projection.base_branch,
-            base_sha=projection.evaluated_repository_sha, branch=inputs.candidate_branch,
-            expected_source_sha=inputs.candidate_sha, tested_sha=inputs.tested_sha,
-            allowed_files=projection.allowed_files, forbidden_paths=projection.forbidden_paths,
-            required_command_identities=inputs.required_tests,
-            approval_id=projection.approval_id, approval_revision=projection.approval_revision_number,
-            projection_id=projection.projection_id,
-            implementation_contract_fingerprint=projection.implementation_contract_fingerprint,
-            expected_changed_paths=inputs.expected_changed_paths,
-            execution_mode="validation-only", candidate_bound=True,
+            repository=repository,
+            issue_number=candidate_runtime_inputs.issue_number,
+            invocation_id=candidate_runtime_inputs.invocation_id,
+            base_branch=base_branch,
+            base_sha=base_sha,
+            branch=candidate_runtime_inputs.candidate_branch,
+            expected_source_sha=candidate_runtime_inputs.candidate_sha,
+            tested_sha=candidate_runtime_inputs.tested_sha,
+            allowed_files=allowed_files,
+            forbidden_paths=forbidden_paths,
+            required_command_identities=required_tests,
+            approval_id=getattr(projection, "approval_id", ""),
+            approval_revision=getattr(projection, "approval_revision_number", 0),
+            projection_id=getattr(projection, "projection_id", ""),
+            implementation_contract_fingerprint=getattr(
+                projection, "implementation_contract_fingerprint", ""
+            ),
+            expected_changed_paths=candidate_runtime_inputs.expected_changed_paths,
+            execution_mode="validation-only",
+            candidate_bound=True,
         )
-        subject_id = pre_pr_validation_subject_id(subject)
+        plan = select_pre_pr_validation_plan(subject, load_rule_map())
     except (TypeError, ValueError):
-        return blocked("validation-subject-invalid")
-    try:
-        plan = select_pre_pr_validation_plan(subject, rules)
-        plan_id = pre_pr_validation_plan_id(plan)
-    except (TypeError, ValueError):
-        return blocked("validation-plan-invalid")
+        return _blocked("canonical-validation-construction-failed")
 
     return ValidationStageResult(
-        disposition=ValidationStageDisposition.GO, subject=subject, validation_plan=plan,
-        subject_id=subject_id, validation_plan_id=plan_id,
-        base_sha=subject.base_sha, **(base_facts | {"repository": repository}),
+        disposition=ValidationStageDisposition.GO,
+        subject=subject,
+        validation_plan=plan,
+        subject_id=pre_pr_validation_subject_id(subject),
+        validation_plan_id=pre_pr_validation_plan_id(plan),
+        repository=repository,
+        issue_number=candidate_runtime_inputs.issue_number,
+        invocation_id=candidate_runtime_inputs.invocation_id,
+        base_sha=base_sha,
+        source_sha=candidate_runtime_inputs.candidate_sha,
+        tested_sha=candidate_runtime_inputs.tested_sha,
+        evaluator_sha=candidate_runtime_inputs.evaluator_sha,
+        candidate_sha=candidate_runtime_inputs.candidate_sha,
     )
 
 
-def _blocked(
-    reason: str, *, repository: str | None = None, issue_number: int | None = None,
-    invocation_id: str | None = None, source_sha: str | None = None,
-    tested_sha: str | None = None, evaluator_sha: str | None = None,
-    candidate_sha: str | None = None,
-) -> ValidationStageResult:
+def _blocked(reason: str) -> ValidationStageResult:
     return ValidationStageResult(
-        disposition=ValidationStageDisposition.BLOCKED, subject=None, validation_plan=None,
-        subject_id=None, validation_plan_id=None, repository=repository, issue_number=issue_number,
-        invocation_id=invocation_id, base_sha=None, source_sha=source_sha, tested_sha=tested_sha,
-        evaluator_sha=evaluator_sha, candidate_sha=candidate_sha, reason_codes=(reason,),
+        disposition=ValidationStageDisposition.BLOCKED,
+        subject=None,
+        validation_plan=None,
+        subject_id=None,
+        validation_plan_id=None,
+        repository=None,
+        issue_number=None,
+        invocation_id=None,
+        base_sha=None,
+        source_sha=None,
+        tested_sha=None,
+        evaluator_sha=None,
+        candidate_sha=None,
+        reason_codes=(reason,),
     )
