@@ -16,9 +16,23 @@ class HarnessTests(unittest.TestCase):
     def test_bounded_selection(self):
         tasks = module.frozen_tasks()
         self.assertEqual(module.parse_tasks("T1,T2", tasks), ["T1", "T2"])
-        for bad in ("T1,T1", "T11", "T1,T2,T3,T4", ""):
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
-                module.parse_tasks(bad, tasks)
+
+    def _check_bounded_selection(self, bad):
+        tasks = module.frozen_tasks()
+        with self.assertRaises(ValueError):
+            module.parse_tasks(bad, tasks)
+
+    def test_bounded_selection_rejects_duplicate(self):
+        self._check_bounded_selection('T1,T1')
+
+    def test_bounded_selection_rejects_unknown(self):
+        self._check_bounded_selection('T11')
+
+    def test_bounded_selection_rejects_over_budget(self):
+        self._check_bounded_selection('T1,T2,T3,T4')
+
+    def test_bounded_selection_rejects_empty(self):
+        self._check_bounded_selection('')
 
     def test_no_not_needed_retrieval(self):
         self.assertFalse({"T2", "T5"} & module.TASKS_REQUIRING_SPECIALIZED)

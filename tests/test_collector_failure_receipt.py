@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 from scripts import agent_os_ci_evidence_collector as collector
+from tests.junit_cases import collect_cases
 
 HEAD = 'b' * 40
 PRIVATE = 'synthetic-private-marker'
@@ -115,11 +116,8 @@ class FailureReceiptTests(unittest.TestCase):
     def test_direct_http_403(self):
         self.assert_failed_receipt(urllib.error.HTTPError('https://example.invalid', 403, PRIVATE, {}, None), 403)
 
-    def test_transport_timeout_and_size_errors_write_receipts(self):
-        for error in [urllib.error.URLError(PRIVATE), TimeoutError(PRIVATE),
-                      ConnectionResetError(PRIVATE), RuntimeError('artifact archive exceeds size cap')]:
-            with self.subTest(error=type(error).__name__):
-                self.assert_failed_receipt(error)
+    def _check_transport_timeout_and_size_errors_write_receipts(self, error):
+        self.assert_failed_receipt(error)
 
     def test_other_downloads_continue_and_keep_verified_evidence(self):
         self.artifacts.append(artifact(12, 'junit-aggregate-2'))
@@ -151,20 +149,14 @@ class FailureReceiptTests(unittest.TestCase):
         self.assertEqual(receipt['subtest_log_corroboration'], 'unavailable')
         self.assertEqual(receipt['subtest_log_error']['stage'], 'aggregate_step_log_download')
 
-    def test_integrity_rejections_survive_other_download_failure(self):
+    def _check_integrity_rejections_survive_other_download_failure(self, fields, expected):
         data = report('jscpd')
-        for fields, expected in [
-            ({'digest': 'sha256:' + '0' * 64}, 'REJECT_DIGEST'),
-            ({'workflow_run': {'id': 100, 'head_sha': 'a' * 40}}, 'REJECT_WRONG_HEAD'),
-            ({'name': 'jscpd-advisory-1-attempt-1'}, 'REJECT_WRONG_ATTEMPT'),
-        ]:
-            with self.subTest(expected=expected):
-                other = artifact(12, 'jscpd-advisory-1-attempt-2')
-                other.update(fields)
-                self.artifacts = [self.artifacts[0], other]
-                code, receipt = self.invoke([RuntimeError(PRIVATE), data])
-                self.assertEqual(code, 1)
-                self.assertEqual(receipt['streams']['jscpd']['classification'], expected)
+        other = artifact(12, 'jscpd-advisory-1-attempt-2')
+        other.update(fields)
+        self.artifacts = [self.artifacts[0], other]
+        code, receipt = self.invoke([RuntimeError(PRIVATE), data])
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt['streams']['jscpd']['classification'], expected)
 
     def test_verified_scanner_failure_keeps_precedence(self):
         self.artifacts.append(artifact(13, 'pyan3-health-1-attempt-2'))
@@ -210,21 +202,16 @@ class FailureReceiptTests(unittest.TestCase):
         )
         self.assertEqual(result['classification'], 'REJECT_WRONG_HEAD')
 
-    def test_missing_or_malformed_download_url_writes_receipt(self):
+    def _check_missing_or_malformed_download_url_writes_receipt(self, value):
         actual_download = collector._api_get_bytes
-        for value in (None, '://malformed-' + PRIVATE):
-            with self.subTest(url_present=value is not None):
-                if value is None:
-                    self.artifacts[0].pop('archive_download_url', None)
-                else:
-                    self.artifacts[0]['archive_download_url'] = value
-                self.assert_failed_receipt(actual_download)
+        if value is None:
+            self.artifacts[0].pop('archive_download_url', None)
+        else:
+            self.artifacts[0]['archive_download_url'] = value
+        self.assert_failed_receipt(actual_download)
 
-    def test_http_protocol_errors_write_receipts(self):
-        for error in (http.client.IncompleteRead(b'partial', 10),
-                      http.client.BadStatusLine(PRIVATE)):
-            with self.subTest(error=type(error).__name__):
-                self.assert_failed_receipt(error)
+    def _check_http_protocol_errors_write_receipts(self, error):
+        self.assert_failed_receipt(error)
 
     def test_real_truncated_chunked_response_writes_receipt(self):
         class Handler(BaseHTTPRequestHandler):
@@ -254,6 +241,31 @@ class FailureReceiptTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+
+collect_cases(FailureReceiptTests, FailureReceiptTests._check_transport_timeout_and_size_errors_write_receipts, (
+    (urllib.error.URLError(PRIVATE),),
+    (TimeoutError(PRIVATE),),
+    (ConnectionResetError(PRIVATE),),
+    (RuntimeError('artifact archive exceeds size cap'),),
+))
+
+collect_cases(FailureReceiptTests, FailureReceiptTests._check_integrity_rejections_survive_other_download_failure, (
+    ({'digest': 'sha256:' + '0' * 64}, 'REJECT_DIGEST'),
+    ({'workflow_run': {'id': 100, 'head_sha': 'a' * 40}}, 'REJECT_WRONG_HEAD'),
+    ({'name': 'jscpd-advisory-1-attempt-1'}, 'REJECT_WRONG_ATTEMPT'),
+))
+
+collect_cases(FailureReceiptTests, FailureReceiptTests._check_missing_or_malformed_download_url_writes_receipt, (
+    (None,),
+    ('://malformed-' + PRIVATE,),
+))
+
+collect_cases(FailureReceiptTests, FailureReceiptTests._check_http_protocol_errors_write_receipts, (
+    (http.client.IncompleteRead(b'partial', 10),),
+    (http.client.BadStatusLine(PRIVATE),),
+))
 
 
 if __name__ == '__main__':
