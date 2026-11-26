@@ -291,3 +291,27 @@ def test_generic_notion_keyword_match_stays_advisory_even_with_negative_guidance
     assert result.notion_write_performed is False
     assert result.github_write_performed is False
     assert "verified-observation" not in result.to_json().casefold()
+
+
+def test_writer_guardrail_alone_cannot_supply_primary_readback_instruction():
+    from agent_memory_context_manager.lesson_activation_bridge import (
+        LessonActivationSkip, _as_selection_candidate, normalize_lesson_row,
+    )
+    from test_lesson_retrieval_orchestrator import _lesson_row, _rich_text, _title
+
+    row = _lesson_row("LL-444")
+    row["properties"].update({
+        "Lesson Learned": _title("Notion writer persistence readback"),
+        "What To Do Next Time": _rich_text("Review the Notion writer release notes."),
+        "Guardrail": _rich_text(GUIDANCE),
+        "Applies To": {"type": "multi_select", "multi_select": [{"name": "Notion"}]},
+    })
+    lesson = normalize_lesson_row(row)
+    assert not isinstance(lesson, LessonActivationSkip)
+    normalized_candidate = _as_selection_candidate(lesson)
+    assert normalized_candidate.canonical_github_refs
+    result = select_coding_knowledge(request(), (normalized_candidate,))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.selected == ()
+    assert result.authority_created is False

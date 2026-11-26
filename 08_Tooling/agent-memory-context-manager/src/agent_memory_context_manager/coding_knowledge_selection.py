@@ -632,8 +632,6 @@ def _github_rest_evidence_match(
 
     # Only source-owned title and activation guidance are eligible. Neither
     # arbitrary task_reference prose nor known_knowledge_refs are interpreted.
-    import re
-
     def has(pattern: str, value: str) -> bool:
         return re.search(r"\b(?:" + pattern + r")\b", value) is not None
 
@@ -642,7 +640,8 @@ def _github_rest_evidence_match(
         return False
 
     # Negative guidance can veto an apparent match, but cannot supply
-    # positive tokens. Do not combine tokens from different fields/sentences.
+    # positive tokens. In CKR11, use_when[0] is primary guidance and later
+    # entries include the guardrail. Do not combine fields or sentences.
     negated_action = (
         r"(?:never|do\s+not|don['’]t|skip|avoid)\s+"
         r"(?:reject|detect|verify|validate|check|fail)"
@@ -652,12 +651,12 @@ def _github_rest_evidence_match(
         return False
     clauses = tuple(
         clause.strip()
-        for value in candidate.use_when
+        for value in candidate.use_when[:1]
         for line in value.casefold().splitlines()
-        # A Markdown bullet affects presentation, not the clause's polarity.
-        for clause in re.split(r"[.!?;,]+", re.sub(r"^[-*+][ \t]+", "", line.strip()))
+        # Keep commas and semicolons inside the sentence: a trailing
+        # qualification must not become invisible. Strip only a leading bullet.
+        for clause in re.split(r"[.!?]+", re.sub(r"^[-*+][ \t]+", "", line.strip()))
     )
-    affirmative = r"(?:reject|detect|verify|validate|check|fail)\b"
     if pagination and has(r"issue[- ]comments?", title) and has(
         r"pag(?:e|es|ed|ing|ination)", title
     ):
@@ -669,9 +668,10 @@ def _github_rest_evidence_match(
             rf"(?:"
             rf"(?:reject|detect)\s+duplicate\s+{comment_identity}"
             rf"|(?:verify|validate|check)\s+(?:that\s+)?{comment_identity}\s+are\s+unique"
-            rf")\s+across\s+(?:(?:all|paginated)\s+)?pages?\b"
+            rf")\s+across\s+(?:(?:all|paginated)\s+)?pages?"
+            rf"(?:\s+and\s+verify\s+complete\s+page\s+records)?"
         )
-        if any(re.match(action_on_identity, clause) for clause in clauses):
+        if any(re.fullmatch(action_on_identity, clause) for clause in clauses):
             return True
 
     if receipts and all(
@@ -680,20 +680,13 @@ def _github_rest_evidence_match(
             r"size|bounded|bound|limit|limits|trust|provenance|cap",
         )
     ):
-        for clause in clauses:
-            if (
-                re.match(affirmative, clause)
-                and all(has(pattern, clause) for pattern in (
-                    r"github", r"http|rest", r"get", r"response|receipt",
-                    r"oversized|size|bytes?|bounded|bound|limit|limits",
-                ))
-                and re.search(
-                    r"\b(?:and|then)\s+(?:verify|validate|check|detect)\b"
-                    r".*\b(?:timestamp|timestamps)\b",
-                    clause,
-                )
-            ):
-                return True
+        # Both actions must apply to the stated REST evidence. A bag of
+        # size words and an unrelated timestamp is not a verified mechanism.
+        receipt_action = (
+            r"reject\s+oversized\s+github\s+(?:http|rest)\s+get\s+response\s+bytes"
+            r"\s+(?:and|then)\s+(?:verify|validate|check)\s+(?:edited\s+)?timestamp\s+provenance"
+        )
+        return any(re.fullmatch(receipt_action, clause) for clause in clauses)
     return False
 
 
@@ -797,7 +790,9 @@ def _match_candidate(
         and "notion" in {_norm(tag) for tag in candidate.keywords}
     ):
         title = candidate.name.casefold()
-        guidance = " ".join(candidate.use_when).casefold()
+        # Primary guidance can qualify; all other guidance can only veto.
+        guidance = candidate.use_when[0].casefold() if candidate.use_when else ""
+        all_guidance = " ".join(candidate.use_when).casefold()
         avoidance = " ".join(candidate.avoid_when).casefold()
         def whole(pattern: str, text: str) -> bool:
             return bool(re.search(r"(?<![a-z0-9])(?:" + pattern + r")(?![a-z0-9])", text))
@@ -822,13 +817,10 @@ def _match_candidate(
         persisted_state = r"(?:the )?(?:persisted|saved) (?:state|revision|changes)"
         # Require an explicit verification purpose or instrument in one
         # guidance element, not a bag of related words across statements.
-        confirms_persistence = any(
-            whole(
-                rf"(?:use|perform) {readback} to (?:verify|confirm) {persisted_state}"
-                rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}",
-                item.casefold(),
-            )
-            for item in candidate.use_when
+        confirms_persistence = whole(
+            rf"(?:use|perform) {readback} to (?:verify|confirm) {persisted_state}"
+            rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}",
+            guidance,
         )
 
         if (
@@ -837,7 +829,7 @@ def _match_candidate(
             and whole("notion", guidance)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
             and confirms_persistence
-            and not whole(negation, title + " " + guidance)
+            and not whole(negation, title + " " + all_guidance)
             and not readback_warning
         ):
             return 2, ("notion-writer-readback-text-match",)

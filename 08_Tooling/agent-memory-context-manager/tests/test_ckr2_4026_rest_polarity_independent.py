@@ -88,3 +88,95 @@ def test_explicit_receipt_mechanisms_still_qualify():
     )
     assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
     assert result.selected[0].reason_codes == ("github-rest-evidence-text-match",)
+
+
+@pytest.mark.parametrize(
+    "kind,hints,guidance",
+    [
+        ("pagination", PAGINATION,
+         "Reject duplicate GitHub comment IDs across pages only if duplicates are allowed."),
+        ("pagination", PAGINATION,
+         "Reject duplicate GitHub comment IDs across pages, but only if duplicates are allowed."),
+        ("receipt", RECEIPTS,
+         "Reject oversized GitHub HTTP GET response bytes and verify edited timestamp provenance; "
+         "otherwise treat the runtime timestamp as authoritative."),
+        ("receipt", RECEIPTS,
+         "Verify oversized GitHub HTTP GET response bytes are accepted and verify edited timestamp provenance."),
+        ("receipt", RECEIPTS,
+         "Reject oversized GitHub HTTP GET response bytes and verify a local cache timestamp."),
+    ],
+    ids=("conditional-duplicate-acceptance", "comma-carveout", "semicolon-carveout",
+         "wrong-size-action", "wrong-timestamp-object"),
+)
+def test_rest_specialization_requires_unambiguous_action_and_object(kind, hints, guidance):
+    result = select_coding_knowledge(request(hints), (candidate(kind, use_when=(guidance,)),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.selected == ()
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("kind,hints,guardrail", [
+    ("pagination", PAGINATION, PAGINATION_GUIDANCE),
+    ("receipt", RECEIPTS, RECEIPT_GUIDANCE),
+], ids=("pagination", "receipt"))
+@pytest.mark.parametrize("primary_is_relevant", (False, True), ids=("guardrail-only", "primary"))
+def test_normalized_rest_positive_must_come_from_primary_guidance(
+    kind, hints, guardrail, primary_is_relevant,
+):
+    row = _lesson_row("LL-444")
+    row["properties"].update({
+        "Lesson Learned": _title(candidate(kind).name),
+        "What To Do Next Time": _rich_text(
+            guardrail if primary_is_relevant else "Review the release readiness report."
+        ),
+        "Guardrail": _rich_text(guardrail),
+    })
+    result = orchestrate_lesson_retrieval(
+        request(hints), execute_read=lambda _query: {"results": [row], "has_more": False},
+    )
+    assert result.retrieval_diagnostics["normalized_rows"] == 1
+    assert result.retrieval_diagnostics["skipped_rows"] == 0
+    if primary_is_relevant:
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
+        assert result.selected_lesson_ids == ("LL-444",)
+    else:
+        assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+        assert result.selection_reason_codes == ("no-relevant-candidate",)
+        assert result.selected_lesson_ids == ()
+
+
+@pytest.mark.parametrize("kinds", [
+    ("rest",) * 4, ("writer",) * 4, ("rest", "writer") * 2,
+], ids=("rest-only", "writer-only", "mixed"))
+def test_consolidated_text_rules_abstain_on_four_way_unverified_tie(kinds):
+    writer_hints = ("Notion writer", "persistence readback", "failure receipts")
+    rows = []
+    for i, kind in enumerate(kinds, 440):
+        row = _lesson_row(f"LL-{i}")
+        title, guidance, tags = (
+            (candidate().name, PAGINATION_GUIDANCE, [])
+            if kind == "rest" else
+            ("Notion writer persistence readback",
+             "After a Notion write, use an independent readback to verify the persisted revision.",
+             [{"name": "Notion"}])
+        )
+        row["properties"].update({
+            "Lesson Learned": _title(title),
+            "What To Do Next Time": _rich_text(guidance),
+            "Guardrail": _rich_text("Check the evidence before continuing."),
+            "Applies To": {"type": "multi_select", "multi_select": tags},
+        })
+        rows.append(row)
+
+    result = orchestrate_lesson_retrieval(
+        request(PAGINATION + writer_hints),
+        execute_read=lambda _query: {"results": rows, "has_more": False},
+    )
+    assert result.retrieval_diagnostics["normalized_rows"] == 4
+    assert result.retrieval_diagnostics["best_bucket_tied_identities"] == 4
+    assert result.retrieval_diagnostics["selection_basis"] == "generic-tie-lexical-cut"
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.MANUAL_REVIEW
+    assert result.selection_reason_codes == ("generic-relevance-unverified",)
+    assert result.selected_lesson_ids == ()
+    assert result.authority_created is False
