@@ -524,6 +524,9 @@ class Executor:
             else self.repository.update_claimed_task(task, token, approval_request=approval_request)
         )
         if not persisted:
+            if approval_request is not None:
+                # A refusal does not prove this attempt lost its claim.
+                raise RuntimeError("Claimed deferral: task update refused; no workflow wait committed")
             raise RuntimeError("Execution claim was lost; task update refused")
         if task.status != TaskStatus.RUNNING:
             # update_claimed_task released the claim atomically with the result.

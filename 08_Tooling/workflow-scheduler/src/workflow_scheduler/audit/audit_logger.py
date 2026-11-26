@@ -1,6 +1,7 @@
 """Audit logger for task and workflow state transitions."""
 
 from dataclasses import dataclass, asdict
+import json
 from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.models import Task, TaskStatus, WorkflowPlan, WorkflowStatus
@@ -50,7 +51,7 @@ class AuditLogger:
             timestamp=utc_storage_string(utc_now()),
             event_type=event_type,
             task_id=task.id if task else None,
-            workflow_id=workflow.workflow_id if workflow else None,
+            workflow_id=workflow.workflow_id if workflow else (task.workflow_id if task else None),
             status_before=status_before,
             status_after=status_after,
             details=details or {},
@@ -353,10 +354,27 @@ class AuditLogger:
         )
 
     def get_events(self, task_id: Optional[str] = None, workflow_id: Optional[str] = None) -> List[AuditEvent]:
-        """Retrieve audit events."""
+        """Retrieve chronological events from durable storage when configured."""
+        if self.repository is not None:
+            rows = self.repository.get_audit_log(task_id=task_id, workflow_id=workflow_id)
+            return [self._restore_event(row) for row in reversed(rows)]
         events = self.events
         if task_id:
             events = [e for e in events if e.task_id == task_id]
         if workflow_id:
             events = [e for e in events if e.workflow_id == workflow_id]
         return events
+
+    @staticmethod
+    def _restore_event(row: Dict[str, Any]) -> AuditEvent:
+        """Project persisted row and event details to the existing wire shape."""
+        details = json.loads(row["details"])
+        return AuditEvent(
+            timestamp=details.get("timestamp", row["timestamp"]),
+            event_type=row["event_type"],
+            task_id=row["task_id"],
+            workflow_id=row["workflow_id"],
+            status_before=details.get("status_before"),
+            status_after=details.get("status_after"),
+            details=details.get("details", details),
+        )
