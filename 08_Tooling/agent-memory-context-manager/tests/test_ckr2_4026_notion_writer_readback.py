@@ -315,3 +315,24 @@ def test_writer_guardrail_alone_cannot_supply_primary_readback_instruction():
     assert result.reason_codes == ("no-relevant-candidate",)
     assert result.selected == ()
     assert result.authority_created is False
+
+
+@pytest.mark.parametrize("changes", [
+    {"name": "GitHub writer persistence readback"},
+    {"use_when": ("After a GitHub write, use an independent readback to verify the persisted revision.",)},
+    {"use_when": ("For a Notion migration, use an independent readback to verify the persisted revision.",)},
+    {"use_when": ("Record Notion metadata. After a GitHub write, use an independent readback "
+                  "to verify the persisted revision.",)},
+], ids=["provider-title", "provider-advice", "write-advice", "cross-sentence-provider"])
+def test_writer_provider_and_operation_signals_are_independent(changes):
+    result = select_coding_knowledge(request(), (candidate(**changes),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.selected == ()
+
+
+def test_writer_avoid_when_can_repeat_a_positive_guard_without_vetoing():
+    lesson = candidate(avoid_when=("Use independent readback for verification.",))
+    result = select_coding_knowledge(request(), (lesson,))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("notion-writer-readback-text-match",)

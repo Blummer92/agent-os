@@ -180,3 +180,71 @@ def test_consolidated_text_rules_abstain_on_four_way_unverified_tie(kinds):
     assert result.selection_reason_codes == ("generic-relevance-unverified",)
     assert result.selected_lesson_ids == ()
     assert result.authority_created is False
+
+
+@pytest.mark.parametrize("kind,hints,guide,contrary", [
+    ("pagination", PAGINATION, PAGINATION_GUIDANCE, "Keep duplicate GitHub comment IDs across paginated pages."),
+    ("pagination", PAGINATION, PAGINATION_GUIDANCE, "Do not reject duplicate GitHub comment IDs across pages."),
+    ("receipt", RECEIPTS, RECEIPT_GUIDANCE, "Accept oversized GitHub HTTP GET response bytes."),
+    ("receipt", RECEIPTS, RECEIPT_GUIDANCE, "Ignore edited timestamp provenance."),
+], ids=["retain-duplicates", "negated-rejection", "accept-oversize", "ignore-provenance"])
+@pytest.mark.parametrize("where", ["primary", "guardrail", "avoid"])
+def test_rest_contradiction_vetoes_positive_evidence(kind, hints, guide, contrary, where):
+    data = {
+        "primary": dict(use_when=(f"{guide} {contrary}",)),
+        "guardrail": dict(use_when=(guide, contrary)),
+        "avoid": dict(use_when=(guide,), avoid_when=(contrary,)),
+    }[where]
+    result = select_coding_knowledge(request(hints), (candidate(kind, **data),))
+    assert result.selected == ()
+    assert result.reason_codes == ("no-relevant-candidate",)
+
+
+@pytest.mark.parametrize("kind,hints", [("pagination", PAGINATION), ("receipt", RECEIPTS)])
+def test_rest_unrelated_guardrail_does_not_veto_the_reviewed_mechanism(kind, hints):
+    lesson = candidate(kind)
+    result = select_coding_knowledge(
+        request(hints),
+        (candidate(kind, use_when=(*lesson.use_when, "Never check repository release notes during offline tests.")),),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("github-rest-evidence-text-match",)
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("kind,hints,shape", [
+    ("pagination", RECEIPTS, {}),
+    ("receipt", PAGINATION, {}),
+    ("pagination", PAGINATION, {"name": "GitHub commit pagination"}),
+    ("pagination", PAGINATION, {"name": "GitLab issue comment pagination"}),
+    ("receipt", RECEIPTS, {"name": "GitHub bounded Git logs"}),
+], ids=["wrong-pagination-request", "wrong-receipt-request", "wrong-paginated-resource",
+        "wrong-provider-title", "wrong-receipt-title"])
+def test_rest_title_and_request_signals_are_independent(kind, hints, shape):
+    result = select_coding_knowledge(request(hints), (candidate(kind, **shape),))
+    assert result.selected == ()
+    assert result.reason_codes == ("no-relevant-candidate",)
+
+
+@pytest.mark.parametrize("kind,hints,guide,unrelated", [
+    ("pagination", PAGINATION, PAGINATION_GUIDANCE, "Ignore edited timestamp provenance."),
+    ("receipt", RECEIPTS, RECEIPT_GUIDANCE, "Keep duplicate GitHub comment IDs."),
+    ("pagination", PAGINATION, PAGINATION_GUIDANCE, "Do not keep duplicate GitHub comment IDs."),
+    ("receipt", RECEIPTS, RECEIPT_GUIDANCE, "Never accept oversized GitHub HTTP GET response bytes."),
+], ids=["other-receipt-mechanism", "other-pagination-mechanism", "aligned-pagination", "aligned-receipt"])
+def test_rest_aligned_or_other_mechanism_caution_does_not_veto(kind, hints, guide, unrelated):
+    lesson = candidate(kind, use_when=(guide, unrelated))
+    result = select_coding_knowledge(request(hints), (lesson,))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert result.selected[0].reason_codes == ("github-rest-evidence-text-match",)
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("scope", [("Python",), ("GitHub REST API",), ()],
+                         ids=["no-provider", "no-language", "no-scope"])
+def test_rest_requires_explicit_python_and_github_rest_intent(scope):
+    req = request(PAGINATION, ecosystem_hints=scope, language_hints=())
+    result = select_coding_knowledge(req, (candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("no-relevant-candidate",)
+    assert result.selected == ()

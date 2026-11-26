@@ -306,7 +306,7 @@ def consume_lesson_preflight(
             stale_or_conflicting += 1
         eligible.append(lesson)
 
-    candidates = tuple(_candidate(item) for item in eligible)
+    candidates = tuple(_as_selection_candidate(item) for item in eligible)
     if _ranked_order is None:
         selection = select_coding_knowledge(effective_request, candidates)
     else:
@@ -367,7 +367,8 @@ def plan_repair_retry_boundary(
     )
 
 
-def _candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCandidate:
+def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCandidate:
+    """Project normalized evidence into the canonical advisory CKR2 candidate."""
     return CodingKnowledgeCandidate(
         knowledge_id=lesson.lesson_id,
         source_system="notion-lessons-learned",
@@ -397,12 +398,11 @@ def _from_selection(
         SufficiencyStatus.INSUFFICIENT: LessonRetrievalStatus.INSUFFICIENT,
         SufficiencyStatus.MANUAL_REVIEW: LessonRetrievalStatus.MANUAL_REVIEW,
     }[selection.sufficiency_status]
-    selected_ids = tuple(item.candidate.knowledge_id for item in selection.selected)
     return LessonPreflightResult(
         lesson_retrieval_status=status,
         candidate_count=selection.candidate_count,
         selected_count=selection.selected_count,
-        selected_lesson_ids=selected_ids,
+        selected_lesson_ids=selection.knowledge_refs,
         selection_reason_codes=selection.reason_codes,
         canonical_github_refs=selection.canonical_github_refs,
         knowledge_refs=selection.knowledge_refs,

@@ -458,3 +458,59 @@ def test_reviewed_title_refuses_contradiction_after_approved_instruction(separat
     )
     assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
     assert selected == []
+
+
+@pytest.mark.parametrize("field", ["guardrail", "avoid_when"])
+@pytest.mark.parametrize("contradiction", [
+    "Do not reject failed executor outcomes before completing a Notion read.",
+    "Don't reject explicit executor errors before reporting dispatch completion.",
+    "Don’t reject explicit non-success status before marking governed read dispatch completed.",
+    "Never validate executor output before marking governed read dispatch completed.",
+    "Skip rejecting failed executor outcomes before completing a Notion read.",
+    "Do not complete a Notion read unless failed executor outcomes were accepted.",
+], ids=["outcome", "explicit-error", "status", "validation", "skip", "reversed-prerequisite"])
+def test_reviewed_executor_advice_abstains_on_a_direct_contradiction(field, contradiction):
+    positive = candidate()
+    overrides = ({"use_when": (*positive.use_when, contradiction)}
+                 if field == "guardrail" else {"avoid_when": (contradiction,)})
+    result, selected = reasons_for(
+        request("notion read", "executor outcome"), replace(positive, **overrides)
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert selected == []
+    assert result.authority_created is False
+
+
+@pytest.mark.parametrize("guardrail", [
+    GUARDRAIL,
+    "Do not reject malformed page metadata before preserving the diagnostic.",
+    "Never validate executor output from unrelated test fixtures against production schemas.",
+    "Do not reject successful executor outcomes before completing a Notion read.",
+    "Do not complete a Notion read unless failed executor outcomes were rejected.",
+], ids=["existing", "different-object", "different-context", "success", "aligned-prerequisite"])
+def test_reviewed_executor_advice_survives_aligned_or_unrelated_guardrail(guardrail):
+    positive = candidate()
+    result, selected = reasons_for(
+        request("notion read", "executor outcome"),
+        replace(positive, use_when=(positive.use_when[0], guardrail)),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert selected == [(REASON,)]
+    assert result.authority_created is False
+
+
+def test_reviewed_notion_wording_from_another_provider_is_not_a_verified_lesson():
+    result, selected = reasons_for(
+        request("notion read", "executor outcome"),
+        replace(candidate(), source_system="local-notes"),
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert selected == []
+
+
+def test_executor_source_with_no_primary_guidance_returns_no_match():
+    result, selected = reasons_for(
+        request("notion read", "executor outcome"), replace(candidate(), use_when=())
+    )
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert selected == []

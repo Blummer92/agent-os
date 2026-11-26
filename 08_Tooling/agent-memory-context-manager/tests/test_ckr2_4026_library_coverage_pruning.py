@@ -63,3 +63,11 @@ def test_attainable_upper_bound_stops_after_first_improvement(monkeypatch):
 
 def test_one_available_library_does_not_reorder():
     assert _rank(("-", "-", "-", "A"), ("A", "B")) == [0, 1, 2, 3]
+
+
+def test_coverage_already_at_upper_bound_needs_no_combinations(monkeypatch):
+    def unreachable(*_):
+        raise AssertionError("a proven maximal shortlist must not search")
+
+    monkeypatch.setattr(selector, "combinations", unreachable)
+    assert _rank(("A", "A", "B", "B", "-", "B"), ("A", "B")) == list(range(6))

@@ -1,7 +1,7 @@
 """#4026: relevance-blind lexical ID tie-break decides which tied lessons are kept.
 
 Inside one relevance bucket both the five-ID candidate bound
-(`_bound_relevant_lessons`) and the three-item CKR2 cut order lessons by
+(`_bound_relevant_lessons_with_order`) and the three-item CKR2 cut order lessons by
 `lesson_id.casefold()` ("ll-10" < "ll-2" < "ll-65"). All records here are
 SYNTHETIC fixtures; they prove selector mechanics, not live Notion content,
 live eligibility, or production accuracy. No independently labelled gold set

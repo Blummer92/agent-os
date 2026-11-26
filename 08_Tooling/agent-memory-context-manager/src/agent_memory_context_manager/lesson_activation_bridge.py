@@ -28,7 +28,6 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .coding_knowledge_selection import (
     MAX_GUIDANCE_TEXT_CHARS,
     MAX_SELECTED,
-    CodingKnowledgeCandidate,
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
@@ -37,14 +36,14 @@ from .coding_knowledge_selection import (
     _PR_REFRESH_REASON,
     _match_candidate,
     _norm,
-    contextual_tie_scores,
-    required_library_coverage_order,
+    _rank_tied_candidates,
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
     LessonPreflightResult,
     LessonRecordEvidence,
     LessonRetrievalStatus,
+    _as_selection_candidate,
     consume_lesson_preflight,
     plan_lesson_preflight,
 )
@@ -52,6 +51,7 @@ from .lesson_preflight import (
 MAX_ROW_TEXT_CHARS = 512
 MAX_ROW_LIST_ITEMS = 20
 MAX_RETRIEVAL_ROWS = MAX_LESSON_RECORDS * 5
+_ROW_BOUND_MESSAGE = "paginated retrieval exceeded row bound"
 # #3973 full-database repair: a Notion query page is not the database.
 # The live Lessons Learned database holds more rows than one page_size=25
 # response can carry, and the provider may return smaller pages. Follow
@@ -173,6 +173,15 @@ def known_lesson_numbers(known_ids: Sequence[str]) -> tuple[int, ...]:
         if match is not None:
             numbers[int(match.group(1))] = None
     return tuple(numbers)[:MAX_LESSON_RECORDS]
+
+
+_IDENTITY_MISMATCH_MESSAGE = "known-reference response contained an unrequested lesson"
+
+
+def _require_known_identity(lesson_id: str, numbers: tuple[int, ...]) -> None:
+    """Check normalized evidence against the provider's numeric identity filter."""
+    if numbers and not any(number in numbers for number in known_lesson_numbers((lesson_id,))):
+        raise LessonActivationError(_IDENTITY_MISMATCH_MESSAGE)
 
 
 def build_known_reference_query(known_ids: Sequence[str]) -> dict[str, Any]:
@@ -345,7 +354,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
         # supporting refs never substitute for a missing primary. They are
         # reported as dropped rather than silently admitted or lost.
         canonical_github_refs = ()
-        dropped_supporting_refs = (supporting_dropped + supporting_valid)[:MAX_ROW_LIST_ITEMS]
+        dropped_supporting_refs = supporting_dropped + supporting_valid
 
     evidence_refs: tuple[str, ...] = ()
     page_url = row.get("url")
@@ -377,25 +386,6 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
         return LessonActivationSkip(lesson_id, "oversized-or-malformed-field")
 
 
-def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCandidate:
-    return CodingKnowledgeCandidate(
-        knowledge_id=lesson.lesson_id,
-        source_system="notion-lessons-learned",
-        source_revision=lesson.source_revision,
-        currentness=lesson.currentness,
-        name=lesson.title,
-        ecosystem=lesson.ecosystem,
-        library_name=lesson.library_name,
-        capability_kind=lesson.capability_kind,
-        keywords=lesson.keywords,
-        use_when=(lesson.what_to_do_next_time, lesson.guardrail),
-        avoid_when=(),
-        canonical_github_refs=lesson.canonical_github_refs,
-        evidence_refs=lesson.evidence_refs,
-        authority_conflict=lesson.authority_conflict,
-    )
-
-
 def _bound_relevant_lessons_with_order(
     request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
 ) -> tuple[tuple[LessonRecordEvidence, ...], tuple[str, ...]]:
@@ -410,14 +400,11 @@ def _bound_relevant_lessons_with_order(
     silently dropped with the second revision.
     """
     ranked: list[tuple[int, tuple[str, str], LessonRecordEvidence]] = []
-    unranked: list[LessonRecordEvidence] = []
     for lesson in lessons:
         bucket, _ = _match_candidate(request, _as_selection_candidate(lesson))
         if bucket:
             lesson_id = lesson.lesson_id
             ranked.append((bucket, (lesson_id.casefold(), lesson_id), lesson))
-        else:
-            unranked.append(lesson)
 
     if ranked:
         ranked.sort(key=lambda item: (-item[0], item[1]))
@@ -429,13 +416,10 @@ def _bound_relevant_lessons_with_order(
         for bucket in sorted({item[0] for item in ranked}, reverse=True):
             # Score equal rows once. The original rows are retained below.
             group = list(dict.fromkeys(item for item in ranked if item[0] == bucket))
-            candidates = [_as_selection_candidate(item[2]) for item in group]
-            scores = contextual_tie_scores(request, candidates)
-            order = sorted(range(len(group)), key=lambda i: (-scores[i], group[i][1]))
-            ordered_ids = [group[i][2].lesson_id for i in order]
-            prior_ordered.extend(ordered_ids)
-            coverage_order = required_library_coverage_order(request, (candidates[i] for i in order))
-            reordered.extend(ordered_ids[i] for i in coverage_order)
+            candidates = tuple(_as_selection_candidate(item[2]) for item in group)
+            prior, coverage = _rank_tied_candidates(request, candidates)
+            prior_ordered.extend(candidates[i].knowledge_id for i in prior)
+            reordered.extend(candidates[i].knowledge_id for i in coverage)
         # Bound identities first, then retain every original record for those
         # identities, including otherwise unranked conflicting revisions.
         ranked_ids = _bounded_identity_order(reordered)
@@ -460,16 +444,9 @@ def _bound_relevant_lessons_with_order(
             tuple(lesson for lesson in lessons if lesson.lesson_id in selected_ids),
             ranked_ids,
         )
-    unranked.sort(key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
+    unranked = sorted(lessons, key=lambda item: (item.lesson_id.casefold(), item.lesson_id))
     ids = _bounded_identity_order(lesson.lesson_id for lesson in unranked)
     return tuple(lesson for lesson in unranked if lesson.lesson_id in ids), ids
-
-
-def _bound_relevant_lessons(
-    request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
-) -> tuple[LessonRecordEvidence, ...]:
-    """Backward-compatible tuple-only bridge boundary."""
-    return _bound_relevant_lessons_with_order(request, lessons)[0]
 
 
 # PR-1 (observational): closed vocabulary describing HOW the CKR2 matcher chose
@@ -575,9 +552,6 @@ def orchestrate_lesson_activation(
     data source through the existing read-only Notion adapter; this function
     never constructs a client, credential, or second retrieval mechanism.
     """
-    if type(request) is not CodingKnowledgeRequest:
-        raise TypeError("request must be a CodingKnowledgeRequest")
-
     plan = plan_lesson_preflight(request)
     if not plan.retrieval_required:
         return consume_lesson_preflight(request, ())
@@ -585,10 +559,14 @@ def orchestrate_lesson_activation(
     if execute_read is None:
         return consume_lesson_preflight(request, (), retrieval_available=False)
 
-    if plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE and known_lesson_numbers(
-        request.known_knowledge_refs
-    ):
+    known_numbers = (
+        known_lesson_numbers(request.known_knowledge_refs)
+        if plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE else ()
+    )
+    if known_numbers:
         query = build_known_reference_query(request.known_knowledge_refs)
+    elif RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY in request.attempted_retrieval:
+        return consume_lesson_preflight(request, (), retrieval_available=False)
     else:
         query = build_filtered_query(request)
 
@@ -610,17 +588,13 @@ def orchestrate_lesson_activation(
         page_rows = _extract_bounded_rows(raw)
         # Validate pagination BEFORE admitting any rows. At the row boundary
         # a complete 25-row page is acceptable only with has_more=False.
-        has_more, next_cursor = _page_cursor(raw)
-        if len(rows) + len(page_rows) > MAX_RETRIEVAL_ROWS:
-            raise LessonActivationError("paginated retrieval exceeded row bound")
+        row_count = len(rows) + len(page_rows)
+        cursor = _continuation_cursor(raw, at_row_bound=row_count >= MAX_RETRIEVAL_ROWS)
+        if row_count > MAX_RETRIEVAL_ROWS:
+            raise LessonActivationError(_ROW_BOUND_MESSAGE)
         rows.extend(page_rows)
-        if not has_more:
+        if cursor is None:
             break
-        if len(rows) >= MAX_RETRIEVAL_ROWS:
-            raise LessonActivationError("paginated retrieval exceeded row bound")
-        if next_cursor is None:
-            raise LessonActivationError("paginated retrieval missing next cursor")
-        cursor = next_cursor
     else:
         raise LessonActivationError("paginated retrieval exceeded page bound")
 
@@ -628,6 +602,7 @@ def orchestrate_lesson_activation(
     for row in rows:
         normalized = normalize_lesson_row(row)
         if isinstance(normalized, LessonRecordEvidence):
+            _require_known_identity(normalized.lesson_id, known_numbers)
             lessons.append(normalized)
 
     bounded, rank_order = _bound_relevant_lessons_with_order(request, lessons)
@@ -645,12 +620,12 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     if not all(isinstance(item, Mapping) for item in results):
         raise LessonActivationError("read executor result contains non-mapping items")
     if len(results) > MAX_RETRIEVAL_ROWS:
-        raise LessonActivationError("paginated retrieval exceeded row bound")
+        raise LessonActivationError(_ROW_BOUND_MESSAGE)
     return list(results)
 
 
-def _page_cursor(raw: Any) -> tuple[bool, str | None]:
-    """Validate one page's pagination state, or fail closed.
+def _page_cursor(raw: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Validate pagination state after page envelope validation.
 
     A missing ``has_more`` is malformed, not a complete single page:
     assuming completeness could silently truncate the database.
@@ -664,8 +639,6 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     whitespace-only token; it must never rewrite the value forwarded as
     ``start_cursor``.
     """
-    if not isinstance(raw, Mapping):
-        raise LessonActivationError("read executor must return a mapping")
     if "has_more" not in raw:
         raise LessonActivationError("read executor result is missing 'has_more'")
     has_more = raw["has_more"]
@@ -681,6 +654,18 @@ def _page_cursor(raw: Any) -> tuple[bool, str | None]:
     return has_more, next_cursor
 
 
+def _continuation_cursor(raw: Mapping[str, Any], *, at_row_bound: bool) -> str | None:
+    """Return the next opaque cursor, or None only for a complete page."""
+    has_more, cursor = _page_cursor(raw)
+    if not has_more:
+        return None
+    if at_row_bound:
+        raise LessonActivationError(_ROW_BOUND_MESSAGE)
+    if cursor is None:
+        raise LessonActivationError("paginated retrieval missing next cursor")
+    return cursor
+
+
 def _guidance_text(prop: Any) -> tuple[str | None, str]:
     """Advisory narrative text under the shared guidance bound.
 
@@ -692,52 +677,38 @@ def _guidance_text(prop: Any) -> tuple[str | None, str]:
     """
     if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
         return None, "missing"
-    items = prop.get("rich_text")
-    if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
-        return None, "missing"
-    parts: list[str] = []
-    for item in items:
-        if not isinstance(item, Mapping):
-            return None, "missing"
-        text = item.get("plain_text")
-        if not isinstance(text, str):
-            return None, "missing"
-        parts.append(text)
-    joined = "".join(parts).strip()
-    if not joined:
+    joined = _read_text_segments(prop.get("rich_text"))
+    if joined is None:
         return None, "missing"
     if len(joined) > MAX_GUIDANCE_TEXT_CHARS:
         return None, "oversized"
     return joined, "ok"
 
 
-def _plain_text(rich_text: Any) -> str | None:
-    if not isinstance(rich_text, list) or len(rich_text) > MAX_ROW_LIST_ITEMS:
+def _read_text_segments(items: Any) -> str | None:
+    """Join a bounded provider rich-text array without coercing malformed items."""
+    if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
         return None
     parts: list[str] = []
-    for item in rich_text:
+    for item in items:
         if not isinstance(item, Mapping):
             return None
         text = item.get("plain_text")
         if not isinstance(text, str):
             return None
         parts.append(text)
-    joined = "".join(parts).strip()
-    if not joined or len(joined) > MAX_ROW_TEXT_CHARS:
-        return None
-    return joined
+    return "".join(parts).strip() or None
+
+
+def _plain_text(rich_text: Any) -> str | None:
+    joined = _read_text_segments(rich_text)
+    return joined if joined is not None and len(joined) <= MAX_ROW_TEXT_CHARS else None
 
 
 def _title_text(prop: Any) -> str | None:
     if not isinstance(prop, Mapping) or prop.get("type") != "title":
         return None
     return _plain_text(prop.get("title"))
-
-
-def _rich_text(prop: Any) -> str | None:
-    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
-        return None
-    return _plain_text(prop.get("rich_text"))
 
 
 def _rich_text_or_unique_id(prop: Any) -> str | None:
@@ -801,11 +772,9 @@ def _checkbox(prop: Any) -> bool | None:
 
 def _is_supporting_ref(value: str) -> bool:
     """One canonical supporting ref: this repo's issue/PR, or a governance path."""
-    if len(value) > MAX_ROW_TEXT_CHARS:
-        return False
-    if _SUPPORTING_REF.fullmatch(value) is not None:
-        return True
-    return value.startswith(_GOVERNANCE_PREFIXES)
+    return not _invalid_source_text(value) and (
+        _SUPPORTING_REF.fullmatch(value) is not None or _is_governance_source(value)
+    )
 
 
 def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -839,51 +808,34 @@ def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str,
         ref = text.strip()
         if not ref:
             continue
-        # A link annotation (what Notion makes clickable) must agree with
-        # the displayed text: a live row whose display text names one
-        # canonical ref while its link target points elsewhere is a spoof
-        # shape, so drop the item rather than admitting the display while
-        # the UI links somewhere else. Real API responses carry the link
-        # target as top-level `href` (and requests as nested `text.link`);
-        # the pre-repair writer emitted a top-level `link` key, so all
-        # three shapes are checked. Any present container that is malformed
-        # or disagrees with the displayed ref drops the item.
-        link_targets: list[str] = []
-        malformed_link = False
-        # Real API response field: `href` is always a string or null.
-        href = item.get("href")
-        if href is not None:
-            if isinstance(href, str) and href.strip():
-                link_targets.append(href.strip())
-            else:
-                malformed_link = True
-        # Legacy mock/pre-repair-writer shape: top-level `link` object.
-        legacy = item.get("link")
-        if legacy is not None:
-            if isinstance(legacy, Mapping) and isinstance(legacy.get("url"), str) and legacy["url"].strip():
-                link_targets.append(legacy["url"].strip())
-            else:
-                malformed_link = True
-        text_obj = item.get("text")
-        if isinstance(text_obj, Mapping):
-            nested = text_obj.get("link")
-            if nested is not None:
-                if isinstance(nested, Mapping) and isinstance(nested.get("url"), str) and nested["url"].strip():
-                    link_targets.append(nested["url"].strip())
-                else:
-                    malformed_link = True
-        if malformed_link or any(target != ref for target in link_targets):
-            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
-            continue
-        if len(valid) >= MAX_SUPPORTING_REFS:
-            dropped.append(ref[:MAX_ROW_TEXT_CHARS])
-            continue
-        if ref in seen or not _is_supporting_ref(ref):
+        if (
+            not _annotations_agree(item, ref)
+            or len(valid) >= MAX_SUPPORTING_REFS
+            or ref in seen
+            or not _is_supporting_ref(ref)
+        ):
             dropped.append(ref[:MAX_ROW_TEXT_CHARS])
             continue
         seen.add(ref)
         valid.append(ref)
-    return tuple(valid), tuple(dropped[:MAX_ROW_LIST_ITEMS])
+    return tuple(valid), tuple(dropped)
+
+
+def _annotations_agree(item: Mapping[str, Any], ref: str) -> bool:
+    """Every present response, legacy, or request-shaped target must match."""
+    href = item.get("href")
+    if href is not None and not _same_link(href, ref):
+        return False
+    text = item.get("text")
+    nested = text.get("link") if isinstance(text, Mapping) else None
+    return all(
+        link is None or (isinstance(link, Mapping) and _same_link(link.get("url"), ref))
+        for link in (item.get("link"), nested)
+    )
+
+
+def _same_link(target: Any, ref: str) -> bool:
+    return isinstance(target, str) and target.strip() == ref
 
 
 def _github_source_link(prop: Any) -> str | None:
@@ -893,27 +845,10 @@ def _github_source_link(prop: Any) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     value = value.strip()
-    if len(value) > MAX_ROW_TEXT_CHARS:
+    if _invalid_source_text(value):
         return None
-    # CKR6 full-database readback (2026-11-14): a `#` fragment names a
-    # sub-resource of a page, not a canonical resource -- one live lesson's
-    # primary was a pull-request review anchor (`.../pull/1858` plus a
-    # `#pullrequestreview-...` fragment) and was admitted as CURRENT.
-    # A review/comment anchor is not a canonical issue/PR resource, so it
-    # is rejected here (UNVERIFIABLE) rather than admitted as the lesson's
-    # provenance. Plain resource URLs are unaffected: blob-URL primaries
-    # (relied on by an existing test) and governance-path primaries still
-    # normalize as CURRENT.
-    if (
-        "#" in value or "\\" in value
-        or any(ord(char) < 32 or ord(char) == 127 for char in value)
-    ):
-        return None
-
-    if value.startswith(_GOVERNANCE_PREFIXES):
-        # Keep the existing governed locations but require a path to a
-        # resource, not just the directory prefix.
-        return value if _has_source_segments(value.split("/")) else None
+    if _is_governance_source(value):
+        return value
 
     github = "https://github.com/"
     if not value.startswith(github) or "?" in value or any(char.isspace() for char in value):
@@ -940,6 +875,18 @@ def _github_source_link(prop: Any) -> str | None:
             ):
                 return value
     return None
+
+
+def _invalid_source_text(value: str) -> bool:
+    # A fragment names a subresource (e.g. a PR review), not canonical evidence.
+    return (
+        len(value) > MAX_ROW_TEXT_CHARS or "#" in value or "\\" in value
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    )
+
+
+def _is_governance_source(value: str) -> bool:
+    return value.startswith(_GOVERNANCE_PREFIXES) and _has_source_segments(value.split("/"))
 
 
 def _has_source_segments(segments: Sequence[str]) -> bool:

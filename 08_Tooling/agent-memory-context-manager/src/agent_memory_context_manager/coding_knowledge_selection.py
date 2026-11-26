@@ -325,6 +325,16 @@ def required_library_coverage_order(
     return [*best, *(i for i in indices if i not in best)]
 
 
+def _rank_tied_candidates(
+    request: CodingKnowledgeRequest, candidates: tuple[CodingKnowledgeCandidate, ...],
+) -> tuple[list[int], list[int]]:
+    """Rank one ID-ordered bucket; retain the pre-coverage order for replay."""
+    scores = contextual_tie_scores(request, candidates)
+    contextual = sorted(range(len(candidates)), key=lambda i: -scores[i])
+    coverage = required_library_coverage_order(request, (candidates[i] for i in contextual))
+    return contextual, [contextual[i] for i in coverage]
+
+
 def select_coding_knowledge(
     request: CodingKnowledgeRequest,
     candidates: tuple[CodingKnowledgeCandidate, ...],
@@ -385,7 +395,7 @@ def _select_coding_knowledge(
     for candidate in deduped:
         bucket, reasons = _match_candidate(request, candidate)
         if bucket:
-            ranked.append((bucket, candidate.knowledge_id.casefold(), candidate, reasons))
+            ranked.append((bucket, candidate, reasons))
 
     if not ranked:
         return _result(
@@ -401,7 +411,7 @@ def _select_coding_knowledge(
     # stale or forged identity priorities and cross-bucket inversions.
     if _ranked_order is not None:
         ranked_buckets = {item.knowledge_id: 0 for item in deduped}
-        ranked_buckets.update((item[2].knowledge_id, item[0]) for item in ranked)
+        ranked_buckets.update((item[1].knowledge_id, item[0]) for item in ranked)
         invalid_order = (
             type(_ranked_order) is not tuple
             or any(type(identity) is not str for identity in _ranked_order)
@@ -426,52 +436,35 @@ def _select_coding_knowledge(
 
     best_bucket = max(item[0] for item in ranked)
     best = [item for item in ranked if item[0] == best_bucket]
-    best.sort(key=lambda item: item[1])
     if _ranked_order is None:
-        # Standalone CKR2 callers retain the original bounded ranking.
-        scores = contextual_tie_scores(request, (item[2] for item in best))
-        order = sorted(range(len(best)), key=lambda index: (-scores[index], best[index][1]))
-        best = [best[index] for index in order]
-        coverage_order = required_library_coverage_order(
-            request, (item[2] for item in best)
-        )
-        best = [best[index] for index in coverage_order]
+        # Filtering retains the total ID order established by _deduplicate.
+        _, order = _rank_tied_candidates(request, tuple(item[1] for item in best))
+        best = [best[i] for i in order]
     else:
         # Never recompute document frequency on the five finalists.
         priority = {identity: index for index, identity in enumerate(_ranked_order)}
-        best.sort(key=lambda item: priority[item[2].knowledge_id])
+        best.sort(key=lambda item: priority[item[1].knowledge_id])
 
-    # Check the entire winning bucket before the final cut, not weaker matches.
-    if any(item[2].authority_conflict for item in best):
+    # Check the entire winning bucket before the final cut, in hold priority order.
+    hold = None
+    if any(item[1].authority_conflict for item in best):
+        hold = "canonical-authority-conflict"
+    elif any(item[1].currentness is KnowledgeCurrentness.STALE for item in best):
+        hold = "stale-relevant-candidate"
+    elif any(item[1].currentness is KnowledgeCurrentness.UNVERIFIABLE for item in best):
+        hold = "unverifiable-relevant-candidate"
+    if hold is not None:
         return _result(
             SufficiencyStatus.MANUAL_REVIEW,
             RetrievalEscalation.MANUAL_REVIEW,
             (),
             request.canonical_rule_refs,
-            ("canonical-authority-conflict",),
-            candidate_count,
-        )
-    if any(item[2].currentness is KnowledgeCurrentness.STALE for item in best):
-        return _result(
-            SufficiencyStatus.MANUAL_REVIEW,
-            RetrievalEscalation.MANUAL_REVIEW,
-            (),
-            request.canonical_rule_refs,
-            ("stale-relevant-candidate",),
-            candidate_count,
-        )
-    if any(item[2].currentness is KnowledgeCurrentness.UNVERIFIABLE for item in best):
-        return _result(
-            SufficiencyStatus.MANUAL_REVIEW,
-            RetrievalEscalation.MANUAL_REVIEW,
-            (),
-            request.canonical_rule_refs,
-            ("unverifiable-relevant-candidate",),
+            (hold,),
             candidate_count,
         )
 
     selected = tuple(
-        SelectedKnowledge(candidate=item[2], reason_codes=item[3])
+        SelectedKnowledge(candidate=item[1], reason_codes=item[2])
         for item in best[:MAX_SELECTED]
     )
 
@@ -545,12 +538,26 @@ _LIBRARY_TIE_GUIDANCE = re.compile(
 # A separate guardrail can explicitly contradict the affirmative instruction.
 # Limit this veto to the same action/object, not unrelated prohibitions (e.g.
 # "never bypass provenance" or "never promote a lower relevance bucket").
+_REVIEWED_NEGATION = r"(?:never|do not|must not|should not|don['’ʼ]t)"
 _LIBRARY_TIE_CONTRADICTION = re.compile(
-    r"\b(?:(?:never|do not|must not|should not) (?:preserve|maintain)"
+    rf"\b(?:{_REVIEWED_NEGATION} (?:preserve|maintain)"
     r"|avoid (?:preserving|maintaining)) "
     r"(?:(?:explicitly )?requested library coverage|(?:the widest )?coverage "
     r"(?:of|for|across) (?:explicitly )?requested libraries)\b"
 )
+
+
+def _reviewed_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _contradicts_primary(
+    candidate: CodingKnowledgeCandidate, contradiction: re.Pattern[str],
+) -> bool:
+    return any(
+        contradiction.search(_reviewed_text(text))
+        for text in (*candidate.use_when[1:], *candidate.avoid_when)
+    )
 
 
 def _library_tie_guidance(candidate: CodingKnowledgeCandidate) -> bool:
@@ -558,10 +565,8 @@ def _library_tie_guidance(candidate: CodingKnowledgeCandidate) -> bool:
         candidate.source_system == "notion-lessons-learned"
         and _norm(candidate.ecosystem) == "agent-os"
         and bool(candidate.use_when)
-        and _LIBRARY_TIE_TITLE.fullmatch(" ".join(candidate.name.casefold().split())) is not None
-        and _LIBRARY_TIE_GUIDANCE.fullmatch(
-            " ".join(candidate.use_when[0].casefold().split())
-        ) is not None
+        and _LIBRARY_TIE_TITLE.fullmatch(_reviewed_text(candidate.name)) is not None
+        and _LIBRARY_TIE_GUIDANCE.fullmatch(_reviewed_text(candidate.use_when[0])) is not None
     )
 
 
@@ -572,6 +577,12 @@ _PR_REFRESH_HISTORICAL_HINTS = frozenset({
     "git branch refresh", "rebase rejection", "merge-tree conflict detection", "bounded recovery",
 })
 _PR_REFRESH_REASON = "pr-refresh-reconciliation-text-match"
+_PR_REFRESH_CONTRADICTION = re.compile(
+    rf"\b(?:{_REVIEWED_NEGATION} (?:use|run|refresh|reconcile)"
+    r"|(?:skip|avoid) (?:using|running|refreshing|reconciling))"
+    r"\b[^.!?;]{0,160}\b(?:git|merge-tree)\b[^.!?;]{0,80}"
+    r"\b(?:refresh|reconcil(?:e|ing|iation))\b"
+)
 
 # #4090: a specifically requested Notion-read executor-outcome guard can match
 # source-owned lesson text even when Notion's generic Learning Type/Applies To
@@ -591,6 +602,26 @@ _NOTION_EXECUTOR_GUIDANCE = frozenset({
 })
 
 
+# The reviewed instruction stays exact; only a contrary action on the same
+# failure or validation step, in the same completion context, vetoes it.
+_NOTION_READ_COMPLETION = (
+    r"(?:completing (?:a |the )?notion read|reporting dispatch completion"
+    r"|marking (?:governed read )?dispatch completed)"
+)
+_NOTION_EXECUTOR_FAILURE = (
+    r"(?:failed executor outcomes?|explicit executor errors?"
+    r"|(?:an? )?explicit non-success status|(?:an? )?non-null error)"
+)
+_NOTION_EXECUTOR_CONTRADICTION = re.compile(
+    rf"\b(?:{_REVIEWED_NEGATION} "
+    rf"(?:reject {_NOTION_EXECUTOR_FAILURE}|validate executor output)"
+    rf"|(?:skip|avoid) (?:rejecting {_NOTION_EXECUTOR_FAILURE}|validating executor output))"
+    rf" before {_NOTION_READ_COMPLETION}\b"
+    r"|\b(?:do not|never|don['’ʼ]t) complete (?:a |the )?notion read unless "
+    rf"{_NOTION_EXECUTOR_FAILURE} (?:was|were|is|are) (?:accepted|ignored)\b"
+)
+
+
 def _deduplicate(
     candidates: tuple[CodingKnowledgeCandidate, ...],
 ) -> tuple[tuple[CodingKnowledgeCandidate, ...], bool]:
@@ -603,9 +634,24 @@ def _deduplicate(
     return tuple(by_id[key] for key in sorted(by_id, key=lambda key: (key.casefold(), key))), False
 
 
+_REST_COMMENT_IDENTITY = r"github\s+(?:issue[- ]+)?comments?\s+(?:ids?|records?)"
+_REST_RESPONSE_BYTES = r"oversized\s+github\s+(?:http|rest)\s+get\s+response\s+bytes"
+_REST_TIMESTAMP = r"(?:edited\s+)?timestamp\s+provenance"
+_REST_CLAUSE_START = r"(?:^|[.!?;]\s+)(?:[-*+]\s+)?"
+_REST_PAGINATION_CONTRADICTION = re.compile(
+    rf"{_REST_CLAUSE_START}(?:{_REVIEWED_NEGATION} (?:reject|detect)|keep|retain|accept|allow)"
+    rf"\s+duplicate\s+{_REST_COMMENT_IDENTITY}\b"
+)
+_REST_RECEIPT_CONTRADICTION = re.compile(
+    rf"{_REST_CLAUSE_START}(?:(?:{_REVIEWED_NEGATION} reject|accept|allow)\s+{_REST_RESPONSE_BYTES}"
+    rf"|(?:{_REVIEWED_NEGATION} (?:verify|validate|check)|ignore|disregard)\s+{_REST_TIMESTAMP})\b"
+)
+
+
 def _github_rest_evidence_match(
-    request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
+    capability_hints: set[str],
+    ecosystems: set[str],
 ) -> bool:
     """#4026: bounded source-owned GitHub REST mechanism relevance.
 
@@ -613,16 +659,12 @@ def _github_rest_evidence_match(
     authorization. Unlike broad Python/Testing tags, two independent explicit
     capability hints and affirmative lesson-owned text are both required.
     """
-    hints = {_norm(value) for value in request.capability_keywords}
     pagination = {
         "github issue comment pagination", "duplicate record detection",
-    } <= hints
+    } <= capability_hints
     receipts = {
         "bounded http get response limits", "timestamp provenance",
-    } <= hints
-    ecosystems = {_norm(value) for value in (
-        request.ecosystem_hints + request.language_hints
-    )}
+    } <= capability_hints
     if not (pagination or receipts):
         return False
     if not {"python", "github rest api"} <= ecosystems:
@@ -639,16 +681,7 @@ def _github_rest_evidence_match(
     if not has(r"github", title) or has(r"not|never|unrelated", title):
         return False
 
-    # Negative guidance can veto an apparent match, but cannot supply
-    # positive tokens. In CKR11, use_when[0] is primary guidance and later
-    # entries include the guardrail. Do not combine fields or sentences.
-    negated_action = (
-        r"(?:never|do\s+not|don['’]t|skip|avoid)\s+"
-        r"(?:reject|detect|verify|validate|check|fail)"
-    )
-    if any(has(negated_action, value.casefold())
-           for value in (*candidate.use_when, *candidate.avoid_when)):
-        return False
+    guidance = tuple(_reviewed_text(text) for text in (*candidate.use_when, *candidate.avoid_when))
     clauses = tuple(
         clause.strip()
         for value in candidate.use_when[:1]
@@ -660,18 +693,20 @@ def _github_rest_evidence_match(
     if pagination and has(r"issue[- ]comments?", title) and has(
         r"pag(?:e|es|ed|ing|ination)", title
     ):
-        comment_identity = r"github\s+(?:issue[- ]+)?comments?\s+(?:ids?|records?)"
         # Bind the validating action to comment identities, not page validity.
         # For example, checking complete pages and keeping duplicates is not
         # evidence of duplicate identity detection.
         action_on_identity = (
             rf"(?:"
-            rf"(?:reject|detect)\s+duplicate\s+{comment_identity}"
-            rf"|(?:verify|validate|check)\s+(?:that\s+)?{comment_identity}\s+are\s+unique"
+            rf"(?:reject|detect)\s+duplicate\s+{_REST_COMMENT_IDENTITY}"
+            rf"|(?:verify|validate|check)\s+(?:that\s+)?{_REST_COMMENT_IDENTITY}\s+are\s+unique"
             rf")\s+across\s+(?:(?:all|paginated)\s+)?pages?"
             rf"(?:\s+and\s+verify\s+complete\s+page\s+records)?"
         )
-        if any(re.fullmatch(action_on_identity, clause) for clause in clauses):
+        if (
+            any(re.fullmatch(action_on_identity, clause) for clause in clauses)
+            and not any(_REST_PAGINATION_CONTRADICTION.search(text) for text in guidance)
+        ):
             return True
 
     if receipts and all(
@@ -683,10 +718,13 @@ def _github_rest_evidence_match(
         # Both actions must apply to the stated REST evidence. A bag of
         # size words and an unrelated timestamp is not a verified mechanism.
         receipt_action = (
-            r"reject\s+oversized\s+github\s+(?:http|rest)\s+get\s+response\s+bytes"
-            r"\s+(?:and|then)\s+(?:verify|validate|check)\s+(?:edited\s+)?timestamp\s+provenance"
+            rf"reject\s+{_REST_RESPONSE_BYTES}"
+            rf"\s+(?:and|then)\s+(?:verify|validate|check)\s+{_REST_TIMESTAMP}"
         )
-        return any(re.fullmatch(receipt_action, clause) for clause in clauses)
+        return (
+            any(re.fullmatch(receipt_action, clause) for clause in clauses)
+            and not any(_REST_RECEIPT_CONTRADICTION.search(text) for text in guidance)
+        )
     return False
 
 
@@ -697,12 +735,10 @@ def _match_candidate(
     library_hints = {_norm(value) for value in request.library_hints}
     candidate_library = _norm(candidate.library_name) if candidate.library_name else ""
     candidate_name = _norm(candidate.name)
-    exact_library = bool(
-        library_hints and (candidate_library in library_hints or candidate_name in library_hints)
-    )
+    exact_library = candidate_library in library_hints or candidate_name in library_hints
 
     ecosystems = {_norm(value) for value in request.ecosystem_hints + request.language_hints}
-    ecosystem_match = _norm(candidate.ecosystem) in ecosystems if ecosystems else False
+    ecosystem_match = _norm(candidate.ecosystem) in ecosystems
 
     capability_hints = {_norm(value) for value in request.capability_keywords}
     capability_terms = {_norm(candidate.capability_kind)} | {
@@ -724,9 +760,8 @@ def _match_candidate(
     )
     if library_tie_request or "testing" in capability_overlap:
         library_tie_lesson = _library_tie_guidance(candidate)
-        if library_tie_request and library_tie_lesson and not any(
-            _LIBRARY_TIE_CONTRADICTION.search(" ".join(text.casefold().split()))
-            for text in candidate.use_when[1:]
+        if library_tie_request and library_tie_lesson and not _contradicts_primary(
+            candidate, _LIBRARY_TIE_CONTRADICTION
         ):
             return 2, (_LIBRARY_TIE_REASON,)
         if library_tie_request or library_tie_lesson:
@@ -757,15 +792,12 @@ def _match_candidate(
     historical_refresh = "git" in ecosystems and _PR_REFRESH_HISTORICAL_HINTS <= capability_hints
     if canonical_refresh or historical_refresh:
         title = candidate.name.casefold()
-        guidance = " ".join(candidate.use_when).casefold()
-        if not canonical_refresh:
-            # Do not extend the old token matcher to a new request shape on
-            # the strength of a warning, or a negated instruction.
-            guidance = candidate.use_when[0].casefold() if candidate.use_when else ""
-            if re.search(r"\b(?:not|never|avoid|skip|cannot)\b", guidance):
-                guidance = ""
+        guidance = _reviewed_text(candidate.use_when[0]) if candidate.use_when else ""
         if (
-            re.search(r"(?<![a-z0-9])(?:prs?|pull requests?)(?![a-z0-9])", title)
+            not _PR_REFRESH_CONTRADICTION.search(guidance)
+            and (canonical_refresh or not re.search(r"\b(?:not|never|avoid|skip|cannot)\b", guidance))
+            and not _contradicts_primary(candidate, _PR_REFRESH_CONTRADICTION)
+            and re.search(r"(?<![a-z0-9])(?:prs?|pull requests?)(?![a-z0-9])", title)
             and re.search(r"(?<![a-z0-9])(?:reconciliation|reconciling)(?![a-z0-9])", title)
             and not re.search(r"(?<![a-z0-9])(?:not|never|unrelated|avoid)(?![a-z0-9])", title)
             and re.search(r"(?<![a-z0-9])refresh(?:es|ed|ing)?(?![a-z0-9])", guidance)
@@ -817,18 +849,18 @@ def _match_candidate(
         persisted_state = r"(?:the )?(?:persisted|saved) (?:state|revision|changes)"
         # Require an explicit verification purpose or instrument in one
         # guidance element, not a bag of related words across statements.
-        confirms_persistence = whole(
+        persistence_verification = (
             rf"(?:use|perform) {readback} to (?:verify|confirm) {persisted_state}"
-            rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}",
-            guidance,
+            rf"|(?:verify|confirm) {persisted_state} (?:with|using) {readback}"
         )
-
+        notion_write = r"notion writ(?:e|er|ing)|(?:write|writing|persist) to notion"
         if (
             whole("notion", title)
             and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", title)
-            and whole("notion", guidance)
-            and whole("writ(?:e|er|ing|ten)|persist(?:ed|ence)?", guidance)
-            and confirms_persistence
+            and any(
+                whole(notion_write, clause) and whole(persistence_verification, clause)
+                for clause in re.split(r"[.!?;]+", guidance)
+            )
             and not whole(negation, title + " " + all_guidance)
             and not readback_warning
         ):
@@ -837,21 +869,22 @@ def _match_candidate(
     # #4026: a source-owned REST evidence mechanism can outrank generic
     # metadata only after an explicit conjunctive request and strict content
     # check. Canonical currentness/provenance/identity gates still run later.
-    if _github_rest_evidence_match(request, candidate):
+    if _github_rest_evidence_match(candidate, capability_hints, ecosystems):
         return 2, ("github-rest-evidence-text-match",)
     # #4090: require BOTH explicit caller signals and independent title plus
     # guidance signals owned by the lesson. Free-form task_reference, generic
     # "notion"/"quality-assurance" keywords, and the Guardrail entry never
     # activate this path. This is a relevance *text match* only; it does not
     # attest to lesson applicability, currentness, provenance, or write authority.
-    if _NOTION_EXECUTOR_HINTS <= capability_hints:
-        title = " ".join(candidate.name.casefold().split())
-        guidance = (
-            " ".join(candidate.use_when[0].casefold().split())
-            if candidate.use_when else ""
-        )
-        if title == _NOTION_EXECUTOR_TITLE and guidance in _NOTION_EXECUTOR_GUIDANCE:
-            return 2, (_NOTION_EXECUTOR_REASON,)
+    if (
+        _NOTION_EXECUTOR_HINTS <= capability_hints
+        and candidate.source_system == "notion-lessons-learned"
+        and _reviewed_text(candidate.name) == _NOTION_EXECUTOR_TITLE
+        and candidate.use_when
+        and _reviewed_text(candidate.use_when[0]) in _NOTION_EXECUTOR_GUIDANCE
+        and not _contradicts_primary(candidate, _NOTION_EXECUTOR_CONTRADICTION)
+    ):
+        return 2, (_NOTION_EXECUTOR_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
