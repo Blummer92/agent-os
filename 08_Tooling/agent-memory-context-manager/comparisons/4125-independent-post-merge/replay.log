@@ -1,0 +1,11 @@
+panels.json: OK
+requests.json: OK
+archive.json: OK
+independent-gold.json: OK
+main 09136c9cd0e7d46cd20777766105fded8f29210a 30
+pr 41c5e5b039bcf8d5eb23b34b8f76c457c8e60055 30
+archive main {'correct': 1, 'wrong': 0, 'miss': 10, 'abstain': 3}
+archive pr {'correct': 1, 'wrong': 0, 'miss': 10, 'abstain': 3}
+synthetic main {'correct': 0, 'wrong': 0, 'miss': 3, 'abstain': 5}
+synthetic pr {'correct': 1, 'wrong': 0, 'miss': 2, 'abstain': 5}
+independent-gold.json: OK

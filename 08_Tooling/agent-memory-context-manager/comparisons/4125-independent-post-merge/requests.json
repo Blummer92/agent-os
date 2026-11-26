@@ -1,0 +1,398 @@
+[
+  {
+    "case": "A01",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "exact-head evidence",
+        "validation"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find whether the build already has valid results for the current commit before asking CI to rerun."
+    },
+    "task": "Find whether the build already has valid results for the current commit before asking CI to rerun."
+  },
+  {
+    "case": "A02",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "aggregate validation",
+        "CI failure"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Our focused tests pass but the full validation fails. Determine if a clean checkout of main already fails before changing this branch."
+    },
+    "task": "Our focused tests pass but the full validation fails. Determine if a clean checkout of main already fails before changing this branch."
+  },
+  {
+    "case": "A03",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "linked-issue parsing",
+        "closing keyword"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Issue #123 is cited inside a quoted example. Find the real closure target without treating the example as an instruction."
+    },
+    "task": "Issue #123 is cited inside a quoted example. Find the real closure target without treating the example as an instruction."
+  },
+  {
+    "case": "A04",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "linked-issue parsing",
+        "repository identity"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "A parser encounters a closing reference for another repository. Retain that repository identity and do not automatically close a local issue."
+    },
+    "task": "A parser encounters a closing reference for another repository. Retain that repository identity and do not automatically close a local issue."
+  },
+  {
+    "case": "A05",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "compatibility",
+        "unknown fields"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "The executor cannot interpret optional fields from a newer evidence packet. Preserve them during round-trip serialization."
+    },
+    "task": "The executor cannot interpret optional fields from a newer evidence packet. Preserve them during round-trip serialization."
+  },
+  {
+    "case": "A06",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "property-based testing",
+        "shrinking",
+        "strategy design"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [
+        "Hypothesis"
+      ],
+      "specialized_knowledge_required": true,
+      "task_reference": "Design a property-based parser test with generated cases and shrinking rather than just a fixed table."
+    },
+    "task": "Design a property-based parser test with generated cases and shrinking rather than just a fixed table."
+  },
+  {
+    "case": "A07",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "failure-avoidance",
+        "failed repair",
+        "CKR6 re-entry"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "A prior repair failed. Preserve that attempt and re-enter coding lessons preflight before choosing the next repair."
+    },
+    "task": "A prior repair failed. Preserve that attempt and re-enter coding lessons preflight before choosing the next repair."
+  },
+  {
+    "case": "A08",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "pagination",
+        "retrieval completeness"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "The collector got the first page. Prove it has actually reached the final page for the repository and revision being audited."
+    },
+    "task": "The collector got the first page. Prove it has actually reached the final page for the repository and revision being audited."
+  },
+  {
+    "case": "A09",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "git branch refresh",
+        "rebase rejection",
+        "merge-tree conflict detection",
+        "bounded recovery"
+      ],
+      "ecosystem_hints": [
+        "git"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "The pull request API says the branch cannot merge. Determine whether it can be refreshed without conflict before rejecting it."
+    },
+    "task": "The pull request API says the branch cannot merge. Determine whether it can be refreshed without conflict before rejecting it."
+  },
+  {
+    "case": "A10",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "compatibility",
+        "major contract version"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Reject a contract with an unsupported major version instead of silently treating it as the current version."
+    },
+    "task": "Reject a contract with an unsupported major version instead of silently treating it as the current version."
+  },
+  {
+    "case": "A11",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "CI diagnostics"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Read the failed CI job and find its first actionable error. Do not report the red status itself as the cause."
+    },
+    "task": "Read the failed CI job and find its first actionable error. Do not report the red status itself as the cause."
+  },
+  {
+    "case": "A12",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "print typography",
+        "worksheet layout"
+      ],
+      "ecosystem_hints": [
+        "instructional design"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Choose a line spacing and font size for a printable student worksheet."
+    },
+    "task": "Choose a line spacing and font size for a printable student worksheet."
+  },
+  {
+    "case": "A13",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "websocket heartbeat",
+        "timeout policy"
+      ],
+      "ecosystem_hints": [
+        "networking"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Decide how to jitter reconnect intervals for a WebSocket heartbeat."
+    },
+    "task": "Decide how to jitter reconnect intervals for a WebSocket heartbeat."
+  },
+  {
+    "case": "A14",
+    "panel": "archive",
+    "request": {
+      "capability_keywords": [
+        "testing",
+        "packaging"
+      ],
+      "ecosystem_hints": [
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": false,
+      "task_reference": "Check a single fixed wheel import and version with the ordinary local assertions already supplied by the repository."
+    },
+    "task": "Check a single fixed wheel import and version with the ordinary local assertions already supplied by the repository."
+  },
+  {
+    "case": "W01",
+    "panel": "writer",
+    "request": {
+      "capability_keywords": [
+        "notion writer",
+        "persistence readback",
+        "failure receipts"
+      ],
+      "ecosystem_hints": [
+        "agent-os",
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+    },
+    "task": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+  },
+  {
+    "case": "W02",
+    "panel": "writer_before",
+    "request": {
+      "capability_keywords": [
+        "notion writer",
+        "persistence readback",
+        "failure receipts"
+      ],
+      "ecosystem_hints": [
+        "agent-os",
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+    },
+    "task": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+  },
+  {
+    "case": "W03",
+    "panel": "writer_reversed",
+    "request": {
+      "capability_keywords": [
+        "notion writer",
+        "persistence readback",
+        "failure receipts"
+      ],
+      "ecosystem_hints": [
+        "agent-os",
+        "python"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+    },
+    "task": "Find guidance for checking that a newly written Notion revision actually persisted, using a read independent of the write response."
+  },
+  {
+    "case": "W04",
+    "panel": "writer",
+    "request": {
+      "capability_keywords": [
+        "dashboard typography"
+      ],
+      "ecosystem_hints": [
+        "agent-os"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance on choosing formatting for text in a Notion dashboard, not on proving persistence."
+    },
+    "task": "Find guidance on choosing formatting for text in a Notion dashboard, not on proving persistence."
+  },
+  {
+    "case": "P01",
+    "panel": "pagination",
+    "request": {
+      "capability_keywords": [
+        "github issue comment pagination",
+        "duplicate record detection"
+      ],
+      "ecosystem_hints": [
+        "python",
+        "github rest api"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance on rejecting repeated GitHub issue-comment IDs across paginated GET responses."
+    },
+    "task": "Find guidance on rejecting repeated GitHub issue-comment IDs across paginated GET responses."
+  },
+  {
+    "case": "P02",
+    "panel": "pagination_opposite",
+    "request": {
+      "capability_keywords": [
+        "github issue comment pagination",
+        "duplicate record detection"
+      ],
+      "ecosystem_hints": [
+        "python",
+        "github rest api"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance on rejecting repeated GitHub issue-comment IDs across paginated GET responses."
+    },
+    "task": "Find guidance on rejecting repeated GitHub issue-comment IDs across paginated GET responses."
+  },
+  {
+    "case": "R01",
+    "panel": "receipts",
+    "request": {
+      "capability_keywords": [
+        "bounded http get response limits",
+        "timestamp provenance"
+      ],
+      "ecosystem_hints": [
+        "python",
+        "github rest api"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance for rejecting oversized GitHub REST GET bodies and verifying timestamp provenance."
+    },
+    "task": "Find guidance for rejecting oversized GitHub REST GET bodies and verifying timestamp provenance."
+  },
+  {
+    "case": "R02",
+    "panel": "receipts_opposite",
+    "request": {
+      "capability_keywords": [
+        "bounded http get response limits",
+        "timestamp provenance"
+      ],
+      "ecosystem_hints": [
+        "python",
+        "github rest api"
+      ],
+      "library_hints": [],
+      "specialized_knowledge_required": true,
+      "task_reference": "Find guidance for rejecting oversized GitHub REST GET bodies and verifying timestamp provenance."
+    },
+    "task": "Find guidance for rejecting oversized GitHub REST GET bodies and verifying timestamp provenance."
+  }
+]

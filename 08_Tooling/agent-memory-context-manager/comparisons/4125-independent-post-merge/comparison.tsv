@@ -1,0 +1,23 @@
+case	panel	acceptable	pre-merge IDs	pre-merge verdict	merged IDs	merged verdict
+A01	archive	65,76	none	miss	none	miss
+A02	archive	44,55,72,90	none	miss	none	miss
+A03	archive	34	none	miss	none	miss
+A04	archive	32,66,79	none	miss	none	miss
+A05	archive	47	none	miss	none	miss
+A06	archive	50	none	miss	none	miss
+A07	archive	51	LL-51	correct	LL-51	correct
+A08	archive	18	none	miss	none	miss
+A09	archive	80	none	miss	none	miss
+A10	archive	48	none	miss	none	miss
+A11	archive	53	none	miss	none	miss
+A12	archive	none	none	abstain	none	abstain
+A13	archive	none	none	abstain	none	abstain
+A14	archive	none	none	abstain	none	abstain
+W01	writer	901	none	miss	LL-901	correct
+W02	writer_before	none	none	abstain	none	abstain
+W03	writer_reversed	none	none	abstain	none	abstain
+W04	writer	none	none	abstain	none	abstain
+P01	pagination	904	none	miss	none	miss
+P02	pagination_opposite	none	none	abstain	none	abstain
+R01	receipts	906	none	miss	none	miss
+R02	receipts_opposite	none	none	abstain	none	abstain
