@@ -100,9 +100,9 @@ class CodespaceTransportContractTests(unittest.TestCase):
         self.assertFalse(payload["publication_authorized"])
         self.assertFalse(payload["merge_authorized"])
 
-    def _check_timeout_and_transport_error_retain_attempt_timestamps(self, exc, reason):
+    def _check_timeout_and_transport_error_retain_attempt_timestamps(self, make_error, reason):
         def fail(*a, **k):
-            raise exc
+            raise make_error()
         result = run_codespace_transport(self.request(),
                   list_candidates=lambda: (self.candidate(),), run=fail)
         self.assertEqual(result.reason_codes, (reason,))
@@ -236,8 +236,8 @@ collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._
 ))
 
 collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_timeout_and_transport_error_retain_attempt_timestamps, (
-    (subprocess.TimeoutExpired('inert', 1), TransportReason.TRANSPORT_TIMEOUT),
-    (RuntimeError('inert'), TransportReason.TRANSPORT_ERROR),
+    (lambda: subprocess.TimeoutExpired('inert', 1), TransportReason.TRANSPORT_TIMEOUT),
+    (lambda: RuntimeError('inert'), TransportReason.TRANSPORT_ERROR),
 ))
 
 collect_cases(CodespaceTransportContractTests, CodespaceTransportContractTests._check_missing_ambiguous_unqualified_and_changed_identity_never_run, (

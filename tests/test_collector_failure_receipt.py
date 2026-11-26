@@ -116,8 +116,8 @@ class FailureReceiptTests(unittest.TestCase):
     def test_direct_http_403(self):
         self.assert_failed_receipt(urllib.error.HTTPError('https://example.invalid', 403, PRIVATE, {}, None), 403)
 
-    def _check_transport_timeout_and_size_errors_write_receipts(self, error):
-        self.assert_failed_receipt(error)
+    def _check_transport_timeout_and_size_errors_write_receipts(self, make_error):
+        self.assert_failed_receipt(make_error())
 
     def test_other_downloads_continue_and_keep_verified_evidence(self):
         self.artifacts.append(artifact(12, 'junit-aggregate-2'))
@@ -210,8 +210,8 @@ class FailureReceiptTests(unittest.TestCase):
             self.artifacts[0]['archive_download_url'] = value
         self.assert_failed_receipt(actual_download)
 
-    def _check_http_protocol_errors_write_receipts(self, error):
-        self.assert_failed_receipt(error)
+    def _check_http_protocol_errors_write_receipts(self, make_error):
+        self.assert_failed_receipt(make_error())
 
     def test_real_truncated_chunked_response_writes_receipt(self):
         class Handler(BaseHTTPRequestHandler):
@@ -245,10 +245,10 @@ class FailureReceiptTests(unittest.TestCase):
 
 
 collect_cases(FailureReceiptTests, FailureReceiptTests._check_transport_timeout_and_size_errors_write_receipts, (
-    (urllib.error.URLError(PRIVATE),),
-    (TimeoutError(PRIVATE),),
-    (ConnectionResetError(PRIVATE),),
-    (RuntimeError('artifact archive exceeds size cap'),),
+    (lambda: urllib.error.URLError(PRIVATE),),
+    (lambda: TimeoutError(PRIVATE),),
+    (lambda: ConnectionResetError(PRIVATE),),
+    (lambda: RuntimeError('artifact archive exceeds size cap'),),
 ))
 
 collect_cases(FailureReceiptTests, FailureReceiptTests._check_integrity_rejections_survive_other_download_failure, (
@@ -263,8 +263,8 @@ collect_cases(FailureReceiptTests, FailureReceiptTests._check_missing_or_malform
 ))
 
 collect_cases(FailureReceiptTests, FailureReceiptTests._check_http_protocol_errors_write_receipts, (
-    (http.client.IncompleteRead(b'partial', 10),),
-    (http.client.BadStatusLine(PRIVATE),),
+    (lambda: http.client.IncompleteRead(b'partial', 10),),
+    (lambda: http.client.BadStatusLine(PRIVATE),),
 ))
 
 
