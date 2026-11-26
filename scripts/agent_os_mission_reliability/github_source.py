@@ -1,167 +1,150 @@
-"""Read-only GitHub acquisition for the #2766 mission-reliability measurement.
+"""Acquire complete frozen records via an injected JSON reader; never print or read credentials."""
 
-This module freezes a bounded mission population and normalizes it into the
-mission records consumed by ``derive.derive_mission_reliability``. It is
-read-only by construction: the caller injects a ``read_json(path, params)``
-callable that performs HTTP GET, and this module contains no write path, no
-mutation helper, and no credential handling.
+import re
+from collections.abc import Callable, Mapping
+from typing import Any
 
-Issue<->PR linkage reuses the canonical parser from
-``scripts.agent_os_issue_acceptance.parse_pr`` (``parse_linked_issue``) plus
-the repository's ``agent/<issue>-<slug>`` branch convention; no closing-keyword
-grammar is redefined here.
+from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue
 
-Fields that have no durable GitHub evidence (user interventions,
-cross-chat continuations, persisted requested/delivered counts, truthful
-terminal state, exact-head terminal validation timestamps) are left as
-``None``/``"unknown"`` so that derivation reports them as unknown rather
-than estimating them. Exact terminal truthfulness, CI/build/validation timing
-(#520), Code Mode host lifecycle (#2753), and conversational-test metadata
-(#2744) remain with their owners.
-"""
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue  # noqa: E402
+from .errors import ReadError, ValidationError
+from .http_client import JsonPage
+from .inputs import DEFAULT_PR_PAGES, Population, freeze_population, positive_issue
 
 ReadJson = Callable[[str, Mapping[str, Any] | None], Any]
-
 _SCHEMA_VERSION = "2766-mission-records.v1"
-_DEFAULT_MAX_PR_PAGES = 10
-_DEFAULT_PR_PER_PAGE = 100
+_PR_PAGE_SIZE = 100
 
 
-def _agent_branch_issue(head_ref: object, repository: str, owner: str) -> int | None:
-    """Recover an issue number from an ``agent/<issue>-<slug>`` branch name."""
-    import re
-
-    if type(head_ref) is not str:
-        return None
-    match = re.fullmatch(r"agent/(\d+)-[a-z0-9-]+", head_ref)
-    if not match:
-        return None
-    return int(match.group(1))
+def _unpack(value):
+    """Separate real HTTP pagination metadata from compatibility fixture values."""
+    return (value.value, value.has_next) if isinstance(value, JsonPage) else (value, None)
 
 
-def _pr_to_record(pr: Mapping[str, Any]) -> dict[str, Any]:
+def _identified_detail(read_json, path, number):
+    """Read one exact object and reject absent, drifting, or paginated identity."""
+    item, has_next = _unpack(read_json(path, None))
+    if has_next or not isinstance(item, Mapping) or (
+        not positive_issue(item.get("number")) or item["number"] != number
+    ):
+        raise ReadError("identity_mismatch", "GitHub detail did not match the requested identity.", "github")
+    if "/issues/" in path and "pull_request" in item:
+        raise ReadError("not_an_issue", "Frozen issue number identifies a PR, not an issue.", "issues")
+    return item
+
+
+def _linked_issue(pr):
+    """Use the canonical closing parser, then the documented branch heuristic."""
+    body = pr.get("body") if type(pr.get("body")) is str else ""
+    title = pr.get("title") if type(pr.get("title")) is str else ""
+    try:
+        target = parse_linked_issue(body, title)
+    except (TypeError, ValueError, OverflowError):
+        raise ReadError("invalid_linkage", "GitHub PR linkage could not be read.", "github") from None
+    if target is not None:
+        return target
+    head = pr.get("head")
+    ref = head.get("ref") if isinstance(head, Mapping) else None
+    match = re.fullmatch(r"agent/([0-9]{1,10})-[a-z0-9-]+", ref) if type(ref) is str else None
+    number = int(match.group(1)) if match else None
+    return number if positive_issue(number) else None
+
+
+def _pr_pages(read_json, population):
+    """Yield valid complete PR pages or fail rather than silently truncate."""
+    for page in range(1, population.max_pr_pages + 1):
+        raw = read_json(f"/repos/{population.repository}/pulls", {
+            "state": "all", "per_page": _PR_PAGE_SIZE, "page": page,
+            "sort": "created", "direction": "desc",
+        })
+        values, has_next = _unpack(raw)
+        if not isinstance(values, list) or len(values) > _PR_PAGE_SIZE or (has_next and not values):
+            raise ReadError("invalid_pr_page", "GitHub returned an invalid PR page.", "github")
+        yield values
+        # Direct callers may still supply arrays instead of HTTP envelopes.
+        if has_next is False or (has_next is None and len(values) < _PR_PAGE_SIZE):
+            return
+    raise ReadError("incomplete_pr_population", "PR pagination exceeds the frozen read limit.", "github")
+
+
+def _linked_prs(read_json, population):
+    """Collect only requested issues' PRs and reject duplicate page identities."""
+    linked = {n: [] for n in population.issues}
+    seen = set()
+    for page in _pr_pages(read_json, population):
+        for pr in page:
+            if not isinstance(pr, Mapping) or not positive_issue(pr.get("number")):
+                raise ReadError("invalid_pr_identity", "GitHub PR entry has no valid number.", "github")
+            number = pr["number"]
+            if number in seen:
+                raise ReadError("duplicate_pr", "GitHub PR pagination repeated a number.", "github")
+            seen.add(number)
+            target = _linked_issue(pr)
+            if target in linked:
+                linked[target].append(pr)
+    return linked
+
+
+def _optional_text(value):
+    """Keep immutable strings, never retaining unexpected provider containers."""
+    return value if type(value) is str else None
+
+
+def _pr_record(pr, repair):
+    """Project immutable scalar PR evidence without guessing merge status."""
+    if type(pr.get("merged")) is not bool:
+        raise ReadError("invalid_pr_detail", "GitHub PR detail has no boolean merge status.", "github")
+    head = pr.get("head")
     return {
-        "number": pr.get("number"),
-        "created_at": pr.get("created_at"),
-        "merged": pr.get("merged") is True,
-        "merged_at": pr.get("merged_at"),
-        "repair": False,
-        "first_terminal_validation_at": None,
-        "head_ref": (pr.get("head") or {}).get("ref") if isinstance(pr.get("head"), Mapping) else None,
+        "number": pr["number"], "created_at": _optional_text(pr.get("created_at")),
+        "merged": pr["merged"], "merged_at": _optional_text(pr.get("merged_at")),
+        "repair": repair, "first_terminal_validation_at": None,
+        "head_ref": _optional_text(head.get("ref")) if isinstance(head, Mapping) else None,
     }
+
+
+def _issue_record(issue, prs, admitted_at):
+    """Build one detached, evidence-honest mission record."""
+    state = issue.get("state")
+    return {
+        "issue_number": issue["number"], "admitted": admitted_at is not None,
+        "admitted_at": admitted_at, "issue_state": state if state in ("open", "closed") else "unknown",
+        "issue_closed_at": _optional_text(issue.get("closed_at")),
+        "implementation_prs": prs, "requested_items": None, "delivered_items": None,
+        "terminal_state": "unknown", "user_interventions": None, "continuation_prompts": None,
+        "bug_family": None, "prior_completed_fix_issue": None, "finding_issue": None, "retest_at": None,
+    }
+
+
+def _details(read_json, path, prs):
+    """Read linked PR detail oldest-first and mark later records as repairs."""
+    order = sorted(prs, key=lambda p: (_optional_text(p.get("created_at")) or "", p["number"]))
+    return [
+        _pr_record(_identified_detail(read_json, f"{path}/pulls/{pr['number']}", pr["number"]), i > 0)
+        for i, pr in enumerate(order)
+    ]
+
+
+def acquire_frozen_records(read_json: ReadJson, population: Population):
+    """Acquire an exact complete snapshot from already validated frozen input."""
+    if not callable(read_json):
+        raise ValidationError("invalid_reader", "Expected a callable read-only reader.", "github")
+    linked = _linked_prs(read_json, population)
+    path = f"/repos/{population.repository}"
+    admitted = dict(population.admitted)
+    records = [
+        _issue_record(_identified_detail(read_json, f"{path}/issues/{number}", number),
+                      _details(read_json, path, linked[number]), admitted.get(number))
+        for number in population.issues
+    ]
+    return {"schema_version": _SCHEMA_VERSION, "repository": population.repository,
+            "frozen_issue_numbers": list(population.issues), "records": records}
 
 
 def acquire_mission_records(
-    read_json: ReadJson,
-    *,
-    owner: str,
-    repository: str,
-    issue_numbers: Sequence[int],
-    admitted_map: Mapping[int, Mapping[str, Any]] | None = None,
-    max_pr_pages: int = _DEFAULT_MAX_PR_PAGES,
-) -> dict[str, Any]:
-    """Freeze and normalize a bounded mission population read-only.
-
-    ``issue_numbers`` is the exact frozen population (per the #2766 handoff).
-    ``admitted_map`` optionally carries caller-frozen admission evidence per
-    issue: ``{issue_number: {"admitted": bool, "admitted_at": iso}}``.
-    """
-    if not callable(read_json):
-        raise TypeError("read_json must be a callable")
-    if type(owner) is not str or not owner:
-        raise TypeError("owner must be a non-empty string")
-    if type(repository) is not str or not repository:
-        raise TypeError("repository must be a non-empty string")
-    numbers = list(dict.fromkeys(issue_numbers))
-    for number in numbers:
-        if type(number) is not int:
-            raise TypeError("issue_numbers must contain ints")
-
-    repo_path = f"/repos/{owner}/{repository}"
-
-    # Bounded read of the PR universe; linkage is derived, never mutated.
-    pull_requests: list[Mapping[str, Any]] = []
-    page = 1
-    while page <= max_pr_pages:
-        prs = read_json(
-            f"{repo_path}/pulls",
-            {"state": "all", "per_page": _DEFAULT_PR_PER_PAGE, "page": page,
-             # Newest first: the bounded window covers recent PRs; the
-             # population is frozen by issue, so linkage needs the recent
-             # PR universe, not the oldest thousand.
-             "sort": "created", "direction": "desc"},
-        )
-        if not isinstance(prs, list):
-            raise TypeError("GitHub /pulls response must be a JSON array")
-        pull_requests.extend(prs)
-        if len(prs) < _DEFAULT_PR_PER_PAGE:
-            break
-        page += 1
-
-    linked: dict[int, list[Mapping[str, Any]]] = {n: [] for n in numbers}
-    for pr in pull_requests:
-        if not isinstance(pr, Mapping):
-            continue
-        body = pr.get("body") if type(pr.get("body")) is str else ""
-        title = pr.get("title") if type(pr.get("title")) is str else ""
-        target = parse_linked_issue(body, title)
-        if target is None and isinstance(pr.get("head"), Mapping):
-            target = _agent_branch_issue(pr["head"].get("ref"), repository, owner)
-        if target in linked:
-            linked[target].append(pr)
-
-    records: list[dict[str, Any]] = []
-    for number in numbers:
-        issue = read_json(f"{repo_path}/issues/{number}", None)
-        if not isinstance(issue, Mapping):
-            raise TypeError(f"GitHub issue {number} response must be a JSON object")
-        # The /pulls list view does not carry merged/merged_at; resolve the
-        # detail only for PRs linked to the frozen population (bounded).
-        prs: list[Mapping[str, Any]] = []
-        for pr in sorted(
-            linked[number],
-            key=lambda p: (p.get("created_at") or "", p.get("number") or 0),
-        ):
-            detail = read_json(f"{repo_path}/pulls/{pr.get('number')}", None)
-            prs.append(detail if isinstance(detail, Mapping) else pr)
-        pr_records = [_pr_to_record(pr) for pr in prs]
-        for follow_up in pr_records[1:]:
-            follow_up["repair"] = True
-        admission = (admitted_map or {}).get(number) or {}
-        records.append(
-            {
-                "issue_number": number,
-                "admitted": admission.get("admitted") is True,
-                "admitted_at": admission.get("admitted_at"),
-                "issue_state": issue.get("state") if issue.get("state") in ("open", "closed") else "unknown",
-                "issue_closed_at": issue.get("closed_at"),
-                "implementation_prs": pr_records,
-                "requested_items": None,
-                "delivered_items": None,
-                "terminal_state": "unknown",
-                "user_interventions": None,
-                "continuation_prompts": None,
-                "bug_family": None,
-                "prior_completed_fix_issue": None,
-                "finding_issue": None,
-                "retest_at": None,
-            }
-        )
-
-    return {
-        "schema_version": _SCHEMA_VERSION,
-        "repository": f"{owner}/{repository}",
-        "frozen_issue_numbers": numbers,
-        "records": records,
-    }
+    read_json: ReadJson, *, owner: str, repository: str, issue_numbers,
+    admitted_map=None, max_pr_pages: int = DEFAULT_PR_PAGES,
+):
+    """Compatibility entrypoint: freeze exactly the caller's inputs, then read them."""
+    return acquire_frozen_records(
+        read_json, freeze_population(owner, repository, issue_numbers, admitted_map, max_pr_pages),
+    )
