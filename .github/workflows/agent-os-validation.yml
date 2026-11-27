@@ -1205,6 +1205,53 @@ jobs:
         if: always()
         run: python -m scripts.advisory_evidence_guard --kind pyan3 --file tmp/pyan3-advisory/pyan3-advisory.json --sha "${{ github.event.pull_request.head.sha }}"
 
+  python-quality-advisory:
+    name: Python quality pilot (advisory)
+    # Do not execute a fork's checkout. Start with protected main and
+    # owner-authored, owner-triggered branches in the same repository.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      QUALITY_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out the exact pilot revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.QUALITY_HEAD }}
+          persist-credentials: false
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned quality scanners
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/python-quality-venv"
+          "$RUNNER_TEMP/python-quality-venv/bin/python" -m pip install --only-binary=:all: -r scripts/ci-python-quality-requirements.txt
+      - name: Run Black, mypy, and Vulture
+        if: ${{ !cancelled() && steps.python.outcome == 'success' }}
+        run: |
+          py="$RUNNER_TEMP/python-quality-venv/bin/python"
+          if [ ! -x "$py" ]; then py=python; fi
+          "$py" -m scripts.agent_os_ci_python_quality --head "$QUALITY_HEAD" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --output "$RUNNER_TEMP/python-quality"
+      - name: Upload Python quality evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-quality-advisory-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/python-quality/python-quality.json
+          if-no-files-found: error
+          retention-days: 7
+
   aggregate-gate:
     # Terminal disposition only when authoritative aggregate validation is
     # required. Ordinary Draft PR events intentionally defer the aggregate and
