@@ -26,9 +26,13 @@ def _open_checked(source: bytes) -> Image.Image:
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             return Image.open(io.BytesIO(source))
     except (Image.DecompressionBombWarning, Image.DecompressionBombError):
-        raise IntakeError(IntakeErrorCode.PIXEL_LIMIT_EXCEEDED, "image exceeds decoder safety limits") from None
+        raise IntakeError(
+            IntakeErrorCode.PIXEL_LIMIT_EXCEEDED, "image exceeds decoder safety limits"
+        ) from None
     except (UnidentifiedImageError, OSError, ValueError):
-        raise IntakeError(IntakeErrorCode.CORRUPT_IMAGE, "image cannot be decoded") from None
+        raise IntakeError(
+            IntakeErrorCode.CORRUPT_IMAGE, "image cannot be decoded"
+        ) from None
 
 
 def _read_snapshot(path: Path, max_source_bytes: int) -> bytes:
@@ -36,9 +40,13 @@ def _read_snapshot(path: Path, max_source_bytes: int) -> bytes:
         with path.open("rb") as stream:
             snapshot = stream.read(max_source_bytes + 1)
     except OSError:
-        raise IntakeError(IntakeErrorCode.INVALID_PATH, "source must be a readable file") from None
+        raise IntakeError(
+            IntakeErrorCode.INVALID_PATH, "source must be a readable file"
+        ) from None
     if len(snapshot) > max_source_bytes:
-        raise IntakeError(IntakeErrorCode.INPUT_TOO_LARGE, "source exceeds configured byte limit")
+        raise IntakeError(
+            IntakeErrorCode.INPUT_TOO_LARGE, "source exceeds configured byte limit"
+        )
     return snapshot
 
 
@@ -60,10 +68,16 @@ def _reserve_output(path: Path) -> int:
     try:
         descriptor = os.open(path, flags, 0o600)
     except (FileExistsError, OSError):
-        raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output already exists or is unsafe") from None
+        raise IntakeError(
+            IntakeErrorCode.NORMALIZATION_FAILED,
+            "normalized output already exists or is unsafe",
+        ) from None
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output is not a regular file")
+            raise IntakeError(
+                IntakeErrorCode.NORMALIZATION_FAILED,
+                "normalized output is not a regular file",
+            )
         return descriptor
     except Exception:
         os.close(descriptor)
@@ -84,7 +98,9 @@ def intake_visual_asset(
     source = Path(source_path)
     destination = Path(output_dir)
     if not source.is_file():
-        raise IntakeError(IntakeErrorCode.INVALID_PATH, "source must be an existing file")
+        raise IntakeError(
+            IntakeErrorCode.INVALID_PATH, "source must be an existing file"
+        )
 
     snapshot = _read_snapshot(source, policy.max_source_bytes)
     source_size = len(snapshot)
@@ -96,13 +112,22 @@ def intake_visual_asset(
     try:
         detected_format = (probe.format or "").upper()
         if detected_format not in policy.allowed_formats:
-            raise IntakeError(IntakeErrorCode.UNSUPPORTED_FORMAT, "decoded image format is not allowed")
+            raise IntakeError(
+                IntakeErrorCode.UNSUPPORTED_FORMAT,
+                "decoded image format is not allowed",
+            )
         frame_count = int(getattr(probe, "n_frames", 1))
         if frame_count != 1:
-            raise IntakeError(IntakeErrorCode.UNSUPPORTED_MULTIFRAME_IMAGE, "multi-frame images are not supported")
+            raise IntakeError(
+                IntakeErrorCode.UNSUPPORTED_MULTIFRAME_IMAGE,
+                "multi-frame images are not supported",
+            )
         width, height = probe.size
         if width <= 0 or height <= 0 or width * height > policy.max_decoded_pixels:
-            raise IntakeError(IntakeErrorCode.PIXEL_LIMIT_EXCEEDED, "decoded image exceeds configured pixel limit")
+            raise IntakeError(
+                IntakeErrorCode.PIXEL_LIMIT_EXCEEDED,
+                "decoded image exceeds configured pixel limit",
+            )
         color_mode = probe.mode
         has_alpha = _has_alpha(probe)
         exif = probe.getexif()
@@ -128,11 +153,16 @@ def intake_visual_asset(
             destination.mkdir(parents=True, exist_ok=True)
             normalized_path = destination / f"{intake_id}.png"
             if normalized_path.resolve() == source.resolve():
-                raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output cannot overwrite source")
+                raise IntakeError(
+                    IntakeErrorCode.NORMALIZATION_FAILED,
+                    "normalized output cannot overwrite source",
+                )
             descriptor = _reserve_output(normalized_path)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
-                    normalized.save(stream, format="PNG", optimize=False, compress_level=9)
+                    normalized.save(
+                        stream, format="PNG", optimize=False, compress_level=9
+                    )
             except Exception:
                 try:
                     normalized_path.unlink()
@@ -144,7 +174,10 @@ def intake_visual_asset(
     except IntakeError:
         raise
     except (OSError, ValueError):
-        raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized derivative could not be written") from None
+        raise IntakeError(
+            IntakeErrorCode.NORMALIZATION_FAILED,
+            "normalized derivative could not be written",
+        ) from None
 
     return AssetIntakeResult(
         intake_id=intake_id,

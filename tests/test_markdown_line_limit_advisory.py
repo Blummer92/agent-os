@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "07_Agent_Tests" / "validate-repo-structure.sh"
 
@@ -26,13 +28,24 @@ def _run() -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_structural_validator_exits_zero_on_current_repository() -> None:
-    result = _run()
+@pytest.fixture(scope="module")
+def pristine_validation() -> subprocess.CompletedProcess[str]:
+    # Share only identical, unchanged-tree input between the two checks.
+    # The long-file probe always has its own invocation and cleans up its file.
+    return _run()
+
+
+def test_structural_validator_exits_zero_on_current_repository(
+    pristine_validation: subprocess.CompletedProcess[str],
+) -> None:
+    result = pristine_validation
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_markdown_line_count_check_never_fails() -> None:
-    result = _run()
+def test_markdown_line_count_check_never_fails(
+    pristine_validation: subprocess.CompletedProcess[str],
+) -> None:
+    result = pristine_validation
     assert "PASS - Markdown line-count advisory reviewed" in result.stdout
     assert "FAIL - Markdown" not in result.stdout
     assert "FAIL - All non-exempt Markdown files" not in result.stdout
