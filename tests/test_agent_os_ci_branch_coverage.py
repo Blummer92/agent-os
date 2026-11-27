@@ -169,7 +169,7 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
 
 
 @pytest.mark.parametrize("fault,exit_code", [
-    ("none", 0), ("black-findings", 1), ("black-missing", 2), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2), ("changed-after-manifest", 1),
+    ("none", 0), ("black-findings", 1), ("black-missing", 2), ("black-interrupted", 2), ("black-bad-receipt", 2), ("black-stale-receipt", 2), ("black-truncated-scope", 2), ("black-wrong-run", 2), ("black-wrong-type", 2), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2), ("changed-after-manifest", 1),
 ])
 def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp_path, fault, exit_code):
     # Execute the actual workflow's shell body, not a second implementation
@@ -189,12 +189,45 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
 
     root = tmp_path / "repo"
     _init_test_checkout(root, source=staged)
-    if fault in {"black-findings", "black-missing"}:
+    bad_black = {"black-bad-receipt", "black-stale-receipt", "black-truncated-scope",
+                 "black-wrong-run", "black-wrong-type"}
+    if fault in bad_black:
+        checker = root / "scripts/agent_os_ci_black.py"
+        real = checker.with_name("real_black.py")
+        checker.rename(real)
+        checker.write_text(
+            "import json, runpy, sys\n"
+            "from pathlib import Path\n"
+            "ns = runpy.run_path(str(Path(__file__).with_name('real_black.py')))\n"
+            "if sys.argv[1] == '--verify-clean':\n"
+            "    sys.exit(ns['main']())\n"
+            f"fault = {fault!r}\n"
+            "out = Path(sys.argv[1])\n"
+            "if fault == 'black-bad-receipt':\n"
+            "    out.write_text('{}')\n"
+            "else:\n"
+            "    assert ns['main']() == 0\n"
+            "    value = json.loads(out.read_text())\n"
+            "    if fault == 'black-stale-receipt': value['run_attempt'] = '1'\n"
+            "    if fault == 'black-truncated-scope': value['sources'] = []\n"
+            "    if fault == 'black-wrong-run': value['run_id'] = '4131'\n"
+            "    if fault == 'black-wrong-type': value['diff_lines'] = False\n"
+            "    out.write_text(json.dumps(value))\n"
+        )
+        subprocess.run(["git", "add", "scripts"], cwd=root, check=True)
+    black_producer_controls = {"black-findings", "black-missing", "black-interrupted"}
+    if fault in black_producer_controls:
         target = (
             "08_Tooling/visual-asset-intake/src/visual_asset_intake/core.py"
             if fault == "black-findings" else "scripts/agent_os_ci_black.py"
         )
-        (root / target).write_text("VALUE=1\n" if fault == "black-findings" else "")
+        text = {
+            "black-findings": "VALUE=1\n",
+            "black-missing": "",
+            "black-interrupted": "import sys; open(sys.argv[1], 'w').write('{'); sys.exit(143)\n",
+        }[fault]
+        (root / target).write_text(text)
+    if fault in bad_black | black_producer_controls:
         subprocess.run(["git", "-c", "user.name=Fixture", "-c",
                         "user.email=fixture@example.invalid", "commit", "-qam", fault],
                        cwd=root, check=True)
@@ -212,7 +245,7 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
                             capture_output=True, check=False, timeout=10)
     assert result.returncode == exit_code, result.stdout + result.stderr
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
-    assert receipt["status"] == ("pass" if fault in {"none", "black-findings", "black-missing"} else "fail")
+    assert receipt["status"] == ("pass" if fault in {"none", "black-findings", "black-missing", "black-interrupted"} | bad_black else "fail")
     black = tmp_path / "junit/black-format-receipt.json"
     if fault in {"none", "black-findings"}:
         evidence = json.loads(black.read_text())
@@ -221,6 +254,11 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
         assert evidence["reason_code"] == (None if fault == "none" else "black-formatting-changes")
         if fault == "black-findings":
             assert "would reformat" in evidence["diagnostics"]
+    if fault in bad_black:
+        assert black.exists() and "Black formatting: clean receipt invalid" in result.stderr
+    if fault == "black-interrupted":
+        assert "interrupted or invalid exit" in result.stderr
+        assert not black.exists()
     if fault == "black-missing":
         assert not black.exists() and "required receipt missing" in result.stderr
     assert receipt["validation_exit"] == (2 if fault in {"runner-crash", "dirty-after"} else 0)
@@ -410,3 +448,29 @@ def test_valid_report_needs_manifest_binding(reports, fault, reason):
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
     actual = receipt["reports"][name]["reason_code"] if fault == "changed-bytes" else receipt["reason_code"]
     assert actual == reason
+
+
+@pytest.mark.parametrize("field,value", [
+    ("CI_JUNIT_HEAD_SHA", ""), ("CI_JUNIT_HEAD_SHA", "A" * 40), ("CI_JUNIT_HEAD_SHA", "f" * 40),
+    ("CI_JUNIT_RUN_ID", "0"), ("CI_JUNIT_RUN_ATTEMPT", "x"),
+])
+def test_hosted_identity_is_checked_before_producer_and_stale_black_is_removed(reports, tmp_path, field, value):
+    root = tmp_path / "checkout"
+    _init_test_checkout(root, source=reports)
+    junit = tmp_path / "junit"
+    junit.mkdir()
+    stale = junit / "black-format-receipt.json"
+    stale.write_text('{"status":"clean"}')
+    identity = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env = {
+        **os.environ, "CI_COVERAGE_DIR": str(reports), "CI_JUNIT_DIR": str(junit),
+        "STAGED_REPORTS": str(reports), "CI_JUNIT_HEAD_SHA": identity,
+        "CI_JUNIT_RUN_ID": "41", "CI_JUNIT_RUN_ATTEMPT": "1", "PYTHON_BIN": sys.executable,
+    }
+    env[field] = value
+    result = subprocess.run(["bash", "scripts/ci-local.sh", "--hosted"], cwd=root, env=env,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 2
+    assert "invalid hosted head, run ID, or attempt" in result.stderr
+    assert not stale.exists() and not (junit / "manifest.tsv").exists()
+    assert not (reports / "coverage-receipt.json").exists()
