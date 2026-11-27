@@ -87,8 +87,18 @@ python -m workflow_scheduler.cli run my-workflow
 ### 6. View Audit Log
 
 ```bash
-python -m workflow_scheduler.cli audit --workflow-id my-workflow
+python -m workflow_scheduler.cli audit --db /path/to/workflow_scheduler.db --workflow-id my-workflow
+python -m workflow_scheduler.cli audit --db /path/to/workflow_scheduler.db --workflow-id my-workflow --task-id my-task
 ```
+
+Use the same database as the workflow run. Audit history is read from that
+database in each CLI process. When both filters are present, events must match
+both the workflow and task. An empty history is a successful result with zero
+events; an unreadable audit history exits 1 with `audit_log_read_failed`.
+
+New task events record their workflow ID. Older events are not rewritten or
+backfilled: a task event without a workflow ID remains available unfiltered
+or by task ID, but does not match a workflow filter.
 
 ## Task Configuration
 

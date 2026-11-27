@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sqlite3
 import sys
 import uuid
 import yaml
@@ -10,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
+from workflow_scheduler.audit.audit_logger import AuditHistoryError
 from workflow_scheduler.dependencies import DependencyResolver
 from workflow_scheduler.execution import Executor, RetryManager
 from workflow_scheduler.governance import StopConditionChecker
@@ -1350,7 +1352,15 @@ class WorkflowSchedulerCLI:
         Returns:
             Dict with audit events
         """
-        events = self.audit_logger.get_events(task_id=task_id, workflow_id=workflow_id)
+        try:
+            events = self.audit_logger.get_events(task_id=task_id, workflow_id=workflow_id)
+        except (AuditHistoryError, OSError, sqlite3.Error):
+            return self._format_response(
+                status="fail",
+                checks_failed=["audit_log_read_failed"],
+                next_owner="user",
+                error="Audit history could not be read.",
+            )
 
         return self._format_response(
             status="pass",
