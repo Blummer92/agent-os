@@ -93,6 +93,12 @@ def reference(tmp_path):
         str(repo),
         "--shards",
         "2",
+        "--run-id",
+        "123",
+        "--run-attempt",
+        "1",
+        "--artifact-id",
+        "456",
         "--reference",
         str(inventory),
         "--reference-sha256",
@@ -640,3 +646,116 @@ def test_no_class_requires_skip_and_unnamed_cases_refuse():
     ):
         with pytest.raises(model.Refusal, match="unmapped-testcase"):
             model.replay(_xml(_case("a") + bad, 2), PATHS, 2, AB)
+
+
+@pytest.mark.parametrize(
+    "key,new_id",
+    [("run_id", 124), ("run_attempt", 2), ("artifact_id", 457)],
+)
+def test_provider_binding_must_match_independent_selection(
+    reference, capsys, key, new_id
+):
+    *_, path, record, args = reference
+    # Digest is still correct, but the record belongs to another selection.
+    record[key] = new_id
+    _update_inventory(path, record, args)
+    assert model.main(args) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip().endswith("invalid-reference-binding")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.2", "0" * 21, "1" * 21])
+def test_provider_cli_ids_have_a_bounded_positive_integer_format(
+    reference, capsys, value
+):
+    *_, args = reference
+    args[args.index("--run-id") + 1] = value
+    assert model.main(args) == 2
+    assert capsys.readouterr().err.strip().endswith("invalid-provider-identity")
+
+
+def test_optional_junit_file_agrees_with_independent_inventory():
+    raw = _xml(_case("a") + _case("b"), 2)
+    correct = raw.replace(
+        b'classname="tests.test_a"', b'file="tests/test_a.py" classname="tests.test_a"'
+    )
+    wrong = correct.replace(b'file="tests/test_a.py"', b'file="tests/test_b.py"')
+    assert model.replay(raw, PATHS, 2, AB) == model.replay(correct, PATHS, 2, AB)
+    with pytest.raises(model.Refusal, match="testcase-file-mismatch"):
+        model.replay(wrong, PATHS, 2, AB)
+
+
+@pytest.mark.parametrize("part", ["\x00", "\x01", "\x7f", "\x85", "\x9f"])
+def test_paths_refuse_control_characters(part):
+    with pytest.raises(model.Refusal, match="unsafe-path"):
+        model._test_path(f"tests/a{part}b.py")
+    model._test_path("tests/test_café.py")
+
+
+def test_zip_path_rejects_c1_control(tmp_path):
+    path = tmp_path / "report.zip"
+    digest = _archive(
+        path,
+        [("root.xml", _xml(_case("a") + _case("b"), 2)), ("note\x85.txt", "unread")],
+    )
+    with pytest.raises(model.Refusal, match="unsafe-path"):
+        model.read_root(path, digest)
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [b"<!-- Literal <!DOCTYPE example> -->", b"<![CDATA[Literal <!DOCTYPE example>]]>"],
+)
+def test_xml_literal_doctype_in_log_is_not_an_xml_declaration(annotation):
+    raw = _xml(_case("a") + _case("b"), 2)
+    note = b'time="1"><system-out>' + annotation + b"</system-out></testcase>"
+    assert model.replay(
+        raw.replace(b'time="1"/>', note, 1), PATHS, 2, AB
+    ) == model.replay(raw, PATHS, 2, AB)
+    with pytest.raises(model.Refusal, match="prohibited-xml-declaration"):
+        model.replay(b"<!DOCTYPE testsuites>" + raw, PATHS, 2, AB)
+
+
+@pytest.mark.parametrize("channel", ["missing", "closed", "unwritable"])
+def test_stderr_unavailable_never_uses_model_channel(monkeypatch, capsys, channel):
+    class Unwritable(io.StringIO):
+        def write(self, _text):
+            raise OSError("unwritable synthetic stderr")
+
+    stderr = (
+        None
+        if channel == "missing"
+        else Unwritable() if channel == "unwritable" else io.StringIO()
+    )
+    if channel == "closed":
+        stderr.close()
+    with monkeypatch.context() as m:
+        m.setattr(sys, "stderr", stderr)
+        assert model.main([]) == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_redirected_short_stdout_completes_or_refuses(reference, capsys, monkeypatch):
+    class Short(io.StringIO):
+        def write(self, text):
+            return super().write(text[:12])
+
+    class NoProgress(io.StringIO):
+        def write(self, _text):
+            return 0
+
+    *_, args = reference
+    assert model.main(args) == 0
+    expected = capsys.readouterr().out
+    short = Short()
+    with monkeypatch.context() as m:
+        m.setattr(sys, "stdout", short)
+        assert model.main(args) == 0
+    assert short.getvalue() == expected
+    stopped = NoProgress()
+    with monkeypatch.context() as m:
+        m.setattr(sys, "stdout", stopped)
+        assert model.main(args) == 2
+    assert stopped.getvalue() == ""
+    assert capsys.readouterr().err.strip().endswith("input-or-output-unavailable")

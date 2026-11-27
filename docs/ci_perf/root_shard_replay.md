@@ -19,8 +19,15 @@ unverified files after download.
 python -m scripts.ci_perf.root_shard_replay \
   --archive junit-aggregate-1.zip --archive-sha256 "$ARTIFACT_SHA256" \
   --source-head "$SOURCE_HEAD" --reference verified-root-reference.json \
-  --reference-sha256 "$TRUSTED_REFERENCE_SHA256" --shards 4
+  --reference-sha256 "$TRUSTED_REFERENCE_SHA256" \
+  --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+  --artifact-id "$ARTIFACT_ID" --shards 4
 ```
+
+Obtain the three expected provider IDs independently from the selected run
+and artifact, not from the reference JSON being checked. The planner
+compares each ID to the digest-verified reference alongside
+the source commit and archive digest.
 
 The reference record uses exactly these keys:
 
@@ -35,7 +42,8 @@ The reference record uses exactly these keys:
 
 The row inventory must come from a trusted source **independent of the report
 being evaluated**. It must account for collection-skip rows, which have an
-empty classname and an exact dotted module name. A self-generated record
+empty classname and an exact dotted module name. When a testcase has a
+`file` attribute, it must equal the canonical tracked path in the inventory. A self-generated record
 derived from the JUnit under review, a matching case count alone, and a
 locally recomputed record checksum are not independent verification. This
 offline program does not authenticate the provider or issuer itself; the

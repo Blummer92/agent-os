@@ -11,12 +11,14 @@ import re
 import stat
 import subprocess
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryFile
+from xml.parsers import expat
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 MAX_XML = 16 * 1024 * 1024
@@ -29,6 +31,8 @@ TICKS_PER_SECOND = 10**9
 SHA = re.compile(r"[a-f0-9]{40}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 UINT = re.compile(r"(?:0|[1-9][0-9]{0,8})")
+PROVIDER_ID = re.compile(r"[1-9][0-9]{0,19}")
+PROVIDER_KEYS = ("run_id", "run_attempt", "artifact_id")
 DURATION = re.compile(r"([0-9]{1,7})(?:\.([0-9]{1,9}))?")
 XML_DECLARATION = re.compile(r"\A<\?xml[ \t\r\n].*?\?>", re.DOTALL)
 XML_ENCODING = re.compile(r"""\bencoding\s*=\s*(['"])([^'"]+)\1""")
@@ -36,6 +40,7 @@ SCHEMA = "agent-os-root-timing-reference/1"
 REPOSITORY = "Blummer92/agent-os"
 Identity = tuple[str, str]
 Inventory = dict[Identity, str]
+ProviderIdentity = tuple[int, int, int]
 
 
 class Refusal(ValueError):
@@ -59,7 +64,7 @@ def _path_parts(path: str) -> list[str]:
     if (
         not path
         or any(part in {"", ".", ".."} for part in parts)
-        or any(ord(c) < 32 or ord(c) == 127 or c in "\\:" for c in path)
+        or any(unicodedata.category(c) == "Cc" or c in "\\:" for c in path)
     ):
         raise Refusal("unsafe-path")
     return parts
@@ -220,7 +225,7 @@ def _unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def read_inventory(
-    path: Path, digest: str, head: str, archive_digest: str
+    path: Path, digest: str, head: str, archive_digest: str, provider: ProviderIdentity
 ) -> Inventory:
     raw = _read_verified(path, digest, MAX_INVENTORY)
     try:
@@ -243,9 +248,10 @@ def read_inventory(
         or record["repository"] != REPOSITORY
         or record["source_head"] != head
         or record["archive_sha256"] != archive_digest
+        or tuple(record[k] for k in PROVIDER_KEYS) != provider
         or any(
             type(record[k]) is not int or not 0 < record[k] < 10**20
-            for k in ("run_id", "run_attempt", "artifact_id")
+            for k in PROVIDER_KEYS
         )
     ):
         raise Refusal("invalid-reference-binding")
@@ -269,9 +275,17 @@ def read_inventory(
     return inventory
 
 
-class _NoDoctype(ET.TreeBuilder):
-    def doctype(self, name: str, pubid: str, system: str) -> None:
-        raise Refusal("prohibited-xml-declaration")
+def _reject_xml_declaration(*_args: object) -> None:
+    raise Refusal("prohibited-xml-declaration")
+
+
+def _require_safe_xml(text: str) -> None:
+    # Apply the policy to parser events, not to strings printed in test logs.
+    parser = expat.ParserCreate("UTF-8")
+    parser.StartDoctypeDeclHandler = _reject_xml_declaration
+    parser.EntityDeclHandler = _reject_xml_declaration
+    parser.ExternalEntityRefHandler = _reject_xml_declaration
+    parser.Parse(text.encode("utf-8"), True)
 
 
 def _xml_root(raw: bytes) -> ET.Element:
@@ -286,12 +300,9 @@ def _xml_root(raw: bytes) -> ET.Element:
             encoding = XML_ENCODING.search(declaration[0])
             if encoding and encoding[2].lower() != "utf-8":
                 raise Refusal("invalid-xml-encoding")
-        # Check canonical text before invoking the parser, including its DTD hook.
-        upper = text.upper()
-        if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
-            raise Refusal("prohibited-xml-declaration")
-        return ET.fromstring(text, parser=ET.XMLParser(target=_NoDoctype()))
-    except (UnicodeError, ET.ParseError):
+        _require_safe_xml(text)
+        return ET.fromstring(text)
+    except (UnicodeError, ET.ParseError, expat.ExpatError):
         raise Refusal("invalid-root-xml") from None
 
 
@@ -369,6 +380,9 @@ def _case_file(
     if not name or identity not in inventory:
         raise Refusal("unmapped-testcase")
     path = inventory[identity]
+    supplied_path = case.get("file")
+    if supplied_path is not None and supplied_path != path:
+        raise Refusal("testcase-file-mismatch")
     module = modules.get(path)
     if (
         not module
@@ -427,24 +441,35 @@ class _Parser(argparse.ArgumentParser):
         raise Refusal("invalid-arguments")
 
 
-def _write_output(text: str) -> None:
-    # Use an unbuffered duplicate for the CLI; an EPIPE cannot leave buffered
-    # output pending at interpreter teardown. Redirected Python streams still
-    # work in tests. A pipe write itself cannot be made transactional.
-    stdout = sys.stdout
-    if stdout is None:
-        raise Refusal("output-unavailable")
-    if stdout is sys.__stdout__:
-        with os.fdopen(os.dup(stdout.fileno()), "wb", buffering=0) as sink:
-            remaining = memoryview(text.encode("ascii"))
-            while remaining:
-                written = sink.write(remaining)
-                if not written:
-                    raise OSError("stdout unavailable")
-                remaining = remaining[written:]
+def _write_all(sink, data: str | memoryview) -> None:
+    while data:
+        written = sink.write(data)
+        if type(written) is not int or not 0 < written <= len(data):
+            raise OSError("stream made no write progress")
+        data = data[written:]
+
+
+def _write_stream(stream, text: str) -> None:
+    if stream is None:
+        raise OSError("stream unavailable")
+    # Native streams use an unbuffered duplicate, so a closed pipe cannot
+    # leave data for the interpreter to retry on shutdown.
+    if stream is sys.__stdout__ or stream is sys.__stderr__:
+        with os.fdopen(os.dup(stream.fileno()), "wb", buffering=0) as sink:
+            _write_all(sink, memoryview(text.encode("ascii")))
     else:
-        stdout.write(text)
-        stdout.flush()
+        _write_all(stream, text)
+        stream.flush()
+
+
+def _write_output(text: str) -> None:
+    _write_stream(sys.stdout, text)
+
+
+def _provider_id(value: str) -> int:
+    if not PROVIDER_ID.fullmatch(value):
+        raise Refusal("invalid-provider-identity")
+    return int(value)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -454,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-head", required=True)
     parser.add_argument("--reference", required=True, type=Path)
     parser.add_argument("--reference-sha256", required=True)
+    for key in PROVIDER_KEYS:
+        parser.add_argument("--" + key.replace("_", "-"), required=True)
     parser.add_argument("--repo", default=Path("."), type=Path)
     parser.add_argument("--shards", default=4, type=int)
     try:
@@ -463,7 +490,15 @@ def main(argv: list[str] | None = None) -> int:
         if not DIGEST.fullmatch(args.archive_sha256):
             raise Refusal("invalid-digest")
         inventory = read_inventory(
-            args.reference, args.reference_sha256, args.source_head, args.archive_sha256
+            args.reference,
+            args.reference_sha256,
+            args.source_head,
+            args.archive_sha256,
+            (
+                _provider_id(args.run_id),
+                _provider_id(args.run_attempt),
+                _provider_id(args.artifact_id),
+            ),
         )
         paths = tracked_test_paths(args.repo, args.source_head)
         raw = read_root(args.archive, args.archive_sha256)
@@ -487,8 +522,8 @@ def main(argv: list[str] | None = None) -> int:
             str(error) if isinstance(error, Refusal) else "input-or-output-unavailable"
         )
         try:
-            print(f"root shard timing replay refused: {reason}", file=sys.stderr)
-        except OSError:
+            _write_stream(sys.stderr, f"root shard timing replay refused: {reason}\n")
+        except (OSError, ValueError):
             pass
         return 2
     return 0
