@@ -49,6 +49,11 @@ else
   fi
 fi
 
+# NEVER MERGE: omit one real report after a successful test run.
+if [ "$origin" = hosted ] && [ "$validation_status" -eq 0 ]; then
+  rm -f -- "$CI_COVERAGE_DIR/visual-asset-intake.json"
+fi
+
 coverage_status=0
 "${PYTHON_BIN:-python3}" scripts/agent_os_ci_branch_coverage.py "$CI_COVERAGE_DIR" \
   --validation-exit "$validation_status" || coverage_status=$?
