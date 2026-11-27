@@ -213,6 +213,13 @@ def test_critical_validation_source_edit_never_passes():
         assert pub.evaluate(source(),jobs(),{path})['state']=='pending'
 
 
+
+def test_hierarchical_ruff_configs_require_authority_review():
+    for path in ("src/navigation_registry/ruff.toml", "src/example/.ruff.toml"):
+        assert pub.touches_authority({path})
+        assert pub.evaluate(source(), jobs(), {path})["state"] == "pending"
+
+
 def fake_api(endpoint):
     if f'/commits/{SHA}/pulls?' in endpoint: return [pr()]
     if endpoint.endswith('/pulls/42'): return pr()

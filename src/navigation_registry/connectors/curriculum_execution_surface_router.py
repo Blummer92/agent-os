@@ -13,7 +13,7 @@ Visual Asset Library lookup, and authority/safe-use semantics remain owned by
 
 from __future__ import annotations
 
-from typing import Callable, Mapping
+from collections.abc import Callable, Mapping
 
 from .curriculum_evidence_orchestrator import (
     MAX_RESULTS,

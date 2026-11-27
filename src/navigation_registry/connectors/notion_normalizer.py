@@ -4,7 +4,6 @@ from typing import Any
 
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 
-
 _ALLOWED_TYPES = {"page": "Page", "database": "Database"}
 _BOOLEAN_FIELDS = {
     "human_review_required": False,

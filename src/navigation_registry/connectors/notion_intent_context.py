@@ -7,10 +7,10 @@ reads, search, credentials, persistence, or writes and grants no authority.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
-from typing import Mapping, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 
 from .base import RegistryResource
 

@@ -72,6 +72,7 @@ AUTHORITY_SUFFIXES = ("/conftest.py",)
 # *any* package/test runner configuration change rather than assuming the four
 # direct pip inputs above are the exhaustive future authority surface.
 AUTHORITY_FILENAMES = frozenset({
+    "ruff.toml", ".ruff.toml",
     "pyproject.toml", "setup.py", "setup.cfg", "tox.ini", "pytest.ini",
     "package.json", "package-lock.json", "npm-shrinkwrap.json",
     "pnpm-lock.yaml", "yarn.lock", "uv.lock", "Pipfile", "Pipfile.lock",

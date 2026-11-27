@@ -8,8 +8,8 @@ the identity/normalization boundary.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Callable, Iterable, Mapping, Sequence
 
 from instructional_workflow_contracts.current_curriculum_evidence import (
     assemble_current_curriculum_evidence,
