@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,7 +78,7 @@ def test_aggregate_is_not_serialized_behind_the_developer_loop_plan_job():
     assert "steps.plan.outputs.profile == 'focused'" in content
 
     # The authoritative exact-head aggregate is untouched and still singular.
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)
     assert "checked-out SHA $checked_out_sha does not match pull request head" in content
 
 
@@ -84,6 +86,6 @@ def test_push_and_final_candidate_keep_authoritative_aggregate_lane():
     content = _content()
     assert "github.event_name != 'pull_request'" in content
     assert "name: Run aggregate validation" in content
-    assert "./scripts/validate-all.sh" in content
+    assert_single_hosted_aggregate(ROOT)
     assert "mode=final-candidate" in content
     assert "stale final-candidate request" in content

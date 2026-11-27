@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -7,6 +10,9 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
+
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
 
 
 SOURCE_SCRIPT = Path(__file__).parents[1] / "scripts" / "validate-all.sh"
@@ -26,6 +32,7 @@ def repo(tmp_path: Path) -> Path:
     shutil.copy2(SOURCE_SCRIPT, root / "scripts" / "validate-all.sh")
     for helper in RUNNER_HELPERS:
         shutil.copy2(SOURCE_SCRIPT.parent / helper, root / "scripts" / helper)
+    shutil.copy2(SOURCE_SCRIPT.parent / "ci-coverage-suites.tsv", root / "scripts")
     os.chmod(root / "scripts" / "validate-all.sh", 0o755)
     structural = root / "07_Agent_Tests" / "validate-repo-structure.sh"
     structural.parent.mkdir(parents=True)
@@ -51,6 +58,11 @@ def repo(tmp_path: Path) -> Path:
         "    runpy.run_path(args[0], run_name='__main__')\n"
         "    raise SystemExit(0)\n"
         "if len(args) >= 3 and args[:2] == ['-m', 'pytest'] and '--collect-only' in args:\n"
+        "    target = os.environ.get('FIXTURE_CHANGE_JUNIT')\n"
+        "    if target:\n"
+        "        path = pathlib.Path(target)\n"
+        "        raw = path.read_text()\n"
+        "        if 'hostname=' not in raw: path.write_text(raw.replace('name=\"pytest\"', 'name=\"pytest\" hostname=\"changed\"'))\n"
         "    print('m.py::t')  # the one test the shim's JUnit reports\n"
         "    raise SystemExit(0)\n"
         "if args == ['-m', 'pytest', '--version']:\n"
@@ -65,6 +77,9 @@ def repo(tmp_path: Path) -> Path:
         "    print('CWD_MARKER ' + os.getcwd())\n"
         "    print('PYTHONPATH_MARKER ' + os.environ.get('PYTHONPATH', ''))\n"
         "    print('COVERAGE_FILE_MARKER ' + os.environ.get('COVERAGE_FILE', ''))\n"
+        "    if 'CI_COVERAGE_DIR' in os.environ or 'CI_JUNIT_DIR' in os.environ: raise SystemExit(42)\n"
+        "    for arg in args:\n"
+        "        if arg.startswith('--cov-'): print('COVERAGE_ARGUMENT ' + arg)\n"
         "    barrier = os.environ.get('PYTEST_BARRIER_DIR')\n"
         "    cwd_name = pathlib.Path.cwd().name\n"
         "    if barrier and cwd_name.startswith('pkg-'):\n"
@@ -81,7 +96,8 @@ def repo(tmp_path: Path) -> Path:
         "        if arg.startswith('--junitxml='):\n"
         "            junit = pathlib.Path(arg.split('=', 1)[1])\n"
         "            junit.parent.mkdir(parents=True, exist_ok=True)\n"
-        "            junit.write_text('<testsuites><testsuite name=\"pytest\" tests=\"1\"><testcase classname=\"m\" name=\"t\"/></testsuite></testsuites>')\n"
+        "            junit.write_text('<testsuites><testsuite name=\"pytest\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"><testcase classname=\"m\" name=\"t\"/></testsuite></testsuites>')\n"
+        "    if os.environ.get('FIXTURE_SUBTEST_SUMMARY'): print('=== 1 passed, 1 subtests passed in 0.01s ===')\n"
         "    should_fail = 'fail' in target\n"
         "    if pathlib.Path(target).is_dir():\n"
         "        should_fail = should_fail or any(pathlib.Path(target).rglob('test_*fail.py'))\n"
@@ -403,9 +419,11 @@ def test_governed_lanes_keep_one_canonical_runner_invocation() -> None:
         encoding="utf-8"
     )
     cloud_build = (root / "cloudbuild.yaml").read_text(encoding="utf-8")
-    for content in (workflow, cloud_build):
-        assert content.count("./scripts/validate-all.sh") == 1
-        assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in content
+    jobs = yaml.safe_load(workflow)["jobs"]
+    scripts = [s.get("run", "") for j in jobs.values() for s in j.get("steps", [])]
+    assert_single_hosted_aggregate(root)
+    assert cloud_build.count("./scripts/validate-all.sh") == 1
+    assert all("bash 07_Agent_Tests/validate-repo-structure.sh" not in run for run in [*scripts, cloud_build])
 
 
 def test_pr_template_names_focused_and_aggregate_evidence_without_duplication() -> None:
@@ -660,7 +678,7 @@ def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receip
     _write_test(repo / "pkg-pass" / "tests" / "test_ok.py")
     runner = repo / "scripts" / "validate-all.sh"
     text = runner.read_text(encoding="utf-8")
-    anchor = '  started_us="$(timer_now_us || true)"\n  run_pytest_suite '
+    anchor = '  run_pytest_suite "$suite_dir" "$suite_name" >"$output_file" 2>&1\n'
     assert text.count(anchor) == 1
     # Inject only into the disposable worker body; it exits before logs/JUnit or
     # status are written. All other workflow and evidence paths are unchanged.
@@ -683,3 +701,79 @@ def test_scheduler_preserves_manifest_when_exclusive_coach_wrapper_has_no_receip
     for name in ("pkg-pass", "root"):
         assert rows[name][2:] == ["yes", "PASS", "0", "EXECUTED_PASS"]
     assert manifest.index(coach_name + "\t") < manifest.index("pkg-pass\t") < manifest.index("root\t")
+
+
+def test_hosted_coverage_reports_are_named_and_do_not_reach_nested_pytest(repo, tmp_path):
+    scope_path = repo / "scripts/ci-coverage-suites.tsv"
+    with scope_path.open("a") as scope_file:
+        scope_file.write("new-package\tnew_package\tterm\n")
+    names = []
+    for line in scope_path.read_text().splitlines():
+        name, module, _ = line.split("\t")
+        names.append(name)
+        package = repo / "08_Tooling" / name
+        _write_test(package / "tests" / "test_package.py")
+        (package / "src" / module).mkdir(parents=True)
+    coverage_dir = tmp_path / "coverage"
+    junit_dir = tmp_path / "published-junit"
+    result = run(repo, env={"CI_COVERAGE_DIR": str(coverage_dir), "CI_JUNIT_DIR": str(junit_dir)})
+    assert result.returncode == 0, result.stderr + result.stdout
+    arguments = [line.removeprefix("COVERAGE_ARGUMENT ") for line in result.stdout.splitlines()
+                 if line.startswith("COVERAGE_ARGUMENT ")]
+    paths = {arg.removeprefix("--cov-report=json:") for arg in arguments
+             if arg.startswith("--cov-report=json:")}
+    assert paths == {
+        str(coverage_dir / f"{name}.json")
+        for name in names
+    }
+    assert arguments.count("--cov-branch") == len(names)
+    assert result.stdout.count("PYTEST_MARKER tests") == len(names) + 1
+    summary = result.stdout.split("CHECK RESULTS\n", 1)[1].split("\nTIMING RESULTS", 1)[0]
+    with (junit_dir / "manifest.tsv").open(newline="") as manifest:
+        rows = {row["suite_name"]: row for row in csv.DictReader(manifest, delimiter="\t")}
+    for name in names:
+        row = next(line for line in summary.splitlines() if f"PASS | 08_Tooling/{name} |" in line)
+        for option in (
+            f"--cov-config={repo}/scripts/ci-branch-coverage.ini", "--cov-branch",
+            f"--cov-report=json:{coverage_dir}/{name}.json",
+        ):
+            assert option in arguments
+            assert option in row
+            assert option in rows[f"08_Tooling/{name}"]["command"]
+        manifest_row = rows[f"08_Tooling/{name}"]
+        junit = junit_dir / manifest_row["junit_file"]
+        assert manifest_row["junit_sha256"] == hashlib.sha256(junit.read_bytes()).hexdigest()
+
+
+def test_artifact_changed_after_suite_does_not_pass_manifest(repo, tmp_path):
+    junit = tmp_path / "junit"
+    result = run(repo, env={
+        "CI_JUNIT_DIR": str(junit), "CI_COVERAGE_DIR": str(tmp_path / "coverage"),
+        "FIXTURE_CHANGE_JUNIT": str(junit / "root.xml"),
+    })
+    assert result.returncode == 1, result.stderr + result.stdout
+    with (junit / "manifest.tsv").open(newline="") as evidence:
+        root = next(row for row in csv.DictReader(evidence, delimiter="\t") if row["suite_name"] == "root")
+    assert root["status"] == "FAIL"
+    assert root["classification"] == "TEST_COLLECTION_ERROR"
+    assert root["junit_sha256"] == "unverified"
+    assert "artifact changed or fingerprint missing" in result.stdout
+
+
+def test_entrypoint_writes_bound_subtest_receipt_without_exporting_output_path(repo, tmp_path):
+    junit = tmp_path / "junit"
+    result = run(repo, env={
+        "CI_JUNIT_DIR": str(junit),
+        "CI_JUNIT_RUN_ID": "123",
+        "CI_JUNIT_RUN_ATTEMPT": "2",
+        "CI_JUNIT_HEAD_SHA": "a" * 40,
+        "FIXTURE_SUBTEST_SUMMARY": "1",
+    })
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "AGENT_OS_JUNIT_SUBTEST_RECEIPT" in result.stdout, result.stdout + result.stderr
+    receipt = json.loads((junit / "junit-subtest-receipt-root.json").read_text())
+    assert receipt["source_run_id"] == 123
+    assert receipt["source_run_attempt"] == 2
+    assert receipt["source_head_sha"] == "a" * 40
+    assert receipt["subtests_passed"] == 1
+    assert receipt["junit_sha256"] == hashlib.sha256((junit / "root.xml").read_bytes()).hexdigest()
