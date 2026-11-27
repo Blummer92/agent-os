@@ -1775,3 +1775,16 @@ def test_frontend_driver_and_its_regression_tests_select_focused_pytest() -> Non
         plan = _select(_input(selection))
         assert plan.profile == "focused"
         assert plan.commands == ("python -m pytest tests/test_agent_os_frontend_checks.py",)
+
+
+def test_python_quality_dependency_pin_requires_aggregate() -> None:
+    plan = _select(_input(["scripts/ci-python-quality-requirements.txt"]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == (RULES["aggregate_command"],)
+    assert plan.reason_codes == ("profile.aggregate-configuration",)
+
+
+def test_unknown_python_quality_text_file_still_requires_manual_review() -> None:
+    plan = _select(_input(["scripts/ci-python-quality-requirements-other.txt"]))
+    assert plan.profile == "manual-review"
+    assert not plan.commands
