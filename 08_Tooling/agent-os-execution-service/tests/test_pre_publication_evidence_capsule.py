@@ -572,3 +572,43 @@ def test_no_second_store_or_external_authority_surface():
             "publication_authorized=True",
         ):
             assert banned not in source
+
+
+def test_publication_load_rechecks_checkpoint_after_append(tmp_path, monkeypatch):
+    source = _capsule(monkeypatch)
+    checkpoint = _checkpoint(source)
+    bound = capsule_module.bind_source_capsule_to_checkpoint(source, checkpoint)
+    monkeypatch.setattr(store_module, "load_checkpoint_by_id", lambda *_: checkpoint)
+    saved = store_module.append_pre_publication_evidence(tmp_path, bound)
+    monkeypatch.setattr(store_module, "load_checkpoint_by_id",
+                        lambda *_: replace(checkpoint, tested_sha="8" * 40))
+    with pytest.raises(CheckpointStoreIntegrityConflict, match="does not bind"):
+        store_module.load_pre_publication_evidence(tmp_path, saved.capsule_id)
+    assert saved.path.is_file()
+
+
+def test_custody_append_rejects_approval_drift_before_writing(tmp_path, monkeypatch):
+    custody = _custody(monkeypatch)
+    object.__setattr__(custody, "approval_record", replace(custody.approval_record, approval_id="wrong"))
+    with pytest.raises(CheckpointStoreIntegrityConflict, match="approval"):
+        store_module.append_pre_publication_evidence(tmp_path, custody)
+    assert not (tmp_path / store_module.STORE_NAMESPACE).exists()
+
+
+@pytest.mark.parametrize("custody", [False, True])
+def test_version_dispatch_decodes_outer_json_once(monkeypatch, custody):
+    value = _custody(monkeypatch) if custody else _capsule(monkeypatch)
+    encode = (capsule_module.serialize_approval_custody_evidence if custody
+              else capsule_module.serialize_pre_publication_evidence)
+    raw = encode(value)
+    original = capsule_module.json.loads
+    seen = []
+
+    def count(p, *args, **kwargs):
+        if p == raw.decode("utf-8"):
+            seen.append(p)
+        return original(p, *args, **kwargs)
+
+    monkeypatch.setattr(capsule_module.json, "loads", count)
+    assert capsule_module.deserialize_pre_publication_evidence_record(raw) == value
+    assert seen == [raw.decode("utf-8")]

@@ -57,22 +57,22 @@ def prepare_fresh_pre_validation(
     proposal = proposal_stage.proposal
     issueplan = proposal_stage.issueplan_current_state_evidence
     repository = proposal_stage.repository_state_evidence
-    planning = proposal_stage.planning_binding
-    if proposal is None or issueplan is None or repository is None:
+    if not (proposal and issueplan and repository and proposal_stage.planning_binding):
         raise FreshPreValidationError("candidate-proposal-evidence-incomplete")
 
     packet = provenance.approval_ready_packet
     identities = dict(packet.stage_identities)
     expected = {
-        "issueplan": issueplan.evidence_id,
-        "repository-evidence": repository.evidence_id,
-        "proposal": proposal.proposal_id,
+        "source": issueplan.source_snapshot.source_revision, "issueplan": issueplan.evidence_id,
+        "repository-evidence": repository.evidence_id, "proposal": proposal.proposal_id,
+        "planning-handoff": proposal.handoff_digest,
     }
-    if planning is not None:
-        expected["planning-handoff"] = proposal.handoff_digest
-    for name, value in expected.items():
-        if identities.get(name) != value:
-            raise FreshPreValidationError(f"candidate-provenance-drift:{name}")
+    if set(identities) != set(expected) | {"approval-candidate"} or len(identities) != len(packet.stage_identities):
+        raise FreshPreValidationError("candidate-provenance-drift:stage-identities")
+    if any(type(value) is not str or not value.strip() for value in identities.values()):
+        raise FreshPreValidationError("candidate-provenance-drift:empty-identity")
+    if any(identities[name] != value for name, value in expected.items()):
+        raise FreshPreValidationError("candidate-provenance-drift:stage-binding")
     if (
         packet.repository.casefold() != proposal.repository.casefold()
         or packet.base_branch != proposal.base_branch
@@ -89,14 +89,13 @@ def prepare_fresh_pre_validation(
         projected_at=projected_at,
     )
     if approval.status is not ApprovalProjectionStageStatus.COMPLETE:
-        raise FreshPreValidationError(
-            "approval-projection-not-complete:" + ",".join(approval.reason_codes)
-        )
+        raise FreshPreValidationError("approval-projection-not-complete")
+    pending = approval.pending_candidate
+    if pending is None or identities["approval-candidate"] != f"{pending.approval_id}@{pending.approval_revision}":
+        raise FreshPreValidationError("candidate-provenance-drift:approval-candidate")
     validation = prepare_pre_validation_stage(approval, candidate_inputs)
     if validation.disposition is not ValidationStageDisposition.GO:
-        raise FreshPreValidationError(
-            "pre-validation-plan-not-admitted:" + ",".join(validation.reason_codes)
-        )
+        raise FreshPreValidationError("pre-validation-plan-not-admitted")
     return FreshPreValidationResult(
         approval_stage_result=approval,
         validation_stage_result=validation,

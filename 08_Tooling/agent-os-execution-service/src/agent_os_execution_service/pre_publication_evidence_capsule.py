@@ -60,9 +60,20 @@ APPROVAL_CUSTODY_PHASE = "approval-custody"
 CAPSULE_PHASES = frozenset({SOURCE_PHASE, CHECKPOINT_BOUND_PHASE})
 MAX_CAPSULE_BYTES = 2 * 1024 * 1024
 
-_CAPSULE_ID_RE = re.compile(r"^pre-publication-evidence:[0-9a-f]{64}$", re.ASCII)
+CAPSULE_ID_PREFIX = "pre-publication-evidence:"
+_CAPSULE_ID_RE = re.compile(r"^" + CAPSULE_ID_PREFIX + r"[0-9a-f]{64}$", re.ASCII)
+_CAPSULE_DOMAINS = {
+    LEGACY_CAPSULE_SCHEMA_VERSION: b"agent-os-pre-publication-producer-evidence:v1\0",
+    CAPSULE_SCHEMA_VERSION: b"agent-os-pre-publication-producer-evidence:v1.1\0",
+    APPROVAL_CUSTODY_SCHEMA_VERSION: b"agent-os-pre-publication-producer-evidence:v1.2\0",
+}
 _CHECKPOINT_ID_RE = re.compile(r"^agent-os\.execution-checkpoint:[0-9a-f]{64}$", re.ASCII)
 _EXECUTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$", re.ASCII)
+_PUBLICATION_FIELDS = (
+    "validation_bundle_json", "validation_plan_id", "validation_bundle_id",
+    "advisory_result_id", "advisory_render_id", "candidate_branch", "workspace_request_id",
+    "checkpoint_id", "created_at", "expires_at", "evaluated_at",
+)
 _AUTHORITY_FIELDS = (
     "repository_implementation_authorized",
     "execution_authorized",
@@ -148,13 +159,10 @@ class ApprovalCustodyEvidenceCapsule:
         _verify_candidate_and_approval(self.candidate_packet, self.approval_record)
 
         computed = approval_custody_evidence_id(self)
-        if self.capsule_id and (
-            not _CAPSULE_ID_RE.fullmatch(self.capsule_id) or self.capsule_id != computed
-        ):
+        if self.capsule_id and self.capsule_id != computed:
             raise ValueError("capsule_id does not match capsule content")
         object.__setattr__(self, "capsule_id", computed)
-        if len(serialize_approval_custody_evidence(self)) > MAX_CAPSULE_BYTES:
-            raise ValueError("approval-custody evidence capsule exceeds size bound")
+        _encode(self)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -250,13 +258,10 @@ class PrePublicationEvidenceCapsule:
             raise ValueError("validation bundle does not bind to producer evidence")
 
         computed = pre_publication_evidence_id(self)
-        if self.capsule_id and (
-            not _CAPSULE_ID_RE.fullmatch(self.capsule_id) or self.capsule_id != computed
-        ):
+        if self.capsule_id and self.capsule_id != computed:
             raise ValueError("capsule_id does not match capsule content")
         object.__setattr__(self, "capsule_id", computed)
-        if len(serialize_pre_publication_evidence(self)) > MAX_CAPSULE_BYTES:
-            raise ValueError("pre-publication evidence capsule exceeds size bound")
+        _encode(self)
 
     @property
     def is_checkpoint_bound(self) -> bool:
@@ -279,77 +284,75 @@ def _validation_bundle_payload(payload_json: str, expected_id: str) -> dict[str,
     return decoded
 
 
-def _common_payload(value: PrePublicationEvidenceCapsule) -> dict[str, object]:
-    return {
-        "schema_name": value.schema_name,
-        "schema_version": value.schema_version,
-        "candidate_packet": serialize_candidate_packet(value.candidate_packet),
-        "approval_record": _approval_payload(value.approval_record),
-        "required_environment_spec": required_environment_spec_payload(value.required_environment_spec),
-        "validation_bundle_json": value.validation_bundle_json,
-        "validation_plan_id": value.validation_plan_id,
-        "validation_bundle_id": value.validation_bundle_id,
-        "advisory_result_id": value.advisory_result_id,
-        "advisory_render_id": value.advisory_render_id,
-        "candidate_branch": value.candidate_branch,
-        "workspace_request_id": value.workspace_request_id,
-        "invalidation_events": list(value.invalidation_events),
-        "checkpoint_id": value.checkpoint_id,
-        "created_at": value.created_at,
-        "expires_at": value.expires_at,
-        "evaluated_at": value.evaluated_at,
-        **_authority_payload(),
-    }
-
-
-def _payload(value: PrePublicationEvidenceCapsule, *, include_id: bool) -> dict[str, object]:
-    payload = _common_payload(value)
-    if value.schema_version == CAPSULE_SCHEMA_VERSION:
-        payload["phase"] = value.phase
-        payload["execution_id"] = value.execution_id
-    if include_id:
-        payload["capsule_id"] = value.capsule_id
-    return payload
-
-
-def _approval_custody_payload(
-    value: ApprovalCustodyEvidenceCapsule,
-    *,
-    include_id: bool,
+def _payload(
+    value: PrePublicationEvidenceCapsule | ApprovalCustodyEvidenceCapsule, *, include_id: bool,
 ) -> dict[str, object]:
-    payload = {
-        "schema_name": value.schema_name,
-        "schema_version": value.schema_version,
-        "phase": value.phase,
-        "candidate_packet": serialize_candidate_packet(value.candidate_packet),
-        "approval_record": _approval_payload(value.approval_record),
-        **_authority_payload(),
-    }
+    payload = dict(
+        schema_name=value.schema_name, schema_version=value.schema_version,
+        candidate_packet=serialize_candidate_packet(value.candidate_packet),
+        approval_record=_approval_payload(value.approval_record), **_authority_payload(),
+    )
+    if value.schema_version != LEGACY_CAPSULE_SCHEMA_VERSION:
+        payload["phase"] = value.phase
+    if type(value) is PrePublicationEvidenceCapsule:
+        payload.update(
+            {name: getattr(value, name) for name in _PUBLICATION_FIELDS},
+            required_environment_spec=required_environment_spec_payload(value.required_environment_spec),
+            invalidation_events=list(value.invalidation_events),
+        )
+        if value.schema_version == CAPSULE_SCHEMA_VERSION:
+            payload["execution_id"] = value.execution_id
     if include_id:
         payload["capsule_id"] = value.capsule_id
     return payload
+
+
+def _capsule_id(value: PrePublicationEvidenceCapsule | ApprovalCustodyEvidenceCapsule) -> str:
+    return CAPSULE_ID_PREFIX + hashlib.sha256(
+        _CAPSULE_DOMAINS[value.schema_version] + canonical_json_bytes(_payload(value, include_id=False))
+    ).hexdigest()
 
 
 def pre_publication_evidence_id(value: PrePublicationEvidenceCapsule) -> str:
     if type(value) is not PrePublicationEvidenceCapsule:
         raise TypeError("value must be an exact PrePublicationEvidenceCapsule")
-    domain = (
-        b"agent-os-pre-publication-producer-evidence:v1\0"
-        if value.schema_version == LEGACY_CAPSULE_SCHEMA_VERSION
-        else b"agent-os-pre-publication-producer-evidence:v1.1\0"
-    )
-    return "pre-publication-evidence:" + hashlib.sha256(
-        domain + canonical_json_bytes(_payload(value, include_id=False))
-    ).hexdigest()
+    return _capsule_id(value)
 
 
 def approval_custody_evidence_id(value: ApprovalCustodyEvidenceCapsule) -> str:
     if type(value) is not ApprovalCustodyEvidenceCapsule:
         raise TypeError("value must be an exact ApprovalCustodyEvidenceCapsule")
-    domain = b"agent-os-pre-publication-producer-evidence:v1.2\0"
-    return "pre-publication-evidence:" + hashlib.sha256(
-        domain + canonical_json_bytes(_approval_custody_payload(value, include_id=False))
-    ).hexdigest()
+    return _capsule_id(value)
+
+
+def _encode(value: PrePublicationEvidenceCapsule | ApprovalCustodyEvidenceCapsule) -> bytes:
+    payload = canonical_json_bytes(_payload(value, include_id=True))
+    if len(payload) > MAX_CAPSULE_BYTES:
+        raise ValueError("pre-publication evidence capsule exceeds size bound")
+    return payload
+
+
+def _read_object(payload: bytes | bytearray | memoryview | str) -> dict[str, object]:
+    if not isinstance(payload, (str, bytes, bytearray, memoryview)):
+        raise TypeError("pre-publication evidence capsule must be bytes or text")
+    if (payload.nbytes if isinstance(payload, memoryview) else len(payload)) > MAX_CAPSULE_BYTES:
+        raise ValueError("pre-publication evidence capsule exceeds size bound")
+    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
+    if len(raw) > MAX_CAPSULE_BYTES:
+        raise ValueError("pre-publication evidence capsule exceeds size bound")
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("pre-publication evidence capsule is not valid JSON") from exc
+    if type(decoded) is not dict:
+        raise ValueError("pre-publication evidence capsule fields drifted")
+    return decoded
+
+
+def _require_non_authority(decoded: dict[str, object]) -> None:
+    for name in _AUTHORITY_FIELDS:
+        if decoded[name] is not False:
+            raise ValueError(f"{name} must remain false")
 
 
 def build_approval_custody_evidence(
@@ -370,24 +373,16 @@ def build_approval_custody_evidence(
 def serialize_approval_custody_evidence(value: ApprovalCustodyEvidenceCapsule) -> bytes:
     if type(value) is not ApprovalCustodyEvidenceCapsule:
         raise TypeError("value must be an exact ApprovalCustodyEvidenceCapsule")
-    payload = canonical_json_bytes(_approval_custody_payload(value, include_id=True))
-    if len(payload) > MAX_CAPSULE_BYTES:
-        raise ValueError("approval-custody evidence capsule exceeds size bound")
-    return payload
+    return _encode(value)
 
 
 def deserialize_approval_custody_evidence(
     payload: bytes | bytearray | memoryview | str,
 ) -> ApprovalCustodyEvidenceCapsule:
-    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
-    if len(raw) > MAX_CAPSULE_BYTES:
-        raise ValueError("approval-custody evidence capsule exceeds size bound")
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("approval-custody evidence capsule is not valid JSON") from exc
-    if type(decoded) is not dict:
-        raise ValueError("approval-custody evidence capsule fields drifted")
+    return _decode_custody(_read_object(payload))
+
+
+def _decode_custody(decoded: dict[str, object]) -> ApprovalCustodyEvidenceCapsule:
     expected = {
         "schema_name", "schema_version", "phase", "candidate_packet",
         "approval_record", "capsule_id", *_AUTHORITY_FIELDS,
@@ -399,9 +394,7 @@ def deserialize_approval_custody_evidence(
         raise ValueError("approval-custody evidence fields drifted or version unsupported")
     if decoded.get("phase") != APPROVAL_CUSTODY_PHASE:
         raise ValueError("unsupported approval-custody evidence phase")
-    for name in _AUTHORITY_FIELDS:
-        if decoded[name] is not False:
-            raise ValueError(f"{name} must remain false")
+    _require_non_authority(decoded)
     return ApprovalCustodyEvidenceCapsule(
         schema_name=decoded["schema_name"],
         schema_version=decoded["schema_version"],
@@ -517,6 +510,16 @@ def build_source_pre_publication_evidence(
     )
 
 
+def _checkpoint_binds(checkpoint: ExecutionCheckpoint, packet: CandidatePacket, branch: str) -> bool:
+    return (
+        checkpoint.repository.casefold(), checkpoint.issue_number, checkpoint.invocation_id,
+        checkpoint.branch, checkpoint.source_sha, checkpoint.tested_sha,
+    ) == (
+        packet.repository.casefold(), packet.issue_number, packet.invocation_id,
+        branch, packet.candidate_sha, packet.tested_sha,
+    )
+
+
 def bind_source_capsule_to_checkpoint(
     source_capsule: PrePublicationEvidenceCapsule,
     checkpoint: ExecutionCheckpoint,
@@ -530,15 +533,9 @@ def bind_source_capsule_to_checkpoint(
         raise ValueError("source_capsule must be an exact v1.1 source capsule")
     if type(checkpoint) is not ExecutionCheckpoint:
         raise TypeError("checkpoint must be an exact ExecutionCheckpoint")
-    packet = source_capsule.candidate_packet
     if (
-        checkpoint.repository.casefold() != packet.repository.casefold()
-        or checkpoint.issue_number != packet.issue_number
-        or checkpoint.invocation_id != packet.invocation_id
+        not _checkpoint_binds(checkpoint, source_capsule.candidate_packet, source_capsule.candidate_branch)
         or checkpoint.execution_id != source_capsule.execution_id
-        or checkpoint.branch != source_capsule.candidate_branch
-        or checkpoint.source_sha != packet.candidate_sha
-        or checkpoint.tested_sha != packet.tested_sha
     ):
         raise ValueError("checkpoint does not bind to source producer evidence")
     return replace(
@@ -566,14 +563,7 @@ def build_pre_publication_evidence(
         pilot_input=pilot_input,
         required_environment_spec=required_environment_spec,
     )
-    if (
-        checkpoint.repository.casefold() != candidate_packet.repository.casefold()
-        or checkpoint.issue_number != candidate_packet.issue_number
-        or checkpoint.invocation_id != candidate_packet.invocation_id
-        or checkpoint.branch != pilot_input.branch
-        or checkpoint.source_sha != candidate_packet.candidate_sha
-        or checkpoint.tested_sha != candidate_packet.tested_sha
-    ):
+    if not _checkpoint_binds(checkpoint, candidate_packet, pilot_input.branch):
         raise ValueError("checkpoint does not bind to candidate packet")
     return PrePublicationEvidenceCapsule(
         schema_name=CAPSULE_SCHEMA_NAME,
@@ -596,32 +586,21 @@ def build_pre_publication_evidence(
 def serialize_pre_publication_evidence(value: PrePublicationEvidenceCapsule) -> bytes:
     if type(value) is not PrePublicationEvidenceCapsule:
         raise TypeError("value must be an exact PrePublicationEvidenceCapsule")
-    payload = canonical_json_bytes(_payload(value, include_id=True))
-    if len(payload) > MAX_CAPSULE_BYTES:
-        raise ValueError("pre-publication evidence capsule exceeds size bound")
-    return payload
+    return _encode(value)
 
 
 def deserialize_pre_publication_evidence(
     payload: bytes | bytearray | memoryview | str,
 ) -> PrePublicationEvidenceCapsule:
-    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
-    if len(raw) > MAX_CAPSULE_BYTES:
-        raise ValueError("pre-publication evidence capsule exceeds size bound")
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("pre-publication evidence capsule is not valid JSON") from exc
-    if type(decoded) is not dict:
-        raise ValueError("pre-publication evidence capsule fields drifted")
+    return _decode_publication(_read_object(payload))
+
+
+def _decode_publication(decoded: dict[str, object]) -> PrePublicationEvidenceCapsule:
     version = decoded.get("schema_version")
     common = {
         "schema_name", "schema_version", "candidate_packet", "approval_record",
-        "required_environment_spec", "validation_bundle_json", "validation_plan_id",
-        "validation_bundle_id", "advisory_result_id", "advisory_render_id",
-        "candidate_branch", "workspace_request_id", "invalidation_events", "checkpoint_id",
-        "created_at", "expires_at", "evaluated_at", "capsule_id",
-        *_AUTHORITY_FIELDS,
+        "required_environment_spec", "invalidation_events", "capsule_id",
+        *_PUBLICATION_FIELDS, *_AUTHORITY_FIELDS,
     }
     expected = (
         common
@@ -630,9 +609,7 @@ def deserialize_pre_publication_evidence(
     )
     if version not in {LEGACY_CAPSULE_SCHEMA_VERSION, CAPSULE_SCHEMA_VERSION} or set(decoded) != expected:
         raise ValueError("pre-publication evidence capsule fields drifted or version unsupported")
-    for name in _AUTHORITY_FIELDS:
-        if decoded[name] is not False:
-            raise ValueError(f"{name} must remain false")
+    _require_non_authority(decoded)
     events = decoded["invalidation_events"]
     if type(events) is not list or any(type(item) is not str for item in events):
         raise ValueError("invalidation_events must be a list of strings")
@@ -644,18 +621,8 @@ def deserialize_pre_publication_evidence(
         required_environment_spec=reconstruct_required_environment_spec(
             decoded["required_environment_spec"]
         ),
-        validation_bundle_json=decoded["validation_bundle_json"],
-        validation_plan_id=decoded["validation_plan_id"],
-        validation_bundle_id=decoded["validation_bundle_id"],
-        advisory_result_id=decoded["advisory_result_id"],
-        advisory_render_id=decoded["advisory_render_id"],
-        candidate_branch=decoded["candidate_branch"],
-        workspace_request_id=decoded["workspace_request_id"],
         invalidation_events=tuple(events),
-        checkpoint_id=decoded["checkpoint_id"],
-        created_at=decoded["created_at"],
-        expires_at=decoded["expires_at"],
-        evaluated_at=decoded["evaluated_at"],
+        **{name: decoded[name] for name in _PUBLICATION_FIELDS},
         phase=decoded.get("phase", CHECKPOINT_BOUND_PHASE),
         execution_id=decoded.get("execution_id"),
         capsule_id=decoded["capsule_id"],
@@ -666,15 +633,7 @@ def deserialize_pre_publication_evidence_record(
     payload: bytes | bytearray | memoryview | str,
 ) -> PrePublicationEvidenceCapsule | ApprovalCustodyEvidenceCapsule:
     """Route one closed producer-evidence payload by its explicit schema version."""
-    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
-    if len(raw) > MAX_CAPSULE_BYTES:
-        raise ValueError("pre-publication evidence capsule exceeds size bound")
-    try:
-        decoded = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("pre-publication evidence capsule is not valid JSON") from exc
-    if type(decoded) is not dict:
-        raise ValueError("pre-publication evidence capsule fields drifted")
+    decoded = _read_object(payload)
     if decoded.get("schema_version") == APPROVAL_CUSTODY_SCHEMA_VERSION:
-        return deserialize_approval_custody_evidence(raw)
-    return deserialize_pre_publication_evidence(raw)
+        return _decode_custody(decoded)
+    return _decode_publication(decoded)
