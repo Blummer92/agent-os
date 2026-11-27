@@ -52,8 +52,21 @@ fi
 coverage_status=0
 "${PYTHON_BIN:-python3}" scripts/agent_os_ci_branch_coverage.py "$CI_COVERAGE_DIR" \
   --validation-exit "$validation_status" || coverage_status=$?
+# Black is separate from pytest and coverage: keep both receipts truthful.
+black_status=0
+black_receipt="$CI_JUNIT_DIR/black-format-receipt.json"
+if [ "$validation_status" -eq 0 ]; then
+  rm -f -- "$black_receipt"
+  "${PYTHON_BIN:-python3}" -I scripts/agent_os_ci_black.py "$black_receipt" || black_status=$?
+  if [ ! -s "$black_receipt" ]; then
+    echo "Black formatting: required receipt missing" >&2
+    black_status=2
+  fi
+fi
+
 final_status="$validation_status"
 if [ "$final_status" -eq 0 ]; then final_status="$coverage_status"; fi
+if [ "$final_status" -eq 0 ]; then final_status="$black_status"; fi
 if [ "$origin" = "local" ]; then
   result=success
   if [ "$final_status" -ne 0 ]; then result=failure; fi

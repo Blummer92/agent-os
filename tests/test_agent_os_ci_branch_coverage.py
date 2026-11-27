@@ -53,8 +53,10 @@ def _init_test_checkout(root, *, source):
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
     _create_source_tree(root)
+    shutil.copy(ROOT / "08_Tooling/visual-asset-intake/pyproject.toml",
+                root / "08_Tooling/visual-asset-intake/pyproject.toml")
     for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py",
-                 "ci-coverage-suites.tsv", "agent_os_aggregate_gate.py"):
+                 "ci-coverage-suites.tsv", "agent_os_aggregate_gate.py", "agent_os_ci_black.py"):
         shutil.copy(ROOT / "scripts" / file, scripts)
     _write_manifest(source, source / "manifest.tsv")
     (scripts / "validate-all.sh").write_text(
@@ -167,7 +169,7 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
 
 
 @pytest.mark.parametrize("fault,exit_code", [
-    ("none", 0), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2), ("changed-after-manifest", 1),
+    ("none", 0), ("black-findings", 1), ("black-missing", 2), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2), ("changed-after-manifest", 1),
 ])
 def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp_path, fault, exit_code):
     # Execute the actual workflow's shell body, not a second implementation
@@ -187,12 +189,22 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
 
     root = tmp_path / "repo"
     _init_test_checkout(root, source=staged)
+    if fault in {"black-findings", "black-missing"}:
+        target = (
+            "08_Tooling/visual-asset-intake/src/visual_asset_intake/core.py"
+            if fault == "black-findings" else "scripts/agent_os_ci_black.py"
+        )
+        (root / target).write_text("VALUE=1\n" if fault == "black-findings" else "")
+        subprocess.run(["git", "-c", "user.name=Fixture", "-c",
+                        "user.email=fixture@example.invalid", "commit", "-qam", fault],
+                       cwd=root, check=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     args = ["bash", "-c", workload]
     env = {
         **os.environ, "CI_COVERAGE_DIR": str(reports), "CI_JUNIT_DIR": str(tmp_path / "junit"),
         "STAGED_REPORTS": str(staged),
-        "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132", "CI_JUNIT_RUN_ATTEMPT": "2",
-        "FAKE_EXIT": "2" if fault == "runner-crash" else "0",
+        "CI_JUNIT_HEAD_SHA": head, "CI_JUNIT_RUN_ID": "4132", "CI_JUNIT_RUN_ATTEMPT": "2",
+        "PYTHON_BIN": sys.executable, "FAKE_EXIT": "2" if fault == "runner-crash" else "0",
         "FAKE_DIRTY": "yes" if fault == "dirty-after" else "no",
         "FAKE_REPORT_CHANGED": "yes" if fault == "changed-after-manifest" else "no",
     }
@@ -200,7 +212,17 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
                             capture_output=True, check=False, timeout=10)
     assert result.returncode == exit_code, result.stdout + result.stderr
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
-    assert receipt["status"] == ("pass" if fault == "none" else "fail")
+    assert receipt["status"] == ("pass" if fault in {"none", "black-findings", "black-missing"} else "fail")
+    black = tmp_path / "junit/black-format-receipt.json"
+    if fault in {"none", "black-findings"}:
+        evidence = json.loads(black.read_text())
+        expected = "clean" if fault == "none" else "findings"
+        assert (evidence["status"], evidence["head_sha"]) == (expected, head)
+        assert evidence["reason_code"] == (None if fault == "none" else "black-formatting-changes")
+        if fault == "black-findings":
+            assert "would reformat" in evidence["diagnostics"]
+    if fault == "black-missing":
+        assert not black.exists() and "required receipt missing" in result.stderr
     assert receipt["validation_exit"] == (2 if fault in {"runner-crash", "dirty-after"} else 0)
     if fault == "dirty-after":
         assert "checkout changed during validation" in result.stderr
@@ -343,7 +365,7 @@ def test_local_wrapper_ignores_inherited_output_and_uses_local_receipt(reports, 
     result = subprocess.run(
         ["bash", "./scripts/ci-local.sh"], cwd=root,
         env={**os.environ, "TMPDIR": str(scratch), "CI_COVERAGE_DIR": str(inherited),
-             "CI_JUNIT_DIR": str(inherited), "STAGED_REPORTS": str(reports)},
+             "CI_JUNIT_DIR": str(inherited), "STAGED_REPORTS": str(reports), "PYTHON_BIN": sys.executable},
         capture_output=True, text=True, check=False, timeout=10,
     )
     assert result.returncode == 0, result.stdout + result.stderr
