@@ -126,6 +126,35 @@ def _requested_lesson_skips(
             break
 
 
+def resolve_issue_start_materiality(
+    specialized_knowledge_required: bool | None,
+    *,
+    known_knowledge_refs: tuple[str, ...] = (),
+    library_hints: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    """The single canonical issue-start materiality decision.
+
+    Answers only "is lesson evidence a mandatory prerequisite for this
+    issue-start?" -- not whether retrieval could be relevant, and never
+    whether any operation is authorized. #2780: ordinary capability or path
+    metadata is matching context, not proof of materiality, so an omitted
+    tri-state is material only for explicit known refs or library hints.
+    ``classify_envelope`` (gateway expected_material, workflow classify job)
+    and the producer below both consume this function so they cannot
+    disagree on the same envelope.
+    """
+    if specialized_knowledge_required is None:
+        material = bool(known_knowledge_refs or library_hints)
+        # #3418/#2425: an inferred decision is reported as inferred so omitted
+        # materiality never silently reads as a caller-asserted not-needed.
+        return material, "inferred-" + ("material" if material else "not-material")
+    if type(specialized_knowledge_required) is not bool:
+        raise TypeError("specialized_knowledge_required must be bool or None")
+    return specialized_knowledge_required, "caller-asserted-" + (
+        "material" if specialized_knowledge_required else "not-material"
+    )
+
+
 def activate_issue_start_lesson_preflight(
     *,
     repository: str,
@@ -158,15 +187,11 @@ def activate_issue_start_lesson_preflight(
     # that advisory Lessons Learned are material. Preserve explicit caller
     # decisions and use only deterministic issue-start positive signals when
     # the tri-state was omitted.
-    issue_start_materiality = specialized_knowledge_required
-    if issue_start_materiality is None:
-        issue_start_materiality = bool(known_knowledge_refs or library_hints)
-        # #3418/#2425: the #2780 default is unchanged, but an inferred decision
-        # is reported as inferred so omitted materiality never silently reads
-        # as a caller-asserted not-needed.
-        materiality_source = "inferred-" + ("material" if issue_start_materiality else "not-material")
-    else:
-        materiality_source = "caller-asserted-" + ("material" if issue_start_materiality else "not-material")
+    issue_start_materiality, materiality_source = resolve_issue_start_materiality(
+        specialized_knowledge_required,
+        known_knowledge_refs=known_knowledge_refs,
+        library_hints=library_hints,
+    )
 
     request = CodingKnowledgeRequest(
         task_reference=task_reference,
@@ -242,4 +267,4 @@ def activate_issue_start_lesson_preflight(
     }
 
 
-__all__ = ["activate_issue_start_lesson_preflight", "selected_lesson_provenance"]
+__all__ = ["activate_issue_start_lesson_preflight", "resolve_issue_start_materiality", "selected_lesson_provenance"]

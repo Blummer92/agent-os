@@ -57,6 +57,10 @@ A is applied only to the existing Claude launch seam and labelled
 1. Materiality from the canonical `classify_envelope` (callers have no
    `specialized_knowledge_required` field). Failed-PR repair is always material
    under the canonical planner, so a `not-material` repair result is a downgrade.
+   For issue-start, `classify_envelope` and the producer both call
+   `resolve_issue_start_materiality` (#2780 default), so they cannot disagree
+   on one envelope. Any unexpected admission exception is a terminal,
+   remembered `admission-internal-error:<type>` STOP, never a stuck key.
 2. Post the request once (never retried); **independent GET** and exact
    body/author/location/edit comparison.
 3. Bounded poll (12 x 30 s, absolute 360 s) through the existing
