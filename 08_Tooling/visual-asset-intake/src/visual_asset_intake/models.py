@@ -40,7 +40,9 @@ class IntakePolicy:
     def __post_init__(self) -> None:
         if self.max_source_bytes <= 0 or self.max_decoded_pixels <= 0:
             raise ValueError("intake limits must be positive")
-        if not self.allowed_formats or any(value not in _SUPPORTED_FORMATS for value in self.allowed_formats):
+        if not self.allowed_formats or any(
+            value not in _SUPPORTED_FORMATS for value in self.allowed_formats
+        ):
             raise ValueError("allowed_formats contains an unsupported raster format")
 
 

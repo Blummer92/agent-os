@@ -15,3 +15,7 @@ test = ["pytest>=8"]
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["visual_asset_intake", "visual_asset_intake.*"]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 88

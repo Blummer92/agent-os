@@ -48,19 +48,38 @@ def reconcile_duplicate(
         received = tuple(candidates)
     except TypeError:
         return _invalid()
-    if any(type(item) is not DuplicateCandidate or not _valid_candidate(item) for item in received):
+    if any(
+        type(item) is not DuplicateCandidate or not _valid_candidate(item)
+        for item in received
+    ):
         return _invalid()
     ordered = tuple(sorted(received, key=lambda item: item.stable_identity))
 
-    exact = tuple(item for item in ordered if item.original_sha256 == intake_result.original_sha256)
+    exact = tuple(
+        item
+        for item in ordered
+        if item.original_sha256 == intake_result.original_sha256
+    )
     if exact:
-        return _matched(exact, DuplicateDisposition.EXACT_EXISTING, "duplicate-exact-original")
+        return _matched(
+            exact, DuplicateDisposition.EXACT_EXISTING, "duplicate-exact-original"
+        )
 
-    normalized = tuple(item for item in ordered if item.normalized_sha256 == intake_result.normalized_sha256)
+    normalized = tuple(
+        item
+        for item in ordered
+        if item.normalized_sha256 == intake_result.normalized_sha256
+    )
     if normalized:
-        return _matched(normalized, DuplicateDisposition.NORMALIZED_EXISTING, "duplicate-exact-normalized")
+        return _matched(
+            normalized,
+            DuplicateDisposition.NORMALIZED_EXISTING,
+            "duplicate-exact-normalized",
+        )
 
-    return _result(DuplicateDisposition.NO_DUPLICATE_FOUND, None, 0, ("duplicate-no-exact-match",))
+    return _result(
+        DuplicateDisposition.NO_DUPLICATE_FOUND, None, 0, ("duplicate-no-exact-match",)
+    )
 
 
 def _valid_candidate(candidate: DuplicateCandidate) -> bool:
@@ -74,12 +93,16 @@ def _valid_candidate(candidate: DuplicateCandidate) -> bool:
 
 def _valid_sha(value: str | None) -> bool:
     return value is None or (
-        type(value) is str and len(value) == 64 and all(character in _HEX_DIGITS for character in value)
+        type(value) is str
+        and len(value) == 64
+        and all(character in _HEX_DIGITS for character in value)
     )
 
 
 def _invalid() -> DuplicateReconciliationResult:
-    return _result(DuplicateDisposition.INVALID, None, 0, ("duplicate-candidate-invalid",))
+    return _result(
+        DuplicateDisposition.INVALID, None, 0, ("duplicate-candidate-invalid",)
+    )
 
 
 def _matched(
