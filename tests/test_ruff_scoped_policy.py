@@ -21,15 +21,16 @@ def test_ruff_policy_expands_lint_only_inside_the_pilot(tmp_path: Path) -> None:
     shutil.copyfile(ROOT / SCOPE / "ruff.toml", tmp_path / SCOPE / "ruff.toml")
     outside = tmp_path / "outside.py"
     inside = tmp_path / SCOPE / "inside.py"
-    outside.write_text("import os\n", encoding="utf-8")
+    outside.write_text("import os\nVALUE = missing_name\n", encoding="utf-8")
     inside.write_text("import os\n", encoding="utf-8")
     command = [sys.executable, "-I", "-m", "ruff", "check", "--no-cache", "--output-format", "json", "."]
 
     failing = subprocess.run(command, cwd=tmp_path, capture_output=True, check=False)
     assert failing.returncode == 1
     diagnostics = json.loads(failing.stdout)
-    assert [(item["code"], Path(item["filename"])) for item in diagnostics] == [
+    assert sorted((item["code"], Path(item["filename"])) for item in diagnostics) == [
         ("F401", inside),
+        ("F821", outside),
     ]
     assert inside.read_text(encoding="utf-8") == "import os\n"
 
@@ -59,14 +60,6 @@ def test_ruff_policy_expands_lint_only_inside_the_pilot(tmp_path: Path) -> None:
     assert {Path(item["filename"]) for item in found} == {inside}
     assert sorted(item["code"] for item in found) == [
         "B006", "E711", "I001", "SIM103", "UP006", "UP035",
-    ]
-
-    inside.write_text("VALUE = 1\n", encoding="utf-8")
-    outside.write_text("VALUE = missing_name\n", encoding="utf-8")
-    required = subprocess.run(command, cwd=tmp_path, capture_output=True, check=False)
-    assert required.returncode == 1
-    assert [(item["code"], Path(item["filename"])) for item in json.loads(required.stdout)] == [
-        ("F821", outside),
     ]
 
     outside.write_text("import os\n", encoding="utf-8")
