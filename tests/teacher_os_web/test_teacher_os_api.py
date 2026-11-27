@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -193,10 +194,13 @@ def test_units_lists_only_active_unreviewed_units_with_provenance(api):
     status, body = built.handle("GET", UNITS, headers(), 0)
     assert status == 200 and body["status"] == "ok"
     ids = [u["unit_id"] for u in body["units"]]
-    assert set(ids) == {UNIT_COLOR, UNIT_TYPE, UNIT_EMPTY, UNIT_FOREIGN}
+    assert len(ids) == 4 and set(ids) == {UNIT_COLOR, UNIT_TYPE, UNIT_EMPTY, UNIT_FOREIGN}
     assert UNIT_DRAFT not in ids and UNIT_REVIEW not in ids
     assert body["source"] == {"logical_source": "canonical-unit", "display_name": "Canonical Digital Media Unit Registry", "verification_state": "verified-current", "access": "read-only"}
-    assert body["generated_at"].endswith("Z") and stub.factory_calls == 1
+    timestamp = body["generated_at"]
+    pattern = "%Y-%m-%dT%H:%M:%SZ"
+    assert datetime.strptime(timestamp, pattern).strftime(pattern) == timestamp
+    assert stub.factory_calls == 1
 
 
 def test_lessons_project_only_the_governed_fields(api):
@@ -229,6 +233,7 @@ def test_approved_unit_without_lessons_is_empty_not_filled(api):
     built, _, _ = api
     status, body = built.handle("GET", lessons_path(UNIT_EMPTY), headers(), 0)
     assert status == 200 and body["status"] == "empty" and body["lessons"] == []
+    assert body["unit"]["unit_id"] == UNIT_EMPTY
 
 
 def test_executor_failure_is_a_closed_error_without_provider_text():
@@ -276,14 +281,14 @@ def _get(port: int, path: str, **hdrs: str):
         return exc.code, dict(exc.headers), json.loads(exc.read())
 
 
-def _stop(proc: subprocess.Popen) -> str:
+def _stop(proc: subprocess.Popen) -> tuple[str, str]:
     proc.terminate()
     try:
-        _, err = proc.communicate(timeout=10)
+        out, err = proc.communicate(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
-        _, err = proc.communicate()
-    return err
+        out, err = proc.communicate()
+    return out, err
 
 
 def test_production_server_process_refuses_without_secret():
@@ -306,10 +311,17 @@ def test_failed_startup_prints_the_variable_name_never_the_secret_value():
             env[teacher_os_api.SECRET_ENV] = env_secret
         proc = subprocess.Popen([sys.executable, "-I", str(SERVER), "--port", str(port), *extra], env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        assert proc.wait(timeout=20) == 2
-        err = proc.stderr.read()
-        assert "refusing to start" in err and teacher_os_api.SECRET_ENV in err
-        assert canary not in err
+        try:
+            out, err = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            pytest.fail("startup did not refuse within the deadline")
+        assert proc.returncode == 2
+        if "refusing to start" not in err or teacher_os_api.SECRET_ENV not in err:
+            pytest.fail("missing expected startup refusal", pytrace=False)
+        if canary in out or canary in err:
+            pytest.fail("unexpected credential marker in process output", pytrace=False)
 
 
 def test_production_server_process_is_loopback_authenticated_and_fails_closed_without_admission():
@@ -332,8 +344,9 @@ def test_production_server_process_is_loopback_authenticated_and_fails_closed_wi
             with pytest.raises(OSError):
                 socket.create_connection((address, port), timeout=0.5).close()
     finally:
-        log = _stop(proc)
-    assert secret not in log and "Authorization" not in log  # the secret is never logged
+        out, err = _stop(proc)
+    if any(secret in stream or "Authorization" in stream for stream in (out, err)):
+        pytest.fail("unexpected authorization data in process output", pytrace=False)
 
 
 def test_fixture_server_process_serves_the_synthetic_contract_over_http():
@@ -349,8 +362,9 @@ def test_fixture_server_process_serves_the_synthetic_contract_over_http():
         assert (status, body["reason_code"]) == (404, "unit-not-approved")
         assert _get(port, UNITS)[0] == 401
     finally:
-        log = _stop(proc)
-    assert secret not in log
+        out, err = _stop(proc)
+    if any(secret in stream for stream in (out, err)):
+        pytest.fail("unexpected credential marker in process output", pytrace=False)
 
 
 def test_access_log_never_echoes_request_line_or_sensitive_text(api):
@@ -373,8 +387,11 @@ def test_access_log_never_echoes_request_line_or_sensitive_text(api):
     finally:
         sys.stderr = old
     log = capture.getvalue()
-    assert canary not in log and "units" not in log and "GET" not in log
-    assert "200" in log and "42" in log
+    if log.splitlines() != [
+        "teacher-os-api 01/Jan/2026 00:00:00 200 42",
+        "teacher-os-api 01/Jan/2026 00:00:00 error",
+    ]:
+        pytest.fail("access log output did not match the closed format", pytrace=False)
 
 
 @pytest.mark.parametrize("method", ["TRACE", "CONNECT"])
