@@ -184,3 +184,164 @@ def test_icc_presence_and_generated_output_name(tmp_path: Path):
     assert result.icc_profile_present
     assert result.normalized_path.parent == tmp_path / "safe"
     assert "teacher file" not in result.normalized_path.name
+
+
+def test_extensionless_raster_uses_decoded_format(tmp_path: Path):
+    source = tmp_path / "raster"
+    _save(source, "PNG")
+
+    result = intake_visual_asset(source, output_dir=tmp_path / "out")
+
+    assert result.detected_format == "PNG"
+    assert result.warnings == ()
+    assert result.normalized_path.is_file()
+
+
+def test_multiframe_png_is_rejected_before_output(tmp_path: Path):
+    source = tmp_path / "animated.png"
+    with Image.new("RGB", (4, 4), "white") as first, Image.new("RGB", (4, 4), "black") as second:
+        first.save(source, format="PNG", save_all=True, append_images=[second])
+    output = tmp_path / "out"
+
+    with pytest.raises(IntakeError) as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.UNSUPPORTED_MULTIFRAME_IMAGE
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("limit", ["max_source_bytes", "max_decoded_pixels"])
+def test_policy_requires_positive_limits(limit: str):
+    with pytest.raises(ValueError, match="intake limits must be positive"):
+        IntakePolicy(**{limit: 0})
+
+
+def test_failed_derivative_write_cleans_up_partial_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "source.png"
+    _save(source, "PNG")
+    original = source.read_bytes()
+    output = tmp_path / "out"
+
+    def fail_save(self, stream, *args, **kwargs):
+        stream.write(b"partial")
+        raise OSError("synthetic derivative write failure")
+
+    monkeypatch.setattr(Image.Image, "save", fail_save)
+    with pytest.raises(IntakeError) as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.NORMALIZATION_FAILED
+    assert output.is_dir()
+    assert list(output.iterdir()) == []
+    assert source.read_bytes() == original
+
+
+def test_decoder_pixel_warning_is_classified_as_pixel_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "image.png"
+    _save(source, "PNG", size=(12, 8))
+    output = tmp_path / "out"
+    # 96 pixels is above the warning threshold, but below Pillow's error threshold.
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 80)
+
+    with pytest.raises(IntakeError, match="decoder safety limits") as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.PIXEL_LIMIT_EXCEEDED
+    assert not output.exists()
+
+
+def test_source_read_error_is_invalid_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "image.png"
+    _save(source, "PNG")
+    output = tmp_path / "out"
+    real_open = Path.open
+
+    def fail_source_open(path, *args, **kwargs):
+        if path == source:
+            raise PermissionError("synthetic source read failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_source_open)
+    with pytest.raises(IntakeError, match="readable file") as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.INVALID_PATH
+    assert not output.exists()
+
+
+def test_non_file_source_is_rejected_before_read(tmp_path: Path):
+    source = tmp_path / "directory.png"
+    source.mkdir()
+    output = tmp_path / "out"
+
+    with pytest.raises(IntakeError, match="existing file") as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.INVALID_PATH
+    assert not output.exists()
+
+
+def test_palette_transparency_survives_normalization(tmp_path: Path):
+    source = tmp_path / "palette.png"
+    with Image.new("P", (2, 1)) as palette:
+        palette.putpalette([0, 0, 0, 255, 0, 0])
+        palette.putdata([0, 1])
+        palette.save(source, format="PNG", transparency=0)
+
+    result = intake_visual_asset(source, output_dir=tmp_path / "out")
+
+    assert result.has_alpha
+    with Image.open(result.normalized_path) as derivative:
+        assert derivative.mode == "RGBA"
+        assert derivative.getpixel((0, 0)) == (0, 0, 0, 0)
+        assert derivative.getpixel((1, 0)) == (255, 0, 0, 255)
+
+
+def test_source_cannot_be_its_own_derivative(tmp_path: Path):
+    source = tmp_path / "image.png"
+    _save(source, "PNG")
+    original = source.read_bytes()
+    source = source.rename(tmp_path / f"intake-{hashlib.sha256(original).hexdigest()[:24]}.png")
+
+    with pytest.raises(IntakeError, match="cannot overwrite source") as exc:
+        intake_visual_asset(source, output_dir=tmp_path)
+
+    assert exc.value.code is IntakeErrorCode.NORMALIZATION_FAILED
+    assert source.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [source]
+
+
+def test_nonregular_reservation_is_closed_and_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import errno
+    import os
+    from types import SimpleNamespace
+
+    from visual_asset_intake import intake
+
+    source = tmp_path / "image.png"
+    _save(source, "PNG")
+    output = tmp_path / "out"
+    opened = []
+    real_os = intake.os
+
+    class Recorder:
+        def __getattr__(self, name):
+            return getattr(real_os, name)
+
+        def open(self, *args):
+            descriptor = real_os.open(*args)
+            opened.append(descriptor)
+            return descriptor
+
+    # Exercise the rejection path without creating a special file on the host.
+    monkeypatch.setattr(intake, "os", Recorder())
+    monkeypatch.setattr(intake, "stat", SimpleNamespace(S_ISREG=lambda mode: False))
+    with pytest.raises(IntakeError, match="not a regular file") as exc:
+        intake_visual_asset(source, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.NORMALIZATION_FAILED
+    assert list(output.iterdir()) == []
+    assert len(opened) == 1
+    with pytest.raises(OSError) as closed:
+        os.fstat(opened[0])
+    assert closed.value.errno == errno.EBADF
