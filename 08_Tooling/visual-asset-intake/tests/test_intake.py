@@ -67,17 +67,28 @@ def test_extension_content_mismatch_is_observed(tmp_path: Path):
     assert result.warnings == ("extension-content-mismatch",)
 
 
-def test_corrupt_and_unsupported_fail_closed(tmp_path: Path):
+def test_corrupt_image_fails_closed(tmp_path: Path):
     corrupt = tmp_path / "bad.jpg"
     corrupt.write_bytes(b"not an image")
     with pytest.raises(IntakeError) as exc:
         intake_visual_asset(corrupt, output_dir=tmp_path / "out")
     assert exc.value.code is IntakeErrorCode.CORRUPT_IMAGE
 
-    svg = tmp_path / "bad.svg"
-    svg.write_text("<svg xmlns='http://www.w3.org/2000/svg'></svg>")
-    with pytest.raises(IntakeError):
-        intake_visual_asset(svg, output_dir=tmp_path / "out")
+
+def test_svg_is_rejected_before_output(tmp_path: Path):
+    svg = tmp_path / "vector.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">'
+        '<rect width="2" height="2" fill="red"/></svg>',
+        encoding="utf-8",
+    )
+    output = tmp_path / "out"
+
+    with pytest.raises(IntakeError) as exc:
+        intake_visual_asset(svg, output_dir=output)
+
+    assert exc.value.code is IntakeErrorCode.CORRUPT_IMAGE
+    assert not output.exists()
 
 
 def test_source_byte_and_pixel_limits(tmp_path: Path):
