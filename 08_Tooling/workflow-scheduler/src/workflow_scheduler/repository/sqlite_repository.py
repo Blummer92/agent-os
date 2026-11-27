@@ -888,14 +888,28 @@ class SQLiteRepository:
             details_json = json.dumps(details or {})
             now = utc_storage_string(utc_now())
 
-            cursor.execute(
-                """
-                INSERT INTO audit_log (timestamp, event_type, task_id, workflow_id, details, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (now, event_type, task_id, workflow_id, details_json, now),
-            )
-            conn.commit()
+            # Keep the ownership check at the write boundary. Legacy callers
+            # may log events without a known task, but may not contradict one.
+            with conn:
+                cursor.execute(
+                    """
+                    INSERT INTO audit_log (timestamp, event_type, task_id, workflow_id, details, created_at)
+                    SELECT :now, :event_type, :task_id, :workflow_id, :details, :now
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM tasks
+                        WHERE id = :task_id AND workflow_id != :workflow_id
+                    )
+                    """,
+                    {
+                        "now": now,
+                        "event_type": event_type,
+                        "task_id": task_id,
+                        "workflow_id": workflow_id,
+                        "details": details_json,
+                    },
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("Task and persisted workflow audit identities disagree")
 
     def get_audit_log(
         self,
@@ -907,12 +921,19 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
+            filters = []
+            values = []
             if workflow_id:
-                cursor.execute("SELECT * FROM audit_log WHERE workflow_id = ? ORDER BY created_at DESC", (workflow_id,))
-            elif task_id:
-                cursor.execute("SELECT * FROM audit_log WHERE task_id = ? ORDER BY created_at DESC", (task_id,))
-            else:
-                cursor.execute("SELECT * FROM audit_log ORDER BY created_at DESC")
+                filters.append("workflow_id = ?")
+                values.append(workflow_id)
+            if task_id:
+                filters.append("task_id = ?")
+                values.append(task_id)
+            where = " WHERE " + " AND ".join(filters) if filters else ""
+            cursor.execute(
+                f"SELECT * FROM audit_log{where} ORDER BY created_at DESC, id DESC",
+                values,
+            )
 
             rows = cursor.fetchall()
             return [dict(row) for row in rows]

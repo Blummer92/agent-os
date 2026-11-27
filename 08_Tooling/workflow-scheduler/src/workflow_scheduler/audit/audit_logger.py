@@ -1,10 +1,15 @@
 """Audit logger for task and workflow state transitions."""
 
+import json
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.models import Task, TaskStatus, WorkflowPlan, WorkflowStatus
 from workflow_scheduler.time_utils import utc_now, utc_storage_string
+
+
+class AuditHistoryError(ValueError):
+    """Persisted audit data cannot be decoded without losing evidence."""
 
 
 @dataclass
@@ -22,6 +27,49 @@ class AuditEvent:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
+
+    @classmethod
+    def from_record(cls, record: Dict[str, Any]) -> "AuditEvent":
+        """Restore a logger envelope or legacy raw details without rewriting it."""
+        try:
+            payload = json.loads(record["details"])
+            timestamp = record["timestamp"]
+            identity = {key: record[key] for key in ("event_type", "task_id", "workflow_id")}
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AuditHistoryError("Invalid persisted audit details") from exc
+        if not isinstance(payload, dict):
+            raise AuditHistoryError("Persisted audit details must be an object")
+
+        status_before = status_after = None
+        fields = cls.__dataclass_fields__.keys()
+        # An envelope with a missing field must not silently become raw details.
+        envelope = {"timestamp", "event_type", "details"} <= payload.keys() or (
+            len(fields & payload.keys()) >= len(fields) - 1
+        )
+        if envelope:
+            if (
+                payload.keys() != fields
+                or any(payload[key] != value for key, value in identity.items())
+                or not isinstance(payload["timestamp"], str)
+                or not isinstance(payload["details"], dict)
+                or any(
+                    payload[key] is not None and not isinstance(payload[key], str)
+                    for key in ("status_before", "status_after")
+                )
+            ):
+                raise AuditHistoryError("Invalid persisted audit event envelope")
+            timestamp = payload["timestamp"]
+            status_before = payload["status_before"]
+            status_after = payload["status_after"]
+            payload = payload["details"]
+
+        return cls(
+            timestamp=timestamp,
+            status_before=status_before,
+            status_after=status_after,
+            details=payload,
+            **identity,
+        )
 
 
 class AuditLogger:
@@ -46,24 +94,31 @@ class AuditLogger:
         details: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Internal logging method."""
+        workflow_id = workflow.workflow_id if workflow is not None else None
+        if task is not None:
+            if not task.workflow_id:
+                raise ValueError("Task audit event requires a workflow ID")
+            if workflow is not None and workflow_id != task.workflow_id:
+                raise ValueError("Task and workflow audit identities disagree")
+            workflow_id = task.workflow_id
+
         event = AuditEvent(
             timestamp=utc_storage_string(utc_now()),
             event_type=event_type,
             task_id=task.id if task else None,
-            workflow_id=workflow.workflow_id if workflow else None,
+            workflow_id=workflow_id,
             status_before=status_before,
             status_after=status_after,
             details=details or {},
         )
-        self.events.append(event)
-
-        if self.repository:
+        if self.repository is not None:
             self.repository.log_event(
                 event_type=event_type,
                 task_id=event.task_id,
                 workflow_id=event.workflow_id,
                 details=event.to_dict(),
             )
+        self.events.append(event)
 
     def log_task_created(self, task: Task) -> None:
         """Log task creation."""
@@ -353,7 +408,10 @@ class AuditLogger:
         )
 
     def get_events(self, task_id: Optional[str] = None, workflow_id: Optional[str] = None) -> List[AuditEvent]:
-        """Retrieve audit events."""
+        """Read durable history in chronological order, or the memory-only log."""
+        if self.repository is not None:
+            records = self.repository.get_audit_log(workflow_id=workflow_id, task_id=task_id)
+            return [AuditEvent.from_record(record) for record in reversed(records)]
         events = self.events
         if task_id:
             events = [e for e in events if e.task_id == task_id]
