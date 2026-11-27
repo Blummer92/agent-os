@@ -80,7 +80,18 @@ def test_only_get_is_served(api, method):
     assert admission.calls == stub.factory_calls == 0
 
 
-@pytest.mark.parametrize("auth", [None, "", "Bearer", "Bearer ", f"bearer {SECRET}", f"Basic {SECRET}", "Bearer " + "s" * 42, "Bearer " + "s" * 44, f"Bearer {SECRET} "])
+@pytest.mark.parametrize("auth", [
+    None,
+    "",
+    "Bearer",
+    "Bearer ",
+    # Keep the synthetic token random, but do not put it in collected/JUnit IDs.
+    pytest.param(f"bearer {SECRET}", id="lowercase-scheme"),
+    pytest.param(f"Basic {SECRET}", id="wrong-scheme"),
+    "Bearer " + "s" * 42,
+    "Bearer " + "s" * 44,
+    pytest.param(f"Bearer {SECRET} ", id="trailing-space"),
+])
 def test_unauthenticated_requests_are_refused_before_admission_or_executor(api, auth):
     built, stub, admission = api
     status, body = built.handle("GET", UNITS, headers(Authorization=auth), 0)
