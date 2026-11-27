@@ -27,11 +27,11 @@ thin bounded-read layer and calls into this projection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 from instructional_workflow_contracts.material_type_vocabulary import (
-    MATERIAL_TYPE_VOCABULARY,
     map_material_type,
 )
 

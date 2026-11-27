@@ -69,8 +69,9 @@ unknown/missing/incomplete evidence stays explicit.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from instructional_workflow_contracts.asset_content_identity import (
     identity_evidence_for_drive_file,
@@ -78,13 +79,11 @@ from instructional_workflow_contracts.asset_content_identity import (
 from instructional_workflow_contracts.reusable_visual_identity import (
     issue_reusable_visual_identity,
 )
-from navigation_registry.connectors.notion_asset_evidence_projection import (
-    ProjectedAsset,
-    project_ingestion_admission,
-)
 from visual_asset_drive_writer.writer import (
     DriveAssetWriteRequest,
     Representation,
+)
+from visual_asset_drive_writer.writer import (
     write_asset as drive_write_asset,
 )
 from visual_asset_ingestion_coordinator.coordinator import (
@@ -99,7 +98,14 @@ from visual_asset_notion_writer.writer import (
     NotionAssetWriteRequest,
     PropertyBinding,
     WorkingMetadata,
+)
+from visual_asset_notion_writer.writer import (
     write_asset as notion_write_asset,
+)
+
+from navigation_registry.connectors.notion_asset_evidence_projection import (
+    ProjectedAsset,
+    project_ingestion_admission,
 )
 
 # ---------------------------------------------------------------------------

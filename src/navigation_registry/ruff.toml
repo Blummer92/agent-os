@@ -1,0 +1,11 @@
+# Expand the existing lint gate only for the Navigation Registry package.
+extend = "../../pyproject.toml"
+
+[lint]
+extend-select = ["E", "F", "I", "UP", "B", "SIM"]
+# Line wrapping remains a formatting decision, not part of this lint rollout.
+extend-ignore = ["E501"]
+
+[lint.per-file-ignores]
+# StrEnum changes ConnectorErrorCode's existing str() behavior.
+"connectors/base.py" = ["UP042"]

@@ -8,8 +8,9 @@ normalizes its five-state result dictionaries through the existing B2 contract.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any, Mapping
+from typing import Any
 
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 from .notion_contract_adapter import NotionContractAdapter
