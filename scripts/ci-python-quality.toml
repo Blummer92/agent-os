@@ -1,0 +1,11 @@
+[tool.black]
+target-version = ["py311"]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.vulture]
+min_confidence = 90
+sort_by_size = true

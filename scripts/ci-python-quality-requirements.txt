@@ -1,0 +1,4 @@
+black==26.10.0
+mypy==2.4.1
+vulture==2.16
+Pillow==13.0.0
