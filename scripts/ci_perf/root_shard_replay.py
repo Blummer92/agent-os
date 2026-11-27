@@ -14,7 +14,6 @@ import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 import zlib
-from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryFile
@@ -414,25 +413,25 @@ def replay(
     if not inventory or not set(inventory.values()) <= modules.keys():
         raise Refusal("invalid-reference-inventory")
     seen: set[Identity] = set()
-    cases: dict[str, int] = defaultdict(int)
-    durations: dict[str, int] = defaultdict(int)
+    totals: dict[str, tuple[int, int]] = {}
     for case, skipped in _root_cases(raw):
         identity, path, ticks = _case_file(case, skipped, inventory, modules)
         if identity in seen:
             raise Refusal("duplicate-testcase-identity")
         seen.add(identity)
-        cases[path] += 1
-        durations[path] += ticks
+        count_at_path, ticks_at_path = totals.get(path, (0, 0))
+        totals[path] = count_at_path + 1, ticks_at_path + ticks
     if seen != inventory.keys():
         raise Refusal("incomplete-reference-inventory")
-    if len(cases) < count:
+    if len(totals) < count:
         raise Refusal("insufficient-whole-modules")
     lanes = [Lane() for _ in range(count)]
-    for path in sorted(cases, key=lambda p: (-durations[p], p)):
+    for path in sorted(totals, key=lambda p: (-totals[p][1], p)):
         lane = min(lanes, key=lambda value: (value.ticks, len(value.files)))
+        cases, ticks = totals[path]
         lane.files.append(path)
-        lane.cases += cases[path]
-        lane.ticks += durations[path]
+        lane.cases += cases
+        lane.ticks += ticks
     return lanes
 
 

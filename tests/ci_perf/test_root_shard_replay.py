@@ -6,7 +6,6 @@ import stat
 import subprocess
 import sys
 import zlib
-from collections import Counter
 from decimal import localcontext
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
@@ -31,6 +30,9 @@ def _xml(cases: str, count: int, failures: int = 0) -> bytes:
 
 def _case(module: str, seconds: str = "1", name: str = "test_x") -> str:
     return f'<testcase classname="tests.test_{module}" name="{name}" time="{seconds}"/>'
+
+
+TWO_CASE_XML = _xml(_case("a") + _case("b"), 2)
 
 
 def _archive(path: Path, members) -> str:
@@ -70,7 +72,7 @@ def reference(tmp_path):
     (repo / "not_root.py").write_text("not root")
     head = _commit(repo)
     archive = tmp_path / "evidence with spaces.zip"
-    archive_hash = _archive(archive, [("root.xml", _xml(_case("a") + _case("b"), 2))])
+    archive_hash = _archive(archive, [("root.xml", TWO_CASE_XML)])
     inventory = tmp_path / "case inventory.json"
     record = {
         "schema": model.SCHEMA,
@@ -114,6 +116,13 @@ def _update_inventory(path, record, args):
     args[-1] = hashlib.sha256(raw).hexdigest()
 
 
+def _assert_cli_refusal(args, capsys, reason):
+    assert model.main(args) == 2
+    result = capsys.readouterr()
+    assert result.out == ""
+    assert result.err.strip() == f"root shard timing replay refused: {reason}"
+
+
 def test_balance_is_deterministic_and_keeps_whole_modules():
     raw = _xml(
         _case("a", "4") + _case("a", "1", "test_y") + _case("b", "3") + _case("c", "2"),
@@ -127,7 +136,6 @@ def test_balance_is_deterministic_and_keeps_whole_modules():
     lanes = model.replay(raw, PATHS, 2, inventory)
     assert lanes == model.replay(raw, list(reversed(PATHS)), 2, inventory)
     assert [lane.files for lane in lanes] == [[PATHS[0]], PATHS[1:]]
-    assert Counter(p for lane in lanes for p in lane.files) == Counter(PATHS)
     assert [lane.cases for lane in lanes] == [2, 2]
     assert [lane.testcase_seconds for lane in lanes] == ["5", "5"]
 
@@ -162,7 +170,7 @@ def test_unusable_inventory_is_rejected(raw, reason):
 
 def test_archive_requires_expected_digest(tmp_path):
     path = tmp_path / "evidence.zip"
-    xml = _xml(_case("a") + _case("b"), 2)
+    xml = TWO_CASE_XML
     digest = _archive(path, [("root.xml", xml)])
     assert model.read_root(path, digest) == xml
     with pytest.raises(model.Refusal, match="evidence-digest-mismatch"):
@@ -195,20 +203,14 @@ def test_same_paths_on_another_commit_are_not_reference_binding(reference, capsy
         repo, new_head
     )
     args[args.index("--source-head") + 1] = new_head
-    assert model.main(args) == 2
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.strip().endswith("invalid-reference-binding")
+    _assert_cli_refusal(args, capsys, "invalid-reference-binding")
 
 
 def test_self_consistent_junit_is_not_independent_inventory(reference, capsys):
     _, _, _, inventory, record, args = reference
     record["cases"].append(["tests.test_c", "test_x", PATHS[2]])
     _update_inventory(inventory, record, args)
-    assert model.main(args) == 2
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.strip().endswith("incomplete-reference-inventory")
+    _assert_cli_refusal(args, capsys, "incomplete-reference-inventory")
 
 
 @pytest.mark.parametrize(
@@ -322,7 +324,7 @@ def test_git_error_has_stable_reason(reference, monkeypatch, capsys, error):
     ],
 )
 def test_junit_rejects_bad_structure_outcomes_and_counts(wrap):
-    xml = _xml(_case("a") + _case("b"), 2)
+    xml = TWO_CASE_XML
     with pytest.raises(model.Refusal):
         model.replay(wrap(xml), PATHS, 2, AB)
 
@@ -386,7 +388,7 @@ def test_durations_sum_exactly_independent_of_context():
 @pytest.mark.parametrize("count", [0, 1, 9, -1, 2.0, True, "2"])
 def test_shard_count_validated_at_pure_boundary(count):
     with pytest.raises(model.Refusal, match="invalid-shard-count"):
-        model.replay(_xml(_case("a") + _case("b"), 2), PATHS, count, AB)
+        model.replay(TWO_CASE_XML, PATHS, count, AB)
 
 
 def test_shard_count_eight_and_insufficient_whole_modules():
@@ -420,7 +422,7 @@ def test_balancer_edge_cases(times, files):
 
 @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-16", "utf-32-le"])
 def test_xml_requires_canonical_utf8(encoding):
-    raw = _xml(_case("a") + _case("b"), 2).decode()
+    raw = TWO_CASE_XML.decode()
     with pytest.raises(model.Refusal):
         model.replay(('<?xml version="1.0"?>' + raw).encode(encoding), PATHS, 2, AB)
 
@@ -435,7 +437,7 @@ def test_xml_requires_canonical_utf8(encoding):
     ],
 )
 def test_xml_refuses_conflicting_declaration_or_bad_bytes(change):
-    raw = _xml(_case("a") + _case("b"), 2)
+    raw = TWO_CASE_XML
     with pytest.raises(model.Refusal):
         model.replay(change(raw), PATHS, 2, AB)
     assert model.replay(b"\xef\xbb\xbf" + raw, PATHS, 2, AB)
@@ -453,7 +455,7 @@ def test_xml_refuses_conflicting_declaration_or_bad_bytes(change):
 )
 def test_archive_member_layout(tmp_path, paths):
     path = tmp_path / "report.zip"
-    digest = _archive(path, [(n, _xml(_case("a") + _case("b"), 2)) for n in paths])
+    digest = _archive(path, [(n, TWO_CASE_XML) for n in paths])
     with pytest.raises(model.Refusal):
         model.read_root(path, digest)
 
@@ -472,7 +474,7 @@ def test_root_zip_member_must_be_regular(tmp_path, mode):
     item = ZipInfo("root.xml")
     item.create_system = 3
     item.external_attr = (mode | 0o644) << 16
-    digest = _archive(path, [(item, _xml(_case("a") + _case("b"), 2))])
+    digest = _archive(path, [(item, TWO_CASE_XML)])
     with pytest.raises(model.Refusal, match="invalid-root-member"):
         model.read_root(path, digest)
 
@@ -524,10 +526,7 @@ def test_reader_exceptions_never_escape_cli(reference, capsys, monkeypatch, erro
 def test_input_and_argument_errors_do_not_echo_private_details(reference, capsys):
     *_, args = reference
     args[args.index("--archive") + 1] += "/private-sentinel"
-    assert model.main(args) == 2
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.strip().endswith("evidence-read-failed")
+    _assert_cli_refusal(args, capsys, "evidence-read-failed")
     args[args.index("--shards") + 1] = "private-sentinel"
     assert model.main(args) == 2
     assert capsys.readouterr().err.strip().endswith("invalid-arguments")
@@ -636,7 +635,7 @@ def test_empty_malformed_and_truncated_archive(reference, contents):
 )
 def test_empty_duplicate_or_wrong_scope_inventory_refuses(tracked):
     with pytest.raises(model.Refusal):
-        model.replay(_xml(_case("a") + _case("b"), 2), tracked, 2, AB)
+        model.replay(TWO_CASE_XML, tracked, 2, AB)
 
 
 def test_no_class_requires_skip_and_unnamed_cases_refuse():
@@ -659,10 +658,7 @@ def test_provider_binding_must_match_independent_selection(
     # Digest is still correct, but the record belongs to another selection.
     record[key] = new_id
     _update_inventory(path, record, args)
-    assert model.main(args) == 2
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.strip().endswith("invalid-reference-binding")
+    _assert_cli_refusal(args, capsys, "invalid-reference-binding")
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "1.2", "0" * 21, "1" * 21])
@@ -676,7 +672,7 @@ def test_provider_cli_ids_have_a_bounded_positive_integer_format(
 
 
 def test_optional_junit_file_agrees_with_independent_inventory():
-    raw = _xml(_case("a") + _case("b"), 2)
+    raw = TWO_CASE_XML
     correct = raw.replace(
         b'classname="tests.test_a"', b'file="tests/test_a.py" classname="tests.test_a"'
     )
@@ -697,7 +693,7 @@ def test_zip_path_rejects_c1_control(tmp_path):
     path = tmp_path / "report.zip"
     digest = _archive(
         path,
-        [("root.xml", _xml(_case("a") + _case("b"), 2)), ("note\x85.txt", "unread")],
+        [("root.xml", TWO_CASE_XML), ("note\x85.txt", "unread")],
     )
     with pytest.raises(model.Refusal, match="unsafe-path"):
         model.read_root(path, digest)
@@ -708,7 +704,7 @@ def test_zip_path_rejects_c1_control(tmp_path):
     [b"<!-- Literal <!DOCTYPE example> -->", b"<![CDATA[Literal <!DOCTYPE example>]]>"],
 )
 def test_xml_literal_doctype_in_log_is_not_an_xml_declaration(annotation):
-    raw = _xml(_case("a") + _case("b"), 2)
+    raw = TWO_CASE_XML
     note = b'time="1"><system-out>' + annotation + b"</system-out></testcase>"
     assert model.replay(
         raw.replace(b'time="1"/>', note, 1), PATHS, 2, AB
