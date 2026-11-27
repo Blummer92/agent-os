@@ -281,3 +281,47 @@ class TestSQLiteRepository:
         assert len(tasks) == 1
         assert isinstance(tasks[0].mode, TaskMode)
         assert tasks[0].mode == TaskMode.GATE
+
+
+def test_pending_transition_round_trips_without_editing_wire_modes(repository):
+    workflow = WorkflowPlan("pending-workflow", "Task plan", "owner", mode=WorkflowMode.PRODUCTION)
+    repository.create_workflow(workflow)
+    workflow.mark_pending()
+    assert repository.update_workflow(workflow)
+    observed = repository.get_workflow(workflow.workflow_id)
+    assert observed.status is WorkflowStatus.PENDING
+    assert observed.mode.value == "Production"
+
+
+def test_completion_update_requires_independent_persisted_task_observation(repository):
+    workflow = WorkflowPlan("no-task-row", "Task plan", "owner", tasks=["a"])
+    repository.create_workflow(workflow)
+    workflow.mark_running()
+    assert repository.update_workflow(workflow)
+    workflow.mark_completed(completed_task_ids={"a"})
+    assert not repository.update_workflow(workflow)
+    assert repository.get_workflow("no-task-row").status is WorkflowStatus.RUNNING
+
+
+@pytest.mark.parametrize("rewrite_plan", [False, True])
+def test_completion_rejects_same_count_of_different_persisted_tasks(repository, rewrite_plan):
+    workflow = WorkflowPlan("wrong-task-set", "Task plan", "owner", tasks=["planned"])
+    repository.create_workflow(workflow)
+    workflow.mark_running()
+    assert repository.update_workflow(workflow)
+    repository.create_task(Task(
+        id="different", workflow_id=workflow.workflow_id, type="test",
+        owner="owner", action="read:test", idempotency_key="different",
+    ))
+    token = repository.try_claim_execution("different")
+    assert token is not None
+    task = repository.get_task("different")
+    task.mark_completed({"observed": True})
+    assert repository.update_claimed_task(task, token)
+    if rewrite_plan:
+        workflow = WorkflowPlan(workflow.workflow_id, "Replacement", "owner", tasks=["different"])
+        workflow.mark_running()
+    workflow.mark_completed(completed_task_ids=set(workflow.tasks))
+    assert not repository.update_workflow(workflow)
+    observed = repository.get_workflow(workflow.workflow_id)
+    assert observed.status is WorkflowStatus.RUNNING and observed.tasks == ["planned"]

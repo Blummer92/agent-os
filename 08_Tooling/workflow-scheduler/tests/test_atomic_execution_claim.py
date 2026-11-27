@@ -33,9 +33,9 @@ def test_simultaneous_execution_has_one_winner(tmp_path):
     for repository in (a, b):
         original = repository.try_claim_execution
 
-        def racing(task_id, _original=original):
+        def racing(task_id, _original=original, **claim_options):
             barrier.wait(timeout=10)
-            return _original(task_id)
+            return _original(task_id, **claim_options)
 
         repository.try_claim_execution = racing
 

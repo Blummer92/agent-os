@@ -143,9 +143,14 @@ class TestAdapterResultValidation:
         assert result.success is False
         assert result.status == "fail"
         assert "adapter_result_invalid" in result.checks_failed
-        assert "boom" in result.error
+        # Safe diagnostic: the exception type is named, the exception
+        # message never reaches the reported or durable error.
+        assert "boom" not in result.error
+        assert "adapter raised RuntimeError" in result.error
         stored = repository.get_task(task.id)
         assert stored.status == TaskStatus.FAILED
+        # The claim and lease are cleared after the durable failure.
+        assert stored.lease_lock is None
 
     def test_adapter_raising_exception_still_releases_lease(self, repository):
         executor = make_executor(repository, FakeRaisingAdapter())

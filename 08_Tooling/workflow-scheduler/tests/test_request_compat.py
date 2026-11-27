@@ -1,5 +1,6 @@
 """Tests for request-side adapter input compatibility."""
 
+from contextlib import closing
 from dataclasses import FrozenInstanceError
 from datetime import datetime
 
@@ -102,13 +103,20 @@ def test_execution_request_is_immutable_and_recognized():
 
 def test_legacy_adapter_still_receives_raw_task():
     adapter = RecordingLegacyAdapter()
-    repository = SQLiteRepository(":memory:")
     task = make_task()
-    repository.create_task(task)
-    result = Executor(adapter, repository, AuditLogger()).execute(task)
-    assert result.success is True
-    assert adapter.received == [task]
-    assert isinstance(adapter.received[0], Task)
+    with closing(SQLiteRepository(":memory:")) as repository:
+        repository.create_task(task)
+        result = Executor(adapter, repository, AuditLogger()).execute(task)
+        assert result.success is True
+        assert len(adapter.received) == 1
+        observed = adapter.received[0]
+        # Legacy is a Task shape at the call boundary, not a reference to
+        # scheduler-owned state that changes after this adapter returns.
+        assert isinstance(observed, Task) and observed is not task
+        assert observed.status is TaskStatus.RUNNING and observed.lease_lock is not None
+        assert observed.id == task.id and observed.workflow_id == task.workflow_id
+        assert observed.payload == {"input": "value"}
+        assert task.status is repository.get_task(task.id).status is TaskStatus.COMPLETED
 
 
 def test_opted_in_adapter_receives_execution_request():

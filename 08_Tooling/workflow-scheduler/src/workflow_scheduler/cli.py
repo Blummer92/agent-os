@@ -34,7 +34,6 @@ _TERMINAL_TASK_STATUSES = (
 )
 
 _BATCH_BAD_STATUSES = (TaskStatus.FAILED, TaskStatus.GOVERNANCE_BLOCKED, TaskStatus.CANCELLED)
-_BATCH_RESUMABLE_STATUSES = (TaskStatus.APPROVAL_PENDING, TaskStatus.RETRY_SCHEDULED, TaskStatus.PAUSED)
 _BATCH_NOT_ATTEMPTED_STATUSES = (TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.APPROVED, TaskStatus.QUEUED, TaskStatus.RUNNING)
 
 
@@ -43,8 +42,8 @@ def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
 
     Rules (checked in order):
       - "failed": any member is FAILED, GOVERNANCE_BLOCKED, or CANCELLED
-      - "completed": every member is COMPLETED
-      - "not_started": every member is still un-attempted (DRAFT/PENDING/
+      - "completed": at least one member exists and every member is COMPLETED
+      - "not_started": empty or every member is still un-attempted (DRAFT/PENDING/
         APPROVED/QUEUED/RUNNING) — nothing has happened to this batch yet
       - "partial": anything else (a mix of completed, resumable-blocked,
         and/or not-yet-attempted members, with nothing failed)
@@ -56,7 +55,7 @@ def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
     """
     if any(s in _BATCH_BAD_STATUSES for s in member_statuses):
         return "failed"
-    if all(s == TaskStatus.COMPLETED for s in member_statuses):
+    if member_statuses and all(s == TaskStatus.COMPLETED for s in member_statuses):
         return "completed"
     if all(s in _BATCH_NOT_ATTEMPTED_STATUSES for s in member_statuses):
         return "not_started"
@@ -87,8 +86,8 @@ class WorkflowSchedulerCLI:
         )
         self.queue = JobQueue()
 
+    @staticmethod
     def _format_response(
-        self,
         status: str,
         blockers: Optional[list[str]] = None,
         checks_passed: Optional[list[str]] = None,
@@ -128,11 +127,16 @@ class WorkflowSchedulerCLI:
         response.update(extra_fields)
         return response
 
+    def _invalid_workflow_input(self, error: str) -> Dict[str, Any]:
+        return self._format_response(
+            status="fail", checks_failed=["invalid_workflow_plan"], next_owner="user", error=error,
+        )
+
     def create_workflow(self, yaml_path: str) -> Dict[str, Any]:
         """Create workflow from YAML file.
 
         Args:
-            yaml_path: Path to workflow YAML file
+            yaml_path: Path to workflow YAML file. An omitted workflow ID is generated.
 
         Returns:
             Dict with workflow creation result
@@ -147,13 +151,20 @@ class WorkflowSchedulerCLI:
                 next_owner="user",
                 error=f"File not found: {yaml_path}",
             )
-        except yaml.YAMLError as e:
+        except yaml.YAMLError:
             return self._format_response(
-                status="fail",
-                checks_failed=["yaml_parse"],
-                next_owner="user",
-                error=f"Invalid YAML: {e}",
+                status="fail", checks_failed=["yaml_parse"], next_owner="user", error="Invalid YAML",
             )
+        except (OSError, UnicodeError):
+            return self._invalid_workflow_input("Workflow YAML could not be read")
+
+        if type(workflow_data) is not dict:
+            return self._invalid_workflow_input("Workflow YAML must be a mapping")
+        tasks_data = workflow_data.get("tasks")
+        if type(tasks_data) is not list or not tasks_data:
+            return self._invalid_workflow_input("Workflow requires a nonempty list of tasks")
+        if any(type(task) is not dict for task in tasks_data):
+            return self._invalid_workflow_input("Each workflow task must be a mapping")
 
         workflow_id = workflow_data.get("workflow_id", f"workflow-{uuid.uuid4().hex[:8]}")
         title = workflow_data.get("title", "Untitled Workflow")
@@ -162,7 +173,7 @@ class WorkflowSchedulerCLI:
 
         try:
             mode = WorkflowMode[mode_str.upper()]
-        except KeyError:
+        except (AttributeError, KeyError):
             return self._format_response(
                 status="fail",
                 checks_failed=["invalid_mode"],
@@ -174,48 +185,89 @@ class WorkflowSchedulerCLI:
         # No repository writes happen until batch validation has passed —
         # a workflow must never end up with partially-written tasks, a
         # workflow row, or a batch left behind by a validation failure.
-        tasks_data = workflow_data.get("tasks", [])
         built_tasks: List[Task] = []
         dependencies: Dict[str, List[str]] = {}
+        idempotency_keys: set[str] = set()
         for task_data in tasks_data:
             task_id = task_data.get("id", f"task-{uuid.uuid4().hex[:8]}")
+            if type(task_id) is not str or not task_id.strip() or task_id in dependencies:
+                return self._invalid_workflow_input("Task IDs must be nonempty and unique")
+            parents = task_data.get("depends_on", [])
+            payload = task_data.get("payload", {})
+            priority = task_data.get("priority", 0)
+            mode_text = task_data.get("mode", "Draft")
+            if type(parents) is not list or any(type(parent) is not str or not parent.strip() for parent in parents):
+                return self._invalid_workflow_input("Task dependencies must be a list of nonempty IDs")
+            if type(payload) is not dict or type(priority) is not int or not -(2**63) <= priority < 2**63:
+                return self._invalid_workflow_input("Task payload must be a mapping and priority a SQLite integer")
+            batch_id = task_data.get("batch_id")
+            if batch_id is not None and type(batch_id) is not str:
+                return self._invalid_workflow_input("Task batch ID must be text")
+            if any(
+                type(task_data.get(key, default)) is not str
+                for key, default in (("type", "generic"), ("owner", "system"), ("action", ""), ("idempotency_key", task_id))
+            ):
+                return self._invalid_workflow_input("Task type, owner, action and idempotency key must be text")
+            if any(type(task_data.get(key, False)) is not bool for key in ("approval_required", "production_ready")):
+                return self._invalid_workflow_input("Task approval and readiness flags must be booleans")
+            if type(mode_text) is not str or mode_text.upper() not in TaskMode.__members__:
+                return self._invalid_workflow_input("Task mode is invalid")
+            try:
+                json.dumps(payload, allow_nan=False)
+            except (TypeError, ValueError, RecursionError):
+                return self._invalid_workflow_input("Task payload must be serializable JSON")
+            idempotency_key = task_data.get("idempotency_key", task_id)
+            if not idempotency_key.strip() or idempotency_key in idempotency_keys:
+                return self._invalid_workflow_input("Task idempotency keys must be nonempty and unique per workflow")
+            idempotency_keys.add(idempotency_key)
             task = Task(
                 id=task_id,
                 workflow_id=workflow_id,
                 type=task_data.get("type", "generic"),
                 owner=task_data.get("owner", "system"),
                 action=task_data.get("action", ""),
-                idempotency_key=task_data.get("idempotency_key", task_id),
+                idempotency_key=idempotency_key,
                 status=TaskStatus.DRAFT,
-                mode=TaskMode[task_data.get("mode", "Draft").upper()],
-                priority=task_data.get("priority", 0),
+                mode=TaskMode[mode_text.upper()],
+                priority=priority,
                 approval_required=task_data.get("approval_required", False),
-                depends_on=task_data.get("depends_on", []),
-                payload=task_data.get("payload", {}),
+                depends_on=parents,
+                payload=payload,
                 production_ready=task_data.get("production_ready", False),
-                batch_id=task_data.get("batch_id"),
+                batch_id=batch_id,
             )
             built_tasks.append(task)
             dependencies[task_id] = task.depends_on
+
+        try:
+            workflow = WorkflowPlan(
+                workflow_id=workflow_id,
+                title=title,
+                created_by=created_by,
+                mode=mode,
+                tasks=[task.id for task in built_tasks],
+                dependencies=dependencies,
+            )
+        except (TypeError, ValueError) as exc:
+            return self._format_response(
+                status="fail", checks_failed=["invalid_workflow_plan"],
+                next_owner="user", error=str(exc),
+            )
 
         batch_error = self._validate_batches(built_tasks, dependencies)
         if batch_error is not None:
             return batch_error
 
-        workflow = WorkflowPlan(
-            workflow_id=workflow_id,
-            title=title,
-            created_by=created_by,
-            mode=mode,
-        )
-        for task in built_tasks:
-            workflow.add_task(task.id)
-            workflow.set_dependencies(task.id, task.depends_on)
-
-        self.repository.create_workflow(workflow)
-        for task in built_tasks:
-            self.repository.create_task(task)
-        self.audit_logger.log_workflow_created(workflow)
+        try:
+            created = self.repository.create_workflow_with_tasks(workflow, built_tasks)
+        except (ValueError, TypeError):
+            return self._invalid_workflow_input("Workflow task set does not match the plan")
+        if not created:
+            return self._format_response(
+                status="blocked", blockers=["workflow_creation_unconfirmed"],
+                checks_failed=["workflow_creation_unconfirmed"], workflow_id=workflow_id,
+                error="Workflow creation was rolled back; no success audit was recorded",
+            )
 
         return self._format_response(
             status="pass",
@@ -271,17 +323,12 @@ class WorkflowSchedulerCLI:
         return None
 
     def list_workflows(self) -> Dict[str, Any]:
-        """List all workflows.
-
-        Returns:
-            Dict with workflows list
-        """
-        # Note: Repository doesn't have list_workflows yet; would need to add
+        """List persisted workflow summaries ordered by workflow ID."""
         return self._format_response(
             status="pass",
             checks_passed=["workflows_listed"],
             next_owner="user",
-            workflows=[],
+            workflows=self.repository.list_workflows(),
         )
 
     def get_workflow_status(self, workflow_id: str) -> Dict[str, Any]:
@@ -384,6 +431,18 @@ class WorkflowSchedulerCLI:
                 error="Workflow is paused; resume it with resume-workflow before running.",
             )
 
+        if (
+            workflow.mode is WorkflowMode.PRODUCTION
+            and getattr(self.executor.adapter, "simulation_only", False) is True
+        ):
+            return self._format_response(
+                status="blocked",
+                blockers=["production_adapter_required"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error="Production workflows require a real execution adapter.",
+            )
+
         if workflow.status != WorkflowStatus.RUNNING:
             workflow.mark_running()
             if self.repository.update_workflow(workflow):
@@ -423,6 +482,7 @@ class WorkflowSchedulerCLI:
         paused: set[str] = {t.id for t in tasks if t.status == TaskStatus.PAUSED}
         failed: set[str] = set()
         blocked: set[str] = set()
+        terminal_adapter_blockers: set[str] = set()
         approval_pending: set[str] = set()
         retry_pending: set[str] = set()
         in_flight_elsewhere: set[str] = set()
@@ -574,6 +634,10 @@ class WorkflowSchedulerCLI:
                     approval_pending.add(task.id)
                 elif result.status == "blocked":
                     blocked.add(task.id)
+                    # A second deferral is a terminal behavior, not a new
+                    # request. Keep its safe, fixed reason in the CLI result.
+                    if "adapter_approval_repeated" in result.blockers:
+                        terminal_adapter_blockers.add("adapter_approval_repeated")
                 else:
                     failed.add(task.id)
 
@@ -675,7 +739,7 @@ class WorkflowSchedulerCLI:
                 if c
             ]
         else:
-            settle = lambda plan: plan.mark_completed()  # noqa: E731
+            settle = lambda plan: plan.mark_completed(completed_task_ids=completed)  # noqa: E731
             status = "pass"
             checks_failed = []
 
@@ -684,9 +748,10 @@ class WorkflowSchedulerCLI:
         # nor reverse a concurrent pause/cancel/terminal transition.
         plan_shape = (workflow.mode, workflow.tasks, workflow.dependencies)
         for _attempt in range(3):
-            settle(workflow)
-            if status == "pass":
-                workflow._require_completed_workflow_tasks = True
+            try:
+                settle(workflow)
+            except ValueError:
+                return self._workflow_write_refused(workflow_id)
             if self.repository.update_workflow(workflow):
                 break
             current = self.repository.get_workflow(workflow_id)
@@ -706,6 +771,7 @@ class WorkflowSchedulerCLI:
             status=status,
             checks_passed=["workflow_executed"],
             checks_failed=checks_failed,
+            blockers=sorted(terminal_adapter_blockers),
             next_owner="user",
             workflow_id=workflow_id,
             completed=len(completed),
@@ -900,7 +966,14 @@ class WorkflowSchedulerCLI:
             )
         waiting, current_waiting = self._workflow_approval_waits(workflow)
         recoverable: list[str] = []
-        unresolved_claim: list[str] = []
+        # A crash before the approval wait commits (or a competing unbound
+        # request) leaves a real lease but no indexed wait. Report the held
+        # claim without granting that request continuation eligibility.
+        unresolved_claim = [
+            task.id for task in self.repository.list_workflow_tasks(workflow_id)
+            if task.id not in waiting
+            and task.status is TaskStatus.RUNNING and task.lease_lock is not None
+        ]
         still_pending: list[str] = []
         for task_id in waiting:
             task = self.repository.get_task(task_id)
@@ -1188,7 +1261,10 @@ class WorkflowSchedulerCLI:
             )
 
         previous_status = workflow.status.value
-        workflow.mark_paused()
+        if workflow.status is WorkflowStatus.RUNNING:
+            workflow.mark_paused()
+        else:
+            workflow._pause_before_start()
         if not self.repository.update_workflow(workflow):
             return self._format_response(
                 status="blocked",
@@ -1456,9 +1532,21 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
+    db_path = args.db
+    if args.command in {"status", "list", "audit"} and db_path != ":memory:" and not Path(db_path).is_file():
+        result = WorkflowSchedulerCLI._format_response(
+            status="fail",
+            checks_failed=["workflow_not_found" if args.command == "status" else "database_not_found"],
+            next_owner="user",
+            error=f"Workflow not found: {args.workflow_id}" if args.command == "status" else "Database not found",
+        )
+        print(json.dumps(result))
+        sys.exit(1)
+
+    cli = None
     try:
         cli = WorkflowSchedulerCLI(
-            db_path=getattr(args, "db", "workflow_scheduler.db"),
+            db_path=db_path,
             max_workers=getattr(args, "max_workers", 1),
         )
 
@@ -1500,8 +1588,14 @@ def main() -> None:
         sys.exit(0 if result.get("status") == "pass" else 1)
 
     except Exception as e:
-        print(json.dumps({"status": "fail", "error": str(e)}, indent=2))
+        result = WorkflowSchedulerCLI._format_response(
+            status="fail", checks_failed=["command_failed"], next_owner="user", error=str(e),
+        )
+        print(json.dumps(result, indent=2))
         sys.exit(1)
+    finally:
+        if cli is not None:
+            cli.repository.close()
 
 
 if __name__ == "__main__":

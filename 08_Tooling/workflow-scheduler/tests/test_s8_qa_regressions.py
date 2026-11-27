@@ -232,15 +232,16 @@ def test_recovery_reconciles_already_completed_task_before_approval_scope_check(
 
 
 def test_completion_refuses_to_overwrite_peer_plan_update(tmp_path, monkeypatch):
-    db = _plan(tmp_path)
+    db = _plan(tmp_path, ("t0", "t1"))
     runner, peer = WorkflowSchedulerCLI(db_path=db), WorkflowSchedulerCLI(db_path=db)
     original = runner.executor.execute_many
 
     def execute_then_peer_updates_plan(tasks, *args, **kwargs):
         results = original(tasks, *args, **kwargs)
         current = peer.repository.get_workflow("wf")
-        current.dependencies["new-scope"] = []
+        current.set_dependencies("t1", ["t0"])
         assert peer.repository.update_workflow(current)
+        assert peer.repository.get_workflow("wf").dependencies["t1"] == ["t0"]
         return results
 
     monkeypatch.setattr(runner.executor, "execute_many", execute_then_peer_updates_plan)
@@ -248,7 +249,7 @@ def test_completion_refuses_to_overwrite_peer_plan_update(tmp_path, monkeypatch)
     current = peer.repository.get_workflow("wf")
     assert result["status"] == "blocked", result
     assert current.status is WorkflowStatus.RUNNING
-    assert "new-scope" in current.dependencies
+    assert current.dependencies["t1"] == ["t0"]
 
 
 def test_completion_checks_for_unsettled_members_in_same_update(tmp_path, monkeypatch):

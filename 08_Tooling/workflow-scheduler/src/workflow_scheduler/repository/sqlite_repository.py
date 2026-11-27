@@ -231,27 +231,66 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                INSERT INTO workflows
-                (workflow_id, title, created_by, mode, status, tasks, dependencies, metadata, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    workflow.workflow_id,
-                    workflow.title,
-                    workflow.created_by,
-                    workflow.mode.value,
-                    workflow.status.value,
-                    json.dumps(workflow.tasks),
-                    json.dumps(workflow.dependencies),
-                    json.dumps(workflow.metadata),
-                    utc_storage_string(workflow.created_at),
-                    utc_storage_string(workflow.updated_at),
-                ),
-            )
+            self._insert_workflow(cursor, workflow)
             conn.commit()
             _remember(workflow, workflow.status.value, utc_storage_string(workflow.updated_at))
+
+    def create_workflow_with_tasks(self, workflow: WorkflowPlan, tasks: List[Task]) -> bool:
+        """Commit a complete validated workflow and its creation audit, or none."""
+        ids = [task.id for task in tasks]
+        if not ids or ids != workflow.tasks or len(ids) != len(set(ids)) or any(
+            task.workflow_id != workflow.workflow_id or task.depends_on != workflow.dependencies.get(task.id, [])
+            for task in tasks
+        ):
+            raise ValueError("Workflow task set does not match the plan")
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    cursor = conn.cursor()
+                    self._insert_workflow(cursor, workflow)
+                    for task in tasks:
+                        self._insert_task(cursor, task)
+                    self._insert_event(cursor, "workflow_created", None, workflow.workflow_id, {
+                        "status_before": None, "status_after": workflow.status.value,
+                        "details": {"title": workflow.title, "created_by": workflow.created_by},
+                    })
+            except (sqlite3.IntegrityError, sqlite3.OperationalError):
+                return False
+            _remember(workflow, workflow.status.value, utc_storage_string(workflow.updated_at))
+            for task in tasks:
+                _remember(task, task.status.value, utc_storage_string(task.updated_at))
+            return True
+
+    def list_workflows(self) -> List[Dict[str, Any]]:
+        """Read only the workflow summary fields, in stable ID order."""
+        with self._lock:
+            conn = self._get_connection()
+            rows = conn.execute("SELECT workflow_id, title, status, mode FROM workflows ORDER BY workflow_id")
+            return [dict(row) for row in rows]
+
+    @staticmethod
+    def _insert_workflow(cursor, workflow: WorkflowPlan) -> None:
+        cursor.execute(
+            """
+            INSERT INTO workflows
+            (workflow_id, title, created_by, mode, status, tasks, dependencies, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workflow.workflow_id,
+                workflow.title,
+                workflow.created_by,
+                workflow.mode.value,
+                workflow.status.value,
+                json.dumps(workflow.tasks),
+                json.dumps(workflow.dependencies),
+                json.dumps(workflow.metadata),
+                utc_storage_string(workflow.created_at),
+                utc_storage_string(workflow.updated_at),
+            ),
+        )
 
     def get_workflow(self, workflow_id: str) -> Optional[WorkflowPlan]:
         """Retrieve workflow from database."""
@@ -286,7 +325,7 @@ class SQLiteRepository:
         Conditional transition guard (Repair B): a terminal workflow is
         never overwritten, and a non-terminal workflow may only stay in
         place (metadata-only write) or move forward along a legitimate
-        transition (draft/pending -> running/paused/cancelled,
+        transition (draft -> pending, draft/pending -> running/paused/cancelled,
         running -> paused/completed/failed/cancelled/governance_blocked,
         paused -> running/cancelled). A stale snapshot that would reverse
         a workflow (e.g. completed -> running, paused -> draft) is
@@ -294,6 +333,8 @@ class SQLiteRepository:
         landed. Existing callers that ignore the return value keep
         working, with the DB row unchanged on refusal. A repository-loaded
         snapshot must still match both the status and timestamp it read.
+        Completion compares actual settled task identities under a SQLite
+        write transaction; the number of completed tasks alone is not proof.
         """
         with self._lock:
             old_status, old_stamp = getattr(workflow, "_repository_snapshot", (None, None))
@@ -301,47 +342,66 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                UPDATE workflows
-                SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
-                WHERE workflow_id = ?
-                  AND (? IS NULL OR (status = ? AND updated_at = ?))
-                  AND status NOT IN ('completed','failed','cancelled','governance_blocked')
-                  AND (NOT ? OR NOT EXISTS (
-                    SELECT 1 FROM tasks
-                    WHERE workflow_id = workflows.workflow_id
-                      AND (status != 'completed' OR execution_claim_token IS NOT NULL
-                           OR lease_lock IS NOT NULL)
-                  ))
-                  AND (
-                    status = ?
-                    OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
-                    OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
-                    OR (status = 'paused' AND ? IN ('running','cancelled'))
-                  )
-                """,
-                (
-                    workflow.status.value,
-                    json.dumps(workflow.tasks),
-                    json.dumps(workflow.dependencies),
-                    json.dumps(workflow.metadata),
-                    new_stamp,
-                    workflow.workflow_id,
-                    old_status, old_status, old_stamp,
-                    getattr(workflow, "_require_completed_workflow_tasks", False),
-                    workflow.status.value,
-                    workflow.status.value,
-                    workflow.status.value,
-                    workflow.status.value,
-                ),
-            )
-            conn.commit()
+            task_ids = workflow.tasks
+            with conn:
+                if workflow.status is WorkflowStatus.COMPLETED:
+                    conn.execute("BEGIN IMMEDIATE")
+                    if not self._completion_matches_persisted_tasks(cursor, workflow.workflow_id, task_ids):
+                        return False
+                cursor.execute(
+                    """
+                    UPDATE workflows
+                    SET status = ?, tasks = ?, dependencies = ?, metadata = ?, updated_at = ?
+                    WHERE workflow_id = ?
+                      AND (? IS NULL OR (status = ? AND updated_at = ?))
+                      AND status NOT IN ('completed','failed','cancelled','governance_blocked')
+                      AND (
+                        status = ?
+                        OR (status = 'draft' AND ? = 'pending')
+                        OR (status IN ('draft','pending') AND ? IN ('running','paused','cancelled'))
+                        OR (status = 'running' AND ? IN ('paused','completed','failed','cancelled','governance_blocked'))
+                        OR (status = 'paused' AND ? IN ('running','cancelled'))
+                      )
+                    """,
+                    (
+                        workflow.status.value,
+                        json.dumps(task_ids),
+                        json.dumps(workflow.dependencies),
+                        json.dumps(workflow.metadata),
+                        new_stamp,
+                        workflow.workflow_id,
+                        old_status, old_status, old_stamp,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                        workflow.status.value,
+                    ),
+                )
             if cursor.rowcount != 1:
                 return False
             _remember(workflow, workflow.status.value, new_stamp)
             workflow.updated_at = parse_utc_storage(new_stamp)
             return True
+
+    @staticmethod
+    def _completion_matches_persisted_tasks(cursor, workflow_id: str, task_ids: list[str]) -> bool:
+        if not task_ids:
+            return False
+        plan = cursor.execute(
+            "SELECT tasks FROM workflows WHERE workflow_id = ?", (workflow_id,),
+        ).fetchone()
+        if plan is None or json.loads(plan["tasks"]) != task_ids:
+            return False
+        rows = cursor.execute(
+            "SELECT id, status, execution_claim_token, lease_lock FROM tasks WHERE workflow_id = ?",
+            (workflow_id,),
+        ).fetchall()
+        return {row["id"] for row in rows} == set(task_ids) and all(
+            row["status"] == TaskStatus.COMPLETED.value
+            and row["execution_claim_token"] is None and row["lease_lock"] is None
+            for row in rows
+        )
 
     def create_task(self, task: Task) -> None:
         """Store task in database."""
@@ -349,40 +409,44 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                INSERT INTO tasks
-                (id, workflow_id, type, owner, action, idempotency_key, status, mode, priority,
-                 approval_required, depends_on, payload, lease_lock, production_ready, created_at, updated_at,
-                 retry_count, next_retry_at, max_retries, paused_from_status, batch_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task.id,
-                    task.workflow_id,
-                    task.type,
-                    task.owner,
-                    task.action,
-                    task.idempotency_key,
-                    task.status.value,
-                    task.mode.value,
-                    task.priority,
-                    task.approval_required,
-                    json.dumps(task.depends_on),
-                    json.dumps(task.payload),
-                    utc_storage_string(task.lease_lock) if task.lease_lock else None,
-                    task.production_ready,
-                    utc_storage_string(task.created_at),
-                    utc_storage_string(task.updated_at),
-                    task.retry_count,
-                    utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
-                    task.max_retries,
-                    task.paused_from_status,
-                    task.batch_id,
-                ),
-            )
+            self._insert_task(cursor, task)
             conn.commit()
             _remember(task, task.status.value, utc_storage_string(task.updated_at))
+
+    @staticmethod
+    def _insert_task(cursor, task: Task) -> None:
+        cursor.execute(
+            """
+            INSERT INTO tasks
+            (id, workflow_id, type, owner, action, idempotency_key, status, mode, priority,
+             approval_required, depends_on, payload, lease_lock, production_ready, created_at, updated_at,
+             retry_count, next_retry_at, max_retries, paused_from_status, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task.id,
+                task.workflow_id,
+                task.type,
+                task.owner,
+                task.action,
+                task.idempotency_key,
+                task.status.value,
+                task.mode.value,
+                task.priority,
+                task.approval_required,
+                json.dumps(task.depends_on),
+                json.dumps(task.payload),
+                utc_storage_string(task.lease_lock) if task.lease_lock else None,
+                task.production_ready,
+                utc_storage_string(task.created_at),
+                utc_storage_string(task.updated_at),
+                task.retry_count,
+                utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
+                task.max_retries,
+                task.paused_from_status,
+                task.batch_id,
+            ),
+        )
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Retrieve task from database."""
@@ -523,8 +587,10 @@ class SQLiteRepository:
     ) -> str | None:
         """Single-winner claim across connections and processes.
 
-        Running tasks are not automatically stolen after a timeout.
-        Recovery requires a separately proven, fenced procedure.
+        Direct/legacy callers can still claim standalone tasks and tasks in
+        draft or pending plans. A registered stopped parent always fences new
+        dispatch. CLI dispatch additionally requires RUNNING. Running tasks
+        are not automatically stolen after a timeout.
         """
         token = uuid.uuid4().hex
         now = utc_storage_string(utc_now())
@@ -539,6 +605,9 @@ class SQLiteRepository:
                 "AND (? IS NULL OR (status = ? AND updated_at = ?)) "
                 "AND (NOT ? OR EXISTS (SELECT 1 FROM workflows "
                 "WHERE workflow_id = tasks.workflow_id AND status = 'running')) "
+                "AND NOT EXISTS (SELECT 1 FROM workflows "
+                "WHERE workflow_id = tasks.workflow_id "
+                "AND status NOT IN ('draft','pending','running')) "
                 "AND status IN (?, ?, ?, ?, ?)",
                 (
                     TaskStatus.RUNNING.value, now, token, now, task_id,
@@ -732,7 +801,12 @@ class SQLiteRepository:
             )
 
     def workflow_approval_waits(self, workflow_id: str) -> tuple[set[str], set[str]]:
-        """Return (current wait IDs, all IDs with request-bound wait history)."""
+        """Return (current wait IDs, all IDs with request-bound wait history).
+
+        A standalone competing request is visible via get_approval_request
+        but cannot authorize continuation. Only a guarded transition that
+        persisted workflow_wait alongside the task can bind a workflow wait.
+        """
         with self._lock:
             rows = self._get_connection().execute(
                 """SELECT tasks.id, approval.workflow_wait AND (
@@ -885,17 +959,19 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            details_json = json.dumps(details or {})
-            now = utc_storage_string(utc_now())
-
-            cursor.execute(
-                """
-                INSERT INTO audit_log (timestamp, event_type, task_id, workflow_id, details, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (now, event_type, task_id, workflow_id, details_json, now),
-            )
+            self._insert_event(cursor, event_type, task_id, workflow_id, details)
             conn.commit()
+
+    @staticmethod
+    def _insert_event(cursor, event_type, task_id, workflow_id, details):
+        now = utc_storage_string(utc_now())
+        cursor.execute(
+            """
+            INSERT INTO audit_log (timestamp, event_type, task_id, workflow_id, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (now, event_type, task_id, workflow_id, json.dumps(details or {}), now),
+        )
 
     def get_audit_log(
         self,
@@ -907,12 +983,12 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            if workflow_id:
-                cursor.execute("SELECT * FROM audit_log WHERE workflow_id = ? ORDER BY created_at DESC", (workflow_id,))
-            elif task_id:
-                cursor.execute("SELECT * FROM audit_log WHERE task_id = ? ORDER BY created_at DESC", (task_id,))
-            else:
-                cursor.execute("SELECT * FROM audit_log ORDER BY created_at DESC")
+            cursor.execute(
+                """SELECT * FROM audit_log
+                   WHERE (? IS NULL OR workflow_id = ?) AND (? IS NULL OR task_id = ?)
+                   ORDER BY created_at DESC, id DESC""",
+                (workflow_id, workflow_id, task_id, task_id),
+            )
 
             rows = cursor.fetchall()
             return [dict(row) for row in rows]

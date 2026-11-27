@@ -10,6 +10,7 @@ class NoopAdapter(TaskAdapter):
     """No-op adapter that accepts both migration-phase input shapes."""
 
     accepts_execution_request = True
+    simulation_only = True
 
     def __init__(self, log_output: bool = True):
         self.log_output = log_output

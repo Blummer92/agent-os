@@ -322,6 +322,9 @@ class TestBatchSiblingContinuation:
 class TestBatchRollupStatus:
     """_compute_batch_rollup and end-to-end rollup correctness."""
 
+    def test_empty_rollup_cannot_report_completion(self):
+        assert _compute_batch_rollup([]) == "not_started"
+
     def test_rollup_all_completed(self):
         assert _compute_batch_rollup([TaskStatus.COMPLETED, TaskStatus.COMPLETED]) == "completed"
 
