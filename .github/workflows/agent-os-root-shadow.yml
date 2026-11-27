@@ -1,0 +1,132 @@
+# Dedicated root-only A/B. This workflow does not publish or require a merge status.
+name: Agent OS root shard shadow
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - .github/workflows/agent-os-root-shadow.yml
+      - scripts/ci_perf/root_shadow.py
+      - tests/ci_perf/test_root_shadow.py
+permissions:
+  contents: read
+env:
+  SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+  PYTHONPATH: src
+  PYTHONDONTWRITEBYTECODE: "1"
+jobs:
+  inventory:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'ci/root-shard-shadow-20261127' &&
+      github.event.pull_request.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHADOW_HEAD }}
+          persist-credentials: false
+      - name: Verify exact head before install
+        run: test "$(git rev-parse HEAD)" = "$SHADOW_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install aggregate dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+      - name: Collect root files and assign whole modules
+        run: python -m scripts.ci_perf.root_shadow plan "$RUNNER_TEMP/root-shadow.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: root-shadow-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/root-shadow.json
+          if-no-files-found: error
+          retention-days: 7
+
+  root:
+    needs: inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [serial, "0", "1", "2", "3"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHADOW_HEAD }}
+          persist-credentials: false
+      - name: Verify exact head before install
+        run: test "$(git rev-parse HEAD)" = "$SHADOW_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install aggregate dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+      - uses: actions/download-artifact@v7
+        with:
+          name: root-shadow-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - name: Run root tests and capture evidence
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          python -m scripts.ci_perf.root_shadow run "$RUNNER_TEMP/root-shadow" \
+            --plan "$RUNNER_TEMP/plan/root-shadow.json" --lane "$LANE"
+      - name: Check independent root completeness on serial reference
+        if: matrix.lane == 'serial'
+        run: |
+          python scripts/agent_os_ci_test_completeness.py --suite-dir "$GITHUB_WORKSPACE" \
+            --suite-name root --python-bin "$(command -v python)" \
+            --junit "$RUNNER_TEMP/root-shadow/root.xml" --receipt "$RUNNER_TEMP/root-shadow/completeness.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: root-shadow-lane-${{ matrix.lane }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/root-shadow/
+          if-no-files-found: error
+          retention-days: 7
+
+  parity:
+    needs: [inventory, root]
+    if: ${{ always() && needs.inventory.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROOT_RESULT: ${{ needs.root.result }}
+    steps:
+      - name: Refuse any missing or unsuccessful lane
+        run: test "$ROOT_RESULT" = success
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHADOW_HEAD }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v7
+        with:
+          name: root-shadow-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: root-shadow-lane-*-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/downloads
+      - name: Check exact parity without publishing authority
+        run: |
+          set -euo pipefail
+          receipts="$RUNNER_TEMP/receipts"
+          mkdir "$receipts"
+          for lane in serial 0 1 2 3; do
+            mv "$RUNNER_TEMP/downloads/root-shadow-lane-$lane-attempt-$GITHUB_RUN_ATTEMPT" "$receipts/$lane"
+          done
+          test -z "$(find "$RUNNER_TEMP/downloads" -mindepth 1 -print -quit)"
+          python -m scripts.ci_perf.root_shadow compare "$receipts" \
+            --plan "$RUNNER_TEMP/plan/root-shadow.json" | tee -a "$GITHUB_STEP_SUMMARY"
