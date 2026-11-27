@@ -68,7 +68,14 @@ def sufficient_result(issue_number, lessons=((LESSON, REVISION),)):
 
 
 def _comment(comment_id, body):
-    return {"id": comment_id, "body": body}
+    # Real GitHub records always carry server-assigned authorship and timestamps; CKR v2 metrics
+    # trust only the CKR6 producer for results and the owner for receipts.
+    if body.startswith("<!-- agent-os-ckr6-result:v1 -->"):
+        user = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
+    else:
+        user = {"login": "Blummer92", "id": 32861845, "type": "User"}
+    stamp = "2026-11-25T12:00:00Z"
+    return {"id": comment_id, "body": body, "user": user, "created_at": stamp, "updated_at": stamp}
 
 
 def test_one_lesson_two_independent_prs_yields_two_verifiable_receipts():
