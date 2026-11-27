@@ -13,6 +13,7 @@ LL93_METADATA_REQUEST_ID = "ll-93-descriptive-metadata-2026-10-08"
 LL87_GUARDRAIL_REQUEST_ID = "ll-87-guardrail-refinement-2026-10-10"
 CONTINUATION_CONSUMER_REQUEST_ID = "continuation-live-consumer-2026-10-30"
 CKR6_SELECTION_SUFFICIENCY_REQUEST_ID = "ckr6-selection-sufficiency-2026-11-18"
+FIXTURE_RETIREMENT_PROOF_REQUEST_ID = "fixture-retirement-proof-2026-11-27"
 
 # Narrative fields are required on every reviewed entry.
 NARRATIVE_TYPES = MappingProxyType({
@@ -675,6 +676,19 @@ LESSONS = MappingProxyType({
                 "https://github.com/Blummer92/agent-os/issues/4026",
                 "https://github.com/Blummer92/agent-os/pull/4115",
             ),
+        }),
+    }),
+    # Draft from PR #4144; Instinct checked the live catalog for duplicates.
+    FIXTURE_RETIREMENT_PROOF_REQUEST_ID: MappingProxyType({
+        "target_lesson_id": None,
+        "properties": MappingProxyType({
+            "Guardrail": "Never treat a green mutant as retirement evidence if the transform was not applied, the dependency remains importable, or the selected tests changed.",
+            "Learning Type": "QA feedback",
+            "Lesson Learned": "Prove fixture removal before counting a green deletion test",
+            "Source Link": "https://github.com/Blummer92/agent-os/pull/4144",
+            "What Happened": "A deletion test passed because one edit missed its target and PYTHONPATH could still supply omitted helpers. In isolation, all five verified removals failed. Diagnosis: The removal and import isolation were not verified.",
+            "What To Do Next Time": "Read back the intended removal, run in disposable isolated imports without the original checkout on PYTHONPATH, compare exact collected test IDs and run a control that must fail.",
+            "Area": "Testing",
         }),
     }),
 })
