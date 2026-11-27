@@ -1,0 +1,13 @@
+# Optional local convenience. The aggregate owns the CI verdict.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+        files: '^\.pre-commit-config\.yaml$'
+  - repo: https://github.com/psf/black
+    rev: 26.10.0
+    hooks:
+      - id: black
+        args: [--check, --config, 08_Tooling/visual-asset-intake/pyproject.toml]
+        files: '^08_Tooling/visual-asset-intake/src/visual_asset_intake/.*\.py$'
