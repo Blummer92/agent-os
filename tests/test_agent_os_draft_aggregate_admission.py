@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
@@ -60,7 +62,7 @@ def test_push_to_main_and_authoritative_aggregate_identity_are_preserved():
     assert "main" in push
     assert "name: Agent OS Validation Gate" in content
     assert "name: Run aggregate validation" in content
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)
 
 
 def test_aggregate_profile_summary_states_draft_deferral():

@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 import pytest
 import yaml
 
@@ -65,10 +67,7 @@ def _assert_dependency_cache_parity(content: str) -> None:
 
 def test_validation_gate_executes_only_canonical_aggregate_command():
     content = WORKFLOW.read_text(encoding="utf-8")
-    steps = yaml.safe_load(content)["jobs"]["validate"]["steps"]
-    script = next(step["run"] for step in steps if step.get("id") == "aggregate")
-    assert script == "bash ./scripts/ci-local.sh --hosted"
-    assert (ROOT / "scripts/ci-local.sh").read_text().count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)
     assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in content
     assert "Cloud Build validation migration notice" not in content
 
@@ -285,8 +284,7 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
     aggregate_runner = AGGREGATE_RUNNER.read_text(encoding="utf-8")
     assert "python -m pip install -r requirements-dev.txt" in aggregate_workflow
     assert "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt" in aggregate_workflow
-    assert "bash ./scripts/ci-local.sh --hosted" in aggregate_workflow
-    assert (ROOT / "scripts/ci-local.sh").read_text().count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)
     scope = (ROOT / "scripts/ci-coverage-suites.tsv").read_text().splitlines()
     assert "workflow-scheduler\tworkflow_scheduler\tterm" in scope
 

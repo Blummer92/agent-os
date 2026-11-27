@@ -224,10 +224,18 @@ record_failure() {
 }
 
 timer_now_us() {
-  "$PYTHON_BIN" - <<'PY' 2>/dev/null
+  local now
+  now="$("$PYTHON_BIN" - <<'PY' 2>/dev/null
 import time
 print(time.monotonic_ns() // 1000)
 PY
+)" || now=
+  if [[ "$now" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$now"
+  else
+    # Timing is informational; lack of a clock must not erase a suite exit.
+    printf '%s\n' unavailable
+  fi
 }
 
 record_timing() {
@@ -325,10 +333,10 @@ run_check() {
   echo "==> $name"
   echo "    $command_text"
 
-  started_us="$(timer_now_us || true)"
+  started_us="$(timer_now_us)"
   (cd "$workdir" && "$@")
   local code=$?
-  ended_us="$(timer_now_us || true)"
+  ended_us="$(timer_now_us)"
   record_timing "$name" "$started_us" "$ended_us"
 
   if [ "$code" -eq 0 ]; then
@@ -446,96 +454,55 @@ suite_junit_path_for() {
   fi
 }
 
-# The running command and its summary use exactly the same hosted options.
-# Populate the caller's local array (compatible with Bash 3.2).
-set_hosted_coverage_options() {
-  local suite_name="$1"
-  if [ -n "$coverage_dir" ] && [ -n "$2" ]; then
-    hosted_options=("--cov-config=$ROOT_DIR/scripts/ci-branch-coverage.ini" "--cov-branch"
-      "--cov-report=json:$coverage_dir/${suite_name##*/}.json")
+# Populate the caller's local command and display using the same options.
+prepare_suite_pytest() {
+  local suite_dir="$1" suite_name="$2" junit_path
+  local coverage_options=()
+  command=("$PYTHON_BIN" -m pytest tests)
+  display="cd $suite_dir &&"
+  coverage_target=
+  if [ -d "$suite_dir/src" ]; then
+    display+=" PYTHONPATH=src"
+    coverage_target="$(coverage_target_for_suite "$suite_name")"
   fi
+  display+=" $PYTHON_BIN -m pytest tests"
+  if [ -n "$coverage_target" ]; then
+    coverage_options=("--cov=$coverage_target" "--cov-report=$(coverage_report_for_suite "$suite_name")")
+    if [ -n "$coverage_dir" ]; then
+      coverage_options+=("--cov-config=$ROOT_DIR/scripts/ci-branch-coverage.ini" "--cov-branch"
+        "--cov-report=json:$coverage_dir/${suite_name##*/}.json")
+    fi
+    command+=("${coverage_options[@]}")
+    display+=" ${coverage_options[*]}"
+  fi
+  junit_path="$(suite_junit_path_for "$suite_name")"
+  command+=("--junitxml=$junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
+  [ -z "$junit_dir" ] || display+=" --junitxml=$junit_path"
+  display+=" ${PYTEST_EXECUTION_GUARD[*]}"
 }
 
 run_pytest_suite() {
-  local suite_dir="$1"
-  local suite_name="$2"
-  local suite_junit_path
-  suite_junit_path="$(suite_junit_path_for "$suite_name")"
-  local guard_display="${PYTEST_EXECUTION_GUARD[*]}"
-
-  if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
-    : # Preserve scheduler suite identity for canonical aggregate admission.
-  fi
+  local suite_dir="$1" suite_name="$2"
+  local command=() display coverage_target
+  local command_env=()
+  prepare_suite_pytest "$suite_dir" "$suite_name"
   if [ -d "$suite_dir/src" ]; then
-    local command=("$PYTHON_BIN" -m pytest tests)
-    local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
-    local coverage_target
-    local coverage_report
-    coverage_target="$(coverage_target_for_suite "$suite_name")"
-    if [ -n "$coverage_target" ]; then
-      coverage_report="$(coverage_report_for_suite "$suite_name")"
-      command+=("--cov=$coverage_target" "--cov-report=$coverage_report")
-      display+=" --cov=$coverage_target --cov-report=$coverage_report"
-    fi
-    local hosted_options=()
-    set_hosted_coverage_options "$suite_name" "$coverage_target"
-    if [ -n "${hosted_options[0]:-}" ]; then
-      command+=("${hosted_options[@]}")
-      display+=" ${hosted_options[*]}"
-    fi
-    command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
-    [ -n "${junit_dir:-}" ] && display+=" --junitxml=$suite_junit_path"
-    display+=" $guard_display"
     local src_dir
-    local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
-    pythonpath_value="$(python_path_with_src "$src_dir")"
+    command_env=(env "PYTHONPATH=$(python_path_with_src "$src_dir")")
     if [ -n "$coverage_target" ]; then
-      # Isolated even across parallel suites; logs retain terminal reports.
       local coverage_file="$parallel_tmp/coverage/$suite_name/.coverage"
       mkdir -p "$(dirname "$coverage_file")" || runner_error "cannot prepare isolated coverage path for $suite_name"
-      run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" COVERAGE_FILE="$coverage_file" "${command[@]}"
-    else
-      run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
+      command_env+=("COVERAGE_FILE=$coverage_file")
     fi
-  else
-    local plain_display="cd $suite_dir && $PYTHON_BIN -m pytest tests"
-    local plain_command=("$PYTHON_BIN" -m pytest tests)
-    plain_command+=("--junitxml=$suite_junit_path" "${PYTEST_EXECUTION_GUARD[@]}")
-    [ -n "${junit_dir:-}" ] && plain_display+=" --junitxml=$suite_junit_path"
-    plain_display+=" $guard_display"
-    run_check "$suite_name" "$suite_dir" "$plain_display" "${plain_command[@]}"
   fi
+  run_check "$suite_name" "$suite_dir" "$display" ${command_env[@]+"${command_env[@]}"} "${command[@]}"
 }
 
 suite_command_text() {
-  local suite_dir="$1"
-  local suite_name="$2"
-  if [ -d "$suite_dir/src" ]; then
-    local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
-    local coverage_target
-    coverage_target="$(coverage_target_for_suite "$suite_name")"
-    if [ -n "$coverage_target" ]; then
-      local coverage_report
-      coverage_report="$(coverage_report_for_suite "$suite_name")"
-      display+=" --cov=$coverage_target --cov-report=$coverage_report"
-    fi
-    local hosted_options=()
-    set_hosted_coverage_options "$suite_name" "$coverage_target"
-    if [ -n "${hosted_options[0]:-}" ]; then
-      display+=" ${hosted_options[*]}"
-    fi
-    if [ -n "${junit_dir:-}" ]; then
-      display+=" --junitxml=$(junit_path_for "$suite_name")"
-    fi
-    printf '%s %s' "$display" "${PYTEST_EXECUTION_GUARD[*]}"
-  else
-    local plain="cd $suite_dir && $PYTHON_BIN -m pytest tests"
-    if [ -n "${junit_dir:-}" ]; then
-      plain+=" --junitxml=$(junit_path_for "$suite_name")"
-    fi
-    printf '%s %s' "$plain" "${PYTEST_EXECUTION_GUARD[*]}"
-  fi
+  local command=() display coverage_target
+  prepare_suite_pytest "$1" "$2"
+  printf '%s' "$display"
 }
 
 artifact_sha256() {
@@ -569,10 +536,10 @@ run_captured_suite() {
   local ended_us
   local code
 
-  started_us="$(timer_now_us || true)"
+  started_us="$(timer_now_us)"
   run_pytest_suite "$suite_dir" "$suite_name" >"$output_file" 2>&1
   code=$?
-  ended_us="$(timer_now_us || true)"
+  ended_us="$(timer_now_us)"
   if [ -n "$coverage_dir" ]; then
     suite_fingerprints "$suite_name" >"$parallel_tmp/hash-$(junit_key "$suite_name")" || {
       echo "could not capture fingerprints: $suite_name" >>"$output_file"
@@ -606,7 +573,7 @@ check_test_completeness() {
     display+=" --receipt $receipt"
   fi
   local started_us ended_us code
-  started_us="$(timer_now_us || true)"
+  started_us="$(timer_now_us)"
   if [ -d "$suite_dir/src" ]; then
     env PYTHONPATH="$(python_path_with_src "$suite_dir/src")" "${args[@]}"
   else
@@ -620,7 +587,7 @@ check_test_completeness() {
       code=2
     fi
   fi
-  ended_us="$(timer_now_us || true)"
+  ended_us="$(timer_now_us)"
   record_timing "$name" "$started_us" "$ended_us"
   commands_executed+=("$display")
   if [ "$code" -eq 0 ]; then
@@ -698,7 +665,7 @@ write_subtest_receipt() {
   return 0
 }
 
-aggregate_started_us="$(timer_now_us || true)"
+aggregate_started_us="$(timer_now_us)"
 
 
 echo "AGGREGATE VALIDATION START"
@@ -978,7 +945,7 @@ if [ -n "${junit_dir:-}" ]; then
   done
 fi
 
-aggregate_ended_us="$(timer_now_us || true)"
+aggregate_ended_us="$(timer_now_us)"
 record_timing "aggregate total" "$aggregate_started_us" "$aggregate_ended_us"
 
 echo

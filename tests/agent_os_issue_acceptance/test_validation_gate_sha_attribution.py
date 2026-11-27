@@ -6,6 +6,8 @@ actual tested-checkout identities without freezing arbitrary presentation syntax
 
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 
@@ -113,4 +115,4 @@ def test_sha_attribution_contract_does_not_freeze_unrelated_workflow_semantics()
     assert "github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id" in content
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}" in content
     assert "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA" in content
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)

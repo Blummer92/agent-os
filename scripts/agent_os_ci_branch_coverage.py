@@ -1,5 +1,6 @@
 """Validate the aggregate's bounded branch-coverage reports and emit a receipt."""
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ def load_scope():
 FLOOR = 80
 KEYS = ("covered_lines", "num_statements", "covered_branches", "num_branches")
 MAX_REPORT_BYTES = 20 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1024 * 1024
 
 
 def _counts(summary):
@@ -128,6 +130,36 @@ def _suite_report(directory, name, package):
     return _measure(directory / f"{name}.json", files)
 
 
+def _manifest_fingerprints(scope):
+    directory = os.environ.get("CI_JUNIT_DIR")
+    if not directory:
+        raise ValueError
+    with (Path(directory) / "manifest.tsv").open("rb") as handle:
+        data = handle.read(MAX_MANIFEST_BYTES + 1)
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise ValueError
+    rows = csv.reader(data.decode("utf-8").splitlines(), delimiter="\t", quoting=csv.QUOTE_NONE)
+    columns = next(rows, [])
+    if len(columns) != len(set(columns)):
+        raise ValueError
+    suite_col, digest_col = columns.index("suite_name"), columns.index("coverage_sha256")
+    names = {f"08_Tooling/{name}": f"{name}.json" for name in scope}
+    fingerprints = {}
+    for row in rows:
+        if len(row) != len(columns):
+            raise ValueError
+        name = names.get(row[suite_col])
+        if name is None:
+            continue
+        digest = row[digest_col]
+        if name in fingerprints or not re.fullmatch(r"[a-f0-9]{64}|missing", digest):
+            raise ValueError
+        fingerprints[name] = digest
+    if set(fingerprints) != set(names.values()):
+        raise ValueError
+    return fingerprints, hashlib.sha256(data).hexdigest()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("directory", type=Path)
@@ -153,20 +185,31 @@ def main():
         f"{name}.json": _suite_report(args.directory, name, package)
         for name, package in scope.items()
     }
+    manifest_sha256 = None
     if not bound:
         reason = "coverage-run-binding-invalid"
     elif validation_exit is None:
         reason = "coverage-validation-exit-invalid"
     elif validation_exit:
         reason = "coverage-validation-failed"
-    elif reason is None and any(report["status"] != "pass" for report in reports.values()):
-        reason = "coverage-reports-failed"
+    elif reason is None:
+        try:
+            fingerprints, manifest_sha256 = _manifest_fingerprints(scope)
+        except (OSError, ValueError, csv.Error):
+            reason = "coverage-manifest-invalid"
+        else:
+            for name, report in reports.items():
+                digest = report["report_sha256"]
+                if digest is not None and digest != fingerprints[name]:
+                    report.update(status="fail", reason_code="coverage-report-digest-mismatch")
+            if any(report["status"] != "pass" for report in reports.values()):
+                reason = "coverage-reports-failed"
     passed = reason is None
     receipt = {
         "schema": "agent-os-ci-branch-coverage/1", "status": "pass" if passed else "fail",
         "head_sha": head if bound else None, "run_id": int(run) if bound else None,
         "attempt": int(attempt) if bound else None, "floor": FLOOR, "reports": reports,
-        "validation_exit": validation_exit,
+        "validation_exit": validation_exit, "manifest_sha256": manifest_sha256,
         "origin": "local" if os.environ.get("CI_COVERAGE_ORIGIN") == "local" else "hosted",
     }
     receipt["reason_code"] = reason

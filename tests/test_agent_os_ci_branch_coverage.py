@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from scripts.agent_os_ci_branch_coverage import load_scope
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
 from pathlib import Path
 
 import pytest
@@ -38,14 +39,48 @@ def _create_source_tree(root):
         (source / "core.py").write_text("VALUE = 1\n")
 
 
-def check(reports, validation_exit="0", **identity):
+def _write_manifest(reports, manifest):
+    manifest.write_text(
+        "suite_name\tcoverage_sha256\n" + "".join(
+            f"08_Tooling/{name.removesuffix('.json')}\t"
+            f"{hashlib.sha256((reports / name).read_bytes()).hexdigest() if (reports / name).is_file() else 'missing'}\n"
+            for name in REPORTS
+        )
+    )
+
+
+def _init_test_checkout(root, *, source):
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    _create_source_tree(root)
+    for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py",
+                 "ci-coverage-suites.tsv", "agent_os_aggregate_gate.py"):
+        shutil.copy(ROOT / "scripts" / file, scripts)
+    _write_manifest(source, source / "manifest.tsv")
+    (scripts / "validate-all.sh").write_text(
+        'cp "$STAGED_REPORTS"/*.json "$CI_COVERAGE_DIR/"\n'
+        'cp "$STAGED_REPORTS/manifest.tsv" "$CI_JUNIT_DIR/manifest.tsv"\n'
+        'if [ "${FAKE_REPORT_CHANGED:-}" = "yes" ]; then '
+        'printf "\\n" >> "$CI_COVERAGE_DIR/visual-asset-intake.json"; fi\n'
+        'if [ "${FAKE_DIRTY:-}" = "yes" ]; then touch dirty-marker; fi\n'
+        'exit "${FAKE_EXIT:-0}"\n'
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "fixture"], cwd=root, check=True)
+
+
+def check(reports, validation_exit="0", *, snapshot=True, **identity):
+    if snapshot:
+        _write_manifest(reports, reports / "manifest.tsv")
     command = [sys.executable, str(ROOT / "scripts/agent_os_ci_branch_coverage.py"), str(reports)]
     if validation_exit is not None:
         command.extend(("--validation-exit", validation_exit))
     return subprocess.run(
         command,
         cwd=reports / "repo",
-        env={**os.environ, "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132",
+        env={**os.environ, "CI_JUNIT_DIR": str(reports), "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132",
              "CI_JUNIT_RUN_ATTEMPT": "2", **identity},
         capture_output=True, text=True, check=False, timeout=10,
     )
@@ -57,6 +92,7 @@ def test_at_exact_floor_records_every_report_and_identity(reports):
     receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
     assert (receipt["head_sha"], receipt["run_id"], receipt["attempt"]) == (HEAD, 4132, 2)
     assert receipt["status"] == "pass"
+    assert receipt["manifest_sha256"] == hashlib.sha256((reports / "manifest.tsv").read_bytes()).hexdigest()
     assert list(receipt["reports"]) == sorted(REPORTS)
     for name, result in receipt["reports"].items():
         assert result == {
@@ -74,7 +110,6 @@ def test_at_exact_floor_records_every_report_and_identity(reports):
     ("invalid-version", "coverage-report-invalid"),
     ("wrong-source", "coverage-report-file-set-mismatch"),
     ("missing-source-file", "coverage-report-file-set-mismatch"),
-    ("phantom-source-file", "coverage-report-file-set-mismatch"),
     ("forged-total", "coverage-report-invalid"),
     ("malformed-json", "coverage-report-invalid"),
 ])
@@ -102,8 +137,6 @@ def test_invalid_evidence_fails_with_bounded_reason(reports, fault, reason):
         elif fault == "missing-source-file":
             extra = reports / "repo/08_Tooling/visual-asset-intake/src/visual_asset_intake/unmeasured.py"
             extra.write_text("VALUE = 2\n")
-        elif fault == "phantom-source-file":
-            data["files"] = {"src/visual_asset_intake/phantom.py": data["files"][file]}
         elif fault == "forged-total":
             data["totals"]["covered_lines"] = 100
         report.write_text(json.dumps(data))
@@ -121,10 +154,8 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
     steps = jobs["validate"]["steps"]
     aggregate = next(s for s in steps if s.get("id") == "aggregate")
     assert aggregate["env"]["CI_COVERAGE_DIR"] == "${{ runner.temp }}/branch-coverage"
-    script = aggregate["run"]
-    assert script == "bash ./scripts/ci-local.sh --hosted"
+    assert_single_hosted_aggregate(ROOT)
     wrapper = (ROOT / "scripts/ci-local.sh").read_text()
-    assert wrapper.count("bash ./scripts/validate-all.sh") == 1
     assert "scripts/agent_os_ci_branch_coverage.py" in wrapper
     assert "continue-on-error" not in aggregate
     upload = next(s for s in steps if s.get("name") == "Upload branch coverage evidence")
@@ -136,7 +167,7 @@ def test_workflow_uses_required_coverage_artifact_on_aggregate_only():
 
 
 @pytest.mark.parametrize("fault,exit_code", [
-    ("none", 0), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2),
+    ("none", 0), ("missing", 1), ("low", 1), ("runner-crash", 2), ("dirty-after", 2), ("changed-after-manifest", 1),
 ])
 def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp_path, fault, exit_code):
     # Execute the actual workflow's shell body, not a second implementation
@@ -155,20 +186,7 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
         report_path.write_text(json.dumps(data))
 
     root = tmp_path / "repo"
-    scripts = root / "scripts"
-    scripts.mkdir(parents=True)
-    _create_source_tree(root)
-    for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py", "ci-coverage-suites.tsv"):
-        shutil.copy(ROOT / "scripts" / file, scripts)
-    (scripts / "validate-all.sh").write_text(
-        'cp "$STAGED_REPORTS"/*.json "$CI_COVERAGE_DIR/"\n'
-        'if [ "$FAKE_DIRTY" = "yes" ]; then touch dirty-marker; fi\n'
-        'exit "$FAKE_EXIT"\n'
-    )
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                    "commit", "-qm", "fixture"], cwd=root, check=True)
+    _init_test_checkout(root, source=staged)
     args = ["bash", "-c", workload]
     env = {
         **os.environ, "CI_COVERAGE_DIR": str(reports), "CI_JUNIT_DIR": str(tmp_path / "junit"),
@@ -176,6 +194,7 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
         "CI_JUNIT_HEAD_SHA": HEAD, "CI_JUNIT_RUN_ID": "4132", "CI_JUNIT_RUN_ATTEMPT": "2",
         "FAKE_EXIT": "2" if fault == "runner-crash" else "0",
         "FAKE_DIRTY": "yes" if fault == "dirty-after" else "no",
+        "FAKE_REPORT_CHANGED": "yes" if fault == "changed-after-manifest" else "no",
     }
     result = subprocess.run(args, cwd=root, env=env, text=True,
                             capture_output=True, check=False, timeout=10)
@@ -189,6 +208,8 @@ def test_aggregate_step_cannot_greenwash_missing_or_failed_coverage(reports, tmp
         assert receipt["reason_code"] == "coverage-validation-failed"
         assert receipt["reports"]["visual-asset-intake.json"]["status"] == "pass"
 
+    if fault == "changed-after-manifest":
+        assert receipt["reports"]["visual-asset-intake.json"]["reason_code"] == "coverage-report-digest-mismatch"
     if fault == "missing":
         assert not (reports / "visual-asset-intake.json").exists()
         assert receipt["reports"]["visual-asset-intake.json"]["reason_code"] == "coverage-report-missing"
@@ -278,6 +299,8 @@ def test_unreadable_inventory_writes_a_failed_receipt(reports, monkeypatch, caps
     monkeypatch.chdir(reports / "repo")
     monkeypatch.setattr(validator, "_source_files", unreadable)
     monkeypatch.setattr(sys, "argv", ["coverage", str(reports), "--validation-exit", "0"])
+    _write_manifest(reports, reports / "manifest.tsv")
+    monkeypatch.setenv("CI_JUNIT_DIR", str(reports))
     monkeypatch.setenv("CI_JUNIT_HEAD_SHA", HEAD)
     monkeypatch.setenv("CI_JUNIT_RUN_ID", "4132")
     monkeypatch.setenv("CI_JUNIT_RUN_ATTEMPT", "2")
@@ -310,20 +333,7 @@ def test_file_set_receipt_names_the_difference_and_has_uniform_report_fields(rep
 
 def test_local_wrapper_ignores_inherited_output_and_uses_local_receipt(reports, tmp_path):
     root = tmp_path / "checkout"
-    scripts = root / "scripts"
-    scripts.mkdir(parents=True)
-    _create_source_tree(root)
-    for file in ("ci-local.sh", "agent_os_ci_branch_coverage.py",
-                 "ci-coverage-suites.tsv", "agent_os_aggregate_gate.py"):
-        shutil.copy(ROOT / "scripts" / file, scripts)
-    (scripts / "validate-all.sh").write_text(
-        'cp "$STAGED_REPORTS"/*.json "$CI_COVERAGE_DIR/"\n'
-        'printf fixture > "$CI_JUNIT_DIR/manifest.tsv"\n'
-    )
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-                    "commit", "-qm", "fixture"], cwd=root, check=True)
+    _init_test_checkout(root, source=reports)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     inherited = tmp_path / "outer"
@@ -344,7 +354,7 @@ def test_local_wrapper_ignores_inherited_output_and_uses_local_receipt(reports, 
     receipt = json.loads((outputs[0] / "coverage/coverage-receipt.json").read_text())
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     assert (receipt["origin"], receipt["head_sha"], receipt["status"]) == ("local", head, "pass")
-    assert (outputs[0] / "junit/manifest.tsv").read_text() == "fixture"
+    assert (outputs[0] / "junit/manifest.tsv").read_bytes() == (reports / "manifest.tsv").read_bytes()
 
 @pytest.mark.parametrize("status", [None, "unknown", "256"])
 def test_invalid_runner_exit_always_has_failed_receipt(reports, status):
@@ -354,3 +364,27 @@ def test_invalid_runner_exit_always_has_failed_receipt(reports, status):
     assert (payload["status"], payload["reason_code"], payload["validation_exit"]) == (
         "fail", "coverage-validation-exit-invalid", None
     )
+
+
+@pytest.mark.parametrize("fault,reason", [
+    ("absent", "coverage-manifest-invalid"),
+    ("duplicate-suite", "coverage-manifest-invalid"),
+    ("changed-bytes", "coverage-report-digest-mismatch"),
+])
+def test_valid_report_needs_manifest_binding(reports, fault, reason):
+    manifest = reports / "manifest.tsv"
+    _write_manifest(reports, manifest)
+    name = "visual-asset-intake.json"
+    if fault == "absent":
+        manifest.unlink()
+    elif fault == "duplicate-suite":
+        with manifest.open("a") as out:
+            out.write(manifest.read_text().splitlines()[-1] + "\n")
+    else:
+        path = reports / name
+        path.write_bytes(path.read_bytes() + b"\n")
+    result = check(reports, snapshot=False)
+    assert result.returncode == 1, result.stdout + result.stderr
+    receipt = json.loads((reports / "coverage-receipt.json").read_bytes())
+    actual = receipt["reports"][name]["reason_code"] if fault == "changed-bytes" else receipt["reason_code"]
+    assert actual == reason

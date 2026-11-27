@@ -6,6 +6,8 @@ They do not grant workflow, merge, or lifecycle authority.
 
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 WORKFLOW = (
     Path(__file__).resolve().parents[1]
     / ".github/workflows/agent-os-validation.yml"
@@ -41,7 +43,7 @@ def test_recovery_binds_current_main_and_exact_candidate_head():
 
 def test_existing_validation_authority_is_preserved():
     content = workflow()
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(WORKFLOW.parents[2])
     assert "agent-os/authoritative-aggregate" in content
     assert "Run aggregate validation" in content
     assert "statuses: write" in content
@@ -69,7 +71,7 @@ def test_recovery_does_not_implicitly_allow_non_draft_final_candidate():
 
 def test_recovery_keeps_existing_single_aggregate_executor():
     content = workflow()
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(WORKFLOW.parents[2])
     assert 'mode=ready-recovery' in content
     assert 'mode=final-candidate' in content
 

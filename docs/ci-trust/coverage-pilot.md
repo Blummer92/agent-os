@@ -16,7 +16,11 @@ Actions calls the same wrapper with `--hosted`; it keeps the existing terminal
 publisher. Both paths execute the aggregate once, require exact source paths
 and valid reports, and retain the original validation failure. Only pilot
 manifests contain the extra command and hash fields. Changing coverage scope
-uses `scripts/ci-coverage-suites.tsv`. The 80% floor is on the combined line
+uses `scripts/ci-coverage-suites.tsv`. The coverage checker reads the runner’s
+JUnit manifest and compares each report with its recorded SHA-256. A missing
+or invalid manifest or a changed report fails the coverage check. The coverage
+receipt records the manifest digest so a reviewer can match it across the
+JUnit and coverage archives for the same run and attempt. The 80% floor is on the combined line
 and branch opportunities, not a repo-wide coverage claim.
 
 The checkout cleanliness checks and post-suite fingerprints detect workspace

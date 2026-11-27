@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from tests.ci_aggregate_contract import assert_single_hosted_aggregate
+
 import pytest
 import yaml
 
@@ -43,7 +45,7 @@ def test_draft_pull_request_still_defers_automatic_aggregate_cost() -> None:
 
 def test_aggregate_command_remains_the_authoritative_gate_command() -> None:
     content = _workflow()
-    assert content.count("./scripts/validate-all.sh") == 1
+    assert_single_hosted_aggregate(ROOT)
     assert "name: Run aggregate validation" in content
 
 
@@ -77,7 +79,7 @@ def test_ready_always_enters_fresh_authoritative_aggregate() -> None:
         "${{ steps.authority.outputs.authoritative == 'true' }}"
     )
     assert "if" not in steps["Run aggregate validation"]
-    assert steps["Run aggregate validation"]["run"] == "bash ./scripts/validate-all.sh"
+    assert_single_hosted_aggregate(ROOT)
     terminal = yaml.safe_load(content)["jobs"]["aggregate-gate"]["steps"]
     publish = next(step for step in terminal if step["name"] == "Publish terminal authoritative aggregate status")
     assert "REUSED" not in publish["env"]

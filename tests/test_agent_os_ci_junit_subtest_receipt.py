@@ -1071,8 +1071,9 @@ def test_validate_all_receipt_function_writes_bound_receipt(tmp_path: Path) -> N
     (junit_dir / "root.xml").write_bytes(xml)
     output_file = tmp_path / "pytest-output.txt"
     output_file.write_text(output, encoding="utf-8")
+    # The extracted harness bypasses the runner's capture-and-unset step.
     script_text = harness + (
-        f'CI_JUNIT_DIR="{junit_dir}" CI_JUNIT_RUN_ID="{RUN_ID}" CI_JUNIT_RUN_ATTEMPT="1" '
+        f'junit_dir="{junit_dir}" CI_JUNIT_RUN_ID="{RUN_ID}" CI_JUNIT_RUN_ATTEMPT="1" '
         f'CI_JUNIT_HEAD_SHA="{SOURCE_HEAD}" PYTHON_BIN="{sys.executable}" '
         f'write_subtest_receipt root "{output_file}"\n'
     )

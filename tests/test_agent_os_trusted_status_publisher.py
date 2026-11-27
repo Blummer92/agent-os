@@ -1,7 +1,6 @@
 """No-network adversarial controls for the isolated trusted status decision."""
 import importlib.util
 import json
-import re
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -129,23 +128,29 @@ def test_malformed_job_entries_fail_closed_instead_of_raising():
         assert pub.evaluate(source(), replaced, set())["state"] == "error", bad_job
 
 
-def test_reuse_steps_cover_every_named_aggregate_workflow_step():
+def test_live_aggregate_step_changes_are_explicitly_separate_from_legacy_reuse():
+    import yaml
+
     workflow = (ROOT / ".github/workflows/agent-os-validation.yml").read_text()
-    aggregate = workflow.split("\n  validate:\n", 1)[1]
-    aggregate = re.split(r"(?m)^  [A-Za-z0-9_-]+:\s*$", aggregate, maxsplit=1)[0]
-    named_steps = {
-        line.removeprefix("      - name: ").strip()
-        for line in aggregate.splitlines()
-        if line.startswith("      - name: ")
-    }
+    steps = yaml.safe_load(workflow)["jobs"]["validate"]["steps"]
+    names = [step["name"] for step in steps if "name" in step]
+    assert len(names) == len(set(names))
     synthetic_steps = {"Set up job", "Complete job"}
-    # The previous Ready-reuse step was deliberately removed by #4047.
-    # Its exact historical signature remains fail-closed (pending, never green)
-    # for older provider evidence, but it must not reappear in the live workflow.
     legacy_reuse = "Reuse valid exact-head aggregate evidence"
-    assert legacy_reuse not in named_steps
+    coverage_upload = "Upload branch coverage evidence"
+    # Exact historical reuse remains pending only; don't teach it a modern step.
+    assert legacy_reuse not in names
     assert pub.REUSE_STEP_CONCLUSIONS[legacy_reuse] == "success"
-    assert set(pub.REUSE_STEP_CONCLUSIONS) - {legacy_reuse} == named_steps | synthetic_steps
+    assert set(names) | synthetic_steps == (
+        (set(pub.REUSE_STEP_CONCLUSIONS) - {legacy_reuse}) | {coverage_upload}
+    )
+    upload = next(step for step in steps if step.get("name") == coverage_upload)
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload.get("continue-on-error", False) is False
+    copy = _reuse_jobs()
+    aggregate = next(job for job in copy if job["name"] == "Run aggregate validation")
+    aggregate["steps"].append({"name": coverage_upload, "conclusion": "skipped"})
+    assert pub.evaluate(source(), copy, set())["state"] == "error"
 
 
 def test_ready_reuse_cannot_hide_failed_source_or_required_jobs():
@@ -492,3 +497,18 @@ def test_ckr6_gate_import_closure_is_authority_covered(tmp_path):
     assert len(closure) >= 100, len(closure)
     uncovered = [p for p in closure if not pub.touches_authority({p})]
     assert uncovered == [], uncovered
+
+
+def test_each_coverage_authority_input_independently_prevents_certification():
+    for path in (
+        "scripts/ci-local.sh",
+        "scripts/ci-coverage-suites.tsv",
+        "scripts/ci-branch-coverage.ini",
+        "scripts/agent_os_ci_branch_coverage.py",
+    ):
+        changed = {path}
+        result = pub.evaluate(source(), jobs(), changed)
+        assert result["state"] == "pending", path
+        assert "not certified" in result["description"], path
+        assert pub.evaluate(source(conclusion="failure"), jobs(), changed)["state"] == "failure", path
+        assert pub.evaluate(source(), jobs()[1:], changed)["state"] == "error", path
