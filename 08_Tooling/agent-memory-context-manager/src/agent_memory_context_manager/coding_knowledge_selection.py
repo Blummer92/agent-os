@@ -110,6 +110,12 @@ class CodingKnowledgeCandidate:
     canonical_github_refs: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
     authority_conflict: bool = False
+    # Source-owned, reviewed applicability cases parsed from the lesson's
+    # "Supporting Cases" record (see lesson_activation_bridge). Empty for
+    # older lessons without structured applicability: the evaluator abstains
+    # and the existing matcher decides exactly as before. Cases are
+    # lesson-owned text, never matcher configuration keyed to an ID.
+    applicability_cases: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -131,6 +137,7 @@ class CodingKnowledgeCandidate:
             _validate_text_tuple(
                 getattr(self, name), name, max_chars=MAX_GUIDANCE_TEXT_CHARS
             )
+        _validate_text_tuple(self.applicability_cases, "applicability_cases")
         if type(self.currentness) is not KnowledgeCurrentness:
             raise TypeError("currentness must be a KnowledgeCurrentness value")
         if type(self.authority_conflict) is not bool:
@@ -162,6 +169,7 @@ class SelectedKnowledge:
             "qualification_ref": candidate.qualification_ref,
             "canonical_github_refs": list(candidate.canonical_github_refs),
             "evidence_refs": list(candidate.evidence_refs),
+            "applicability_cases": list(candidate.applicability_cases),
             "reason_codes": list(self.reason_codes),
         }
 
@@ -762,10 +770,298 @@ def _executed_revision_evidence_match(candidate: CodingKnowledgeCandidate) -> bo
     )
 
 
+# ---------------------------------------------------------------------------
+# Generic applicability evidence (CKR2 relevance fix).
+#
+# One explainable mechanism, no per-lesson configuration: a lesson that
+# carries source-owned, reviewed applicability cases (its "Supporting
+# Cases" record) matches only when every positive case is evidenced by the
+# request's finite signals, no exclusion case is evidenced, and no later
+# guidance contradicts a satisfied positive case. Exclusions and
+# contradictions win over every positive signal, including the narrow
+# reviewed branches below. A lesson without cases abstains here and keeps
+# exactly its previous behavior; a lesson with cases whose positives are
+# not evidenced also blocks the loose generic fallback, because its own
+# applicability record says the task does not exhibit what must be true.
+#
+# A positive condition needs whole-word overlap within one explicit task
+# capability hint; do not assemble a match from unrelated hints, filenames,
+# or evidence URLs. Exclusions may still use the broader non-path context.
+# Caller prose in task_reference is never read, lesson IDs/titles/URLs
+# never prove relevance, and there is no stemming, synonym, or fuzzy
+# matching. A target-path case must name the same repository-relative file
+# against target_path_hints. A path is a scope constraint, not positive task
+# evidence. The file comparison is exact, not substring containment. This is
+# a lexical relevance hypothesis, like
+# the other text matches in this module: it does not attest to lesson
+# applicability in the lesson_applicability.py verified-observation sense,
+# currentness, provenance, or write authority, all of which still run
+# unchanged in the selector. The lesson_applicability.py contract is
+# deliberately NOT activated here: its mechanism vocabulary, registry
+# governance, and trusted-observation acquisition remain owner decisions
+# pending, and its production registry is empty.
+# ---------------------------------------------------------------------------
+
+_APPLICABILITY_REASON = "applicability-evidence-text-match"
+_APPLICABILITY_MAX_CASES = 8
+_APPLICABILITY_MIN_SHARED_TOKENS = 2
+_APPLICABILITY_EXCLUSION = re.compile(
+    r"^(?:(?:do|must|should|shall) not|don't|never|"
+    r"not applicable|does not apply|excludes)\b"
+)
+_APPLICABILITY_APOSTROPHES = str.maketrans({char: "'" for char in "‘’ʼ"})
+# Short domain words are useful for a veto but don't expand positive matches.
+_APPLICABILITY_SHORT_EXCLUSION_TOKENS = frozenset({"api", "ci", "pdf", "pr", "yml"})
+# Structural scaffolding, not topical evidence: negation and application
+# verbs that appear in exclusion phrasing and in guidance generally.
+_APPLICABILITY_SCAFFOLD = frozenset({
+    "do", "does", "not", "never", "apply", "applies", "use", "used", "using",
+    "the", "and", "also", "that", "with", "from", "into", "when", "this",
+    "for", "are", "its", "per", "via", "upon", "each", "such", "than",
+    "then", "after", "before", "should", "must", "will", "would", "can",
+})
+_APPLICABILITY_NEGATION = re.compile(
+    r"\b(?:never|do not|must not|should not|don['\u2019\u02bc]t|avoid|skip|reject|not|no)\b"
+)
+# Recognize file-shaped cases separately from validating them. Unsupported
+# extensions, query suffixes, and invalid segments must not become topical text.
+_APPLICABILITY_FILE_SHAPE = re.compile(r"(?:\S*[\\/]\S*|\S*\.[a-z0-9]\S*)")
+# A leading path segment keeps malformed paths with spaces out of prose
+# scoring, without classifying prose that merely mentions a filename.
+_APPLICABILITY_SPACED_FILE_SHAPE = re.compile(
+    r"(?:[a-z0-9_.-]+|[a-z]:)?[\\/][^\r\n]*\.[a-z0-9]+(?:[?#][^\r\n]*|\.*)"
+)
+_APPLICABILITY_PATH = re.compile(
+    r"(?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:yml|yaml|py|md|json|toml|txt|sh|js|jsx|ts|tsx)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicabilityEvaluation:
+    """Per-stage trace of one applicability-evidence evaluation.
+
+    ``matched`` is a relevance hypothesis only; it selects nothing and
+    grants no authority. Case references are indexes into
+    ``candidate.applicability_cases`` so the trace stays bounded without
+    truncating lesson text. ``evidence`` maps each satisfied/exclusion
+    case index to the shared distinctive tokens that evidenced it.
+    """
+
+    matched: bool
+    reason_codes: tuple[str, ...]
+    satisfied: tuple[int, ...]
+    unsatisfied: tuple[int, ...]
+    exclusions_fired: tuple[int, ...]
+    contradicted: tuple[int, ...]
+    evidence: tuple[tuple[int, tuple[str, ...]], ...]
+    explanation: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "matched": self.matched,
+            "reason_codes": list(self.reason_codes),
+            "satisfied": list(self.satisfied),
+            "unsatisfied": list(self.unsatisfied),
+            "exclusions_fired": list(self.exclusions_fired),
+            "contradicted": list(self.contradicted),
+            "evidence": {str(index): list(tokens) for index, tokens in self.evidence},
+            "explanation": self.explanation,
+        }
+
+
+def _applicability_tokens(text: str, *, exclusion: bool = False) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in _CONTEXT_TOKEN.findall(text.casefold())
+        if token not in _APPLICABILITY_SCAFFOLD
+        and (
+            len(token) >= _MIN_CONTEXT_TOKEN_CHARS
+            or (exclusion and token in _APPLICABILITY_SHORT_EXCLUSION_TOKENS)
+        )
+    )
+
+
+def _strongest_case_evidence(
+    case_tokens: frozenset[str], task_signals: tuple[frozenset[str], ...],
+) -> tuple[str, ...]:
+    # Resolve equally strong signals deterministically without merging them.
+    return max(
+        (tuple(sorted(case_tokens & signal)) for signal in task_signals),
+        key=lambda match: (len(match), match),
+        default=(),
+    )
+
+
+def _applicability_case_kind(case: str) -> str:
+    reviewed = _reviewed_text(case).translate(_APPLICABILITY_APOSTROPHES)
+    if _APPLICABILITY_EXCLUSION.match(reviewed):
+        return "exclusion"
+    # Path-shaped but malformed cases must not become topical evidence.
+    path_text = _case_path_text(case).casefold()
+    if (
+        _APPLICABILITY_FILE_SHAPE.fullmatch(path_text)
+        or _APPLICABILITY_SPACED_FILE_SHAPE.fullmatch(path_text)
+    ):
+        return "path"
+    return "positive"
+
+
+def _case_path_text(case: str) -> str:
+    # One terminal prose period is optional; never strip the leading ./.
+    return case.strip().removesuffix(".")
+
+
+def _path_case_satisfied(case: str, request: CodingKnowledgeRequest) -> bool:
+    wanted = _case_path_text(case).removeprefix("./")
+    if not _APPLICABILITY_PATH.fullmatch(wanted.casefold()):
+        return False
+    if any(part in {"", ".", ".."} for part in wanted.split("/")):
+        return False
+    return any(
+        hint.strip().removeprefix("./") == wanted
+        for hint in request.target_path_hints
+    )
+
+
+def evaluate_applicability(
+    request: CodingKnowledgeRequest,
+    candidate: CodingKnowledgeCandidate,
+) -> ApplicabilityEvaluation:
+    """Evaluate source-owned applicability cases against finite task signals.
+
+    Pure and deterministic. Only verified-shaped inputs are accepted;
+    malformed caller data raises, as elsewhere in this module.
+    """
+    if type(request) is not CodingKnowledgeRequest:
+        raise TypeError("request must be a CodingKnowledgeRequest")
+    if type(candidate) is not CodingKnowledgeCandidate:
+        raise TypeError("candidate must be a CodingKnowledgeCandidate")
+    cases = candidate.applicability_cases
+
+    def _result(matched, reasons, satisfied, unsatisfied, fired, contradicted, evidence):
+        satisfied_text = ",".join(map(str, satisfied)) or "-"
+        unsatisfied_text = ",".join(map(str, unsatisfied)) or "-"
+        fired_text = ",".join(map(str, fired)) or "-"
+        contradicted_text = ",".join(map(str, contradicted)) or "-"
+        return ApplicabilityEvaluation(
+            matched=matched,
+            reason_codes=tuple(reasons),
+            satisfied=tuple(satisfied),
+            unsatisfied=tuple(unsatisfied),
+            exclusions_fired=tuple(fired),
+            contradicted=tuple(contradicted),
+            evidence=tuple(evidence),
+            explanation=(
+                f"applicability: satisfied=[{satisfied_text}] "
+                f"unsatisfied=[{unsatisfied_text}] exclusions=[{fired_text}] "
+                f"contradicted=[{contradicted_text}]"
+            ),
+        )
+
+    if not cases:
+        return _result(False, ("no-structured-applicability",), (), (), (), (), ())
+    if len(cases) > _APPLICABILITY_MAX_CASES:
+        return _result(False, ("oversized-applicability-record",), (), (), (), (), ())
+
+    task_signals = tuple(_applicability_tokens(hint) for hint in request.capability_keywords)
+    # As for positives, only one coherent task hint may evidence an exclusion.
+    exclusion_signals = tuple(
+        _applicability_tokens(hint, exclusion=True) for hint in request.capability_keywords
+    )
+    kinds = [_applicability_case_kind(case) for case in cases]
+    satisfied: list[int] = []
+    unsatisfied: list[int] = []
+    fired: list[int] = []
+    evidence: list[tuple[int, tuple[str, ...]]] = []
+    for index, case in enumerate(cases):
+        kind = kinds[index]
+        if kind == "exclusion":
+            shared = _strongest_case_evidence(
+                _applicability_tokens(case, exclusion=True), exclusion_signals
+            )
+            if len(shared) >= _APPLICABILITY_MIN_SHARED_TOKENS:
+                fired.append(index)
+                evidence.append((index, shared))
+            continue
+        if kind == "path":
+            if _path_case_satisfied(case, request):
+                satisfied.append(index)
+                evidence.append((index, (case.strip(),)))
+            else:
+                unsatisfied.append(index)
+            continue
+        shared = _strongest_case_evidence(_applicability_tokens(case), task_signals)
+        if len(shared) >= _APPLICABILITY_MIN_SHARED_TOKENS:
+            satisfied.append(index)
+            evidence.append((index, shared))
+        else:
+            unsatisfied.append(index)
+
+    if fired:
+        return _result(
+            False, ("applicability-exclusion-fired",), satisfied, unsatisfied,
+            fired, (), evidence,
+        )
+    if "positive" not in kinds:
+        return _result(
+            False, ("applicability-positive-case-missing",), satisfied,
+            unsatisfied, (), (), evidence,
+        )
+    if unsatisfied:
+        return _result(
+            False, ("applicability-conditions-unsatisfied",), satisfied,
+            unsatisfied, (), (), evidence,
+        )
+
+    # Contradictory guidance wins, but only on strong evidence: the primary
+    # guidance, a guardrail, or an avoid_when entry that restates a satisfied
+    # positive case nearly in full and negates it. Mere shared tokens
+    # plus a negation do not contradict: a guardrail like "never retry
+    # without a budget cap" constrains the same action the case requires
+    # and must not veto it. The bar is therefore a near-verbatim
+    # restatement (all but at most one of the case's distinctive tokens,
+    # at least three shared), not a two-token overlap.
+    contradicted: list[int] = []
+    contradiction_sources = (*candidate.use_when, *candidate.avoid_when)
+    for index in satisfied:
+        if kinds[index] != "positive":
+            continue
+        case_tokens = _applicability_tokens(cases[index])
+        for source in contradiction_sources:
+            if not _APPLICABILITY_NEGATION.search(_reviewed_text(source)):
+                continue
+            shared = _applicability_tokens(source) & case_tokens
+            if len(shared) >= max(3, len(case_tokens) - 1):
+                contradicted.append(index)
+                break
+    if contradicted:
+        return _result(
+            False, ("applicability-contradicted-guidance",), satisfied,
+            unsatisfied, (), contradicted, evidence,
+        )
+    return _result(True, (_APPLICABILITY_REASON,), satisfied, (), (), (), evidence)
+
+
 def _match_candidate(
     request: CodingKnowledgeRequest,
     candidate: CodingKnowledgeCandidate,
 ) -> tuple[int, tuple[str, ...]]:
+    # Structured applicability is authoritative for its own lesson: a fired
+    # exclusion or contradicted guidance returns no match, and unsatisfied
+    # positives block every later path, including the generic fallback.
+    # Satisfied positives are remembered and applied only after the narrow
+    # reviewed branches below have had their chance to decide.
+    applicability = evaluate_applicability(request, candidate)
+    has_applicability = bool(candidate.applicability_cases)
+    if has_applicability and not applicability.matched:
+        return 0, applicability.reason_codes
+    applicability_matched = has_applicability and applicability.matched
+
+    def _no_match() -> tuple[int, tuple[str, ...]]:
+        if applicability_matched:
+            return 2, (_APPLICABILITY_REASON,)
+        return 0, ()
+
     library_hints = {_norm(value) for value in request.library_hints}
     candidate_library = _norm(candidate.library_name) if candidate.library_name else ""
     candidate_name = _norm(candidate.name)
@@ -790,7 +1086,7 @@ def _match_candidate(
         # A claimed rule cannot win on metadata, a caller-supplied hint, or a path alone.
         if (exact_revision_request or (ecosystem_match and capability_overlap)) and _executed_revision_evidence_match(candidate):
             return 2, (_EXECUTED_REVISION_REASON,)
-        return 0, ()
+        return _no_match()
 
     if exact_library:
         reasons = ["exact-library-match"]
@@ -936,7 +1232,13 @@ def _match_candidate(
         return 2, (_NOTION_EXECUTOR_REASON,)
 
     if exact_revision_request and (not ecosystem_match or _norm(candidate.ecosystem) == "agent-os"):
-        return 0, ()
+        return _no_match()
+
+    # Satisfied structured applicability outranks the loose generic
+    # fallback: the lesson's own record evidenced the task, so the result
+    # must say so instead of reporting a metadata overlap.
+    if applicability_matched:
+        return 2, (_APPLICABILITY_REASON,)
 
     if ecosystem_match and capability_overlap:
         return 2, ("ecosystem-capability-match",)
