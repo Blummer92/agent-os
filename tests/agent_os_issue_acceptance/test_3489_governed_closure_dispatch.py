@@ -858,3 +858,100 @@ def test_post_merge_failed_qa_blocks_without_write():
     assert outcomes[0]["status"] == "blocked"
     assert "closure.acceptance-not-passed" in outcomes[0]["reason_codes"]
     assert fake.patch_calls == []
+
+
+def _run_head_binding_scenario(scenario, request_overrides=None):
+    from scripts.agent_os_issue_acceptance.github_closure_dispatch import run_post_merge_closure_dispatch
+
+    fake, observation, transport = post_merge_fake()
+    issue_path = f"/repos/{REPO}/issues/200"
+    pr_path = f"/repos/{REPO}/pulls/500"
+    seen = []
+    pr_reads = 0
+    if scenario == "stale-issue":
+        fake.drift_on_first_read.add(200)
+
+    def observed_transport(method, path, payload):
+        nonlocal pr_reads
+        seen.append((method, path))
+        status, result = transport(method, path, payload)
+        if (method, path) == ("GET", pr_path):
+            pr_reads += 1
+            if scenario == "missing-head" and pr_reads == 1:
+                result = {**result, "head": {}}
+            if scenario == "wrong-head" and pr_reads == 1:
+                result = {**result, "head": {"sha": "f" * 40}}
+            if scenario == "stale-head" and pr_reads == 2:
+                result = {**result, "head": {"sha": "f" * 40}}
+            if scenario == "stale-linkage" and pr_reads == 2:
+                result = {**result, "body": "Part of #201"}
+            if scenario == "pr-read-unavailable" and pr_reads == 2:
+                return 503, {}
+        return status, result
+
+    data = {"acceptance_issue_number": 200,
+            "acceptance_validated_head_sha": "c" * 40, **(request_overrides or {})}
+    return fake, observation, observed_transport, request_obj(200, **data), seen, run_post_merge_closure_dispatch
+
+
+def test_post_merge_head_bound_acceptance_reverified_before_existing_fake_writer():
+    fake, observation, transport, request, seen, run = _run_head_binding_scenario("stable")
+    result, = run(observation, (request,), transport)
+    issue_path = f"/repos/{REPO}/issues/200"
+    pr_path = f"/repos/{REPO}/pulls/500"
+    assert result["status"] == "closed-verified"
+    assert result["readback_verified"] is True
+    assert result["merge_observation_id"] == observation.observation_id
+    assert result["receipt_id"]
+    assert seen[:5] == [("GET", pr_path), ("GET", issue_path), ("GET", pr_path),
+                        ("GET", issue_path), ("PATCH", issue_path)]
+    assert seen.count(("GET", pr_path)) == 2
+    assert fake.patch_calls == [("PATCH", issue_path, {"state": "closed", "state_reason": "completed"})]
+
+
+@pytest.mark.parametrize("scenario", ["missing-head", "wrong-head"])
+def test_post_merge_head_binding_requires_initial_canonical_observed_head(scenario):
+    fake, observation, transport, request, seen, run = _run_head_binding_scenario(scenario)
+    with pytest.raises(ValueError, match="^merge-observation.pr-identity-mismatch$"):
+        run(observation, (request,), transport)
+    assert seen == [("GET", f"/repos/{REPO}/pulls/500")]
+    assert fake.patch_calls == fake.delete_calls == fake.post_calls == []
+
+
+@pytest.mark.parametrize(("scenario", "overrides", "expected"), [
+    ("stale-head", {}, "closure.reacquire-failed"),
+    ("stale-linkage", {}, "closure.reacquire-failed"),
+    ("pr-read-unavailable", {}, "closure.reacquire-failed"),
+    ("stale-issue", {}, "closure.verification-failed-stale-or-drifted"),
+    ("wrong-qa-head", {"acceptance_validated_head_sha": "f" * 40}, "closure.acceptance-head-mismatch"),
+    ("wrong-qa-issue", {"acceptance_issue_number": 201}, "closure.acceptance-issue-mismatch"),
+    ("unrecorded-decision", {"decision_recorded": False}, "closure.authorization-not-recorded"),
+    ("failed-qa", {"verdict": "fail"}, "closure.acceptance-not-passed"),
+])
+def test_post_merge_head_binding_does_not_expand_admission(scenario, overrides, expected):
+    fake, observation, transport, request, seen, run = _run_head_binding_scenario(scenario, overrides)
+    result, = run(observation, (request,), transport)
+    assert result["status"] == "blocked"
+    assert result["readback_verified"] is False
+    assert expected in result["reason_codes"]
+    assert all(method == "GET" for method, _ in seen)
+    assert fake.patch_calls == fake.delete_calls == fake.post_calls == []
+
+
+def test_generic_issue_only_reader_does_not_invent_a_head_for_head_bound_qa():
+    fake, _, transport, request, seen, _ = _run_head_binding_scenario("ordinary-issue-only")
+    result, = run_closure_dispatch((request,), transport)
+    assert result["status"] == "blocked"
+    assert result["reason_codes"] == ["closure.acceptance-head-unverifiable"]
+    assert seen == [("GET", f"/repos/{REPO}/issues/200")]
+    assert fake.patch_calls == fake.delete_calls == fake.post_calls == []
+
+
+def test_post_merge_unbound_legacy_qa_keeps_single_pr_read():
+    fake, observation, transport, request, seen, run = _run_head_binding_scenario(
+        "legacy-unbound", {"acceptance_validated_head_sha": None}
+    )
+    result, = run(observation, (request,), transport)
+    assert result["status"] == "closed-verified"
+    assert seen.count(("GET", f"/repos/{REPO}/pulls/500")) == 1
+    assert len(fake.patch_calls) == 1

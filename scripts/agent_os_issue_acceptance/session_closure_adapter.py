@@ -57,7 +57,7 @@ and no mutation. Full-labels replacement is NOT in the production path
 at all: it is neither silently substituted nor claimed proven. A failed
 reconciliation never reverses a verified closure (no reopen operation
 exists in the transport), at most one deterministic evidence comment is
-ever posted (presence-checked by receipt id), and uncertain writes are
+ever posted (presence-checked by exact canonical comment body), and uncertain writes are
 never blind-retried: a fresh readback decides, and an unavailable
 readback stops the run as unresolved.
 
@@ -79,6 +79,7 @@ from .closure_admission_actions import (
     ClosureAcceptanceEvidence,
     IssueClosureRequest,
     evaluate_issue_closure,
+    render_evidence_comment,
     verify_closure_admission_receipt,
 )
 from .lifecycle_mutation_authorization import (
@@ -289,31 +290,6 @@ def verify_qa_record(
     return True, ()
 
 
-def render_evidence_comment(
-    *,
-    repository: str,
-    issue_number: int,
-    evidence_id: str,
-    evaluator_id: str,
-    receipt_id: str | None,
-) -> str:
-    """Deterministic evidence comment body (dispatcher format, by contract).
-
-    Verified facts only; no closing keyword, no other issue reference.
-    Must stay byte-identical to the dispatcher's completion comment for
-    the same inputs; the test suite asserts that equivalence.
-    """
-    return (
-        "Governed closure verified.\n"
-        f"Repository: {repository}\n"
-        f"Issue: {issue_number}\n"
-        "State: closed, reason completed.\n"
-        f"Acceptance evidence: {evidence_id} (evaluator {evaluator_id}).\n"
-        f"Admission receipt: {receipt_id or 'unavailable'}.\n"
-        "Verified by canonical post-write readback."
-    )
-
-
 def _trigger_hash(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
@@ -461,6 +437,13 @@ class FreshRead:
     state_reason: str | None
 
 
+def _matches_target(plan: SessionClosurePlan, fresh: FreshRead) -> bool:
+    return (
+        fresh.snapshot.repository == plan.repository
+        and fresh.snapshot.issue_number == plan.issue_number
+    )
+
+
 def verify_prewrite(
     plan: SessionClosurePlan, fresh: FreshRead
 ) -> tuple[str, tuple[str, ...]]:
@@ -470,7 +453,7 @@ def verify_prewrite(
     delivery path; see the executor), "refused" (zero mutations).
     """
     snap = fresh.snapshot
-    if snap.repository != plan.repository or snap.issue_number != plan.issue_number:
+    if not _matches_target(plan, fresh):
         return "refused", ("closure.issue-identity-mismatch",)
     if snap.issue_state == "closed":
         return "already-closed", ()
@@ -577,7 +560,7 @@ def mcp_manifest(plan: SessionClosurePlan) -> list[dict]:
                 "tool": "issue_read",
                 "method": "get_comments",
                 "params": {"owner": owner, "repo": repo, "issue_number": plan.issue_number},
-                "assertions": ["if any body already contains the receipt id, the comment step is skipped"],
+                "assertions": ["if the exact canonical comment body is already present, the comment step is skipped"],
                 "on_failure": "unavailable readback stops as closed-unverified",
             },
             {
@@ -600,7 +583,7 @@ def mcp_manifest(plan: SessionClosurePlan) -> list[dict]:
                 "tool": "issue_read",
                 "method": "get",
                 "params": {"owner": owner, "repo": repo, "issue_number": plan.issue_number},
-                "assertions": ["closed and completed and comment present by receipt id"],
+                "assertions": ["closed and completed and exact canonical comment body present"],
                 "on_failure": "closed-unverified, never reported as verified",
             },
         ]
@@ -632,7 +615,7 @@ class SessionClosureTransport(Protocol):
 
 
 def _comment_present(plan: SessionClosurePlan, bodies: tuple[str, ...]) -> bool:
-    return plan.receipt_id is not None and any(plan.receipt_id in body for body in bodies)
+    return plan.receipt_id is not None and plan.comment_body in bodies
 
 
 def _attempt_label_removal(
@@ -647,7 +630,10 @@ def _attempt_label_removal(
     if not plan.label_required:
         return False, ()
     try:
-        labels_now = transport.fresh_read().labels
+        fresh = transport.fresh_read()
+        if not _matches_target(plan, fresh):
+            raise TransportUnavailable("label readback target mismatch")
+        labels_now = fresh.labels
     except TransportUnavailable:
         return True, ("session-closure.readback-unavailable",)
     if READY_LABEL not in labels_now:
@@ -661,7 +647,10 @@ def _attempt_label_removal(
         return True, ()
     except TransportUncertain:
         try:
-            labels_after = transport.fresh_read().labels
+            fresh = transport.fresh_read()
+            if not _matches_target(plan, fresh):
+                raise TransportUnavailable("label readback target mismatch")
+            labels_after = fresh.labels
         except TransportUnavailable:
             return True, ("session-closure.readback-unavailable",)
         return (READY_LABEL in labels_after), ()
@@ -702,25 +691,21 @@ def _final_verify_closed(plan: SessionClosurePlan, transport: SessionClosureTran
         final = transport.fresh_read()
     except TransportUnavailable:
         return "unverified", ("session-closure.readback-unavailable",)
-    if final.snapshot.issue_state != "closed" or final.state_reason != "completed":
+    if not _matches_target(plan, final) or final.snapshot.issue_state != "closed" or final.state_reason != "completed":
         return "unverified", ("session-closure.final-readback-mismatch",)
     if not _comment_present(plan, final.comment_bodies):
         return "unverified", ("session-closure.final-comment-missing",)
-    if plan.label_required and READY_LABEL in final.labels:
+    if READY_LABEL in final.labels or READY_LABEL in final.snapshot.lifecycle_labels:
         return "label-flagged", ()
     return "verified", ()
 
 
-def _recover_closed(plan: SessionClosurePlan, transport: SessionClosureTransport, fresh: FreshRead) -> dict:
-    """Recovery path for an already-closed issue. Never re-closes.
-
-    Requires a separately validated recovery authorization (checked by
-    the entry point; this function receives only the boolean). Label
-    removal is surgical-or-stop; the comment is posted at most once;
-    the final readback must verify closed + completed + comment present.
-    """
+def _reconcile_closed(
+    plan: SessionClosurePlan, transport: SessionClosureTransport, *, success_status: str
+) -> dict:
+    """One reconciliation algorithm, after the caller's closure/recovery gate."""
     label_flagged, label_reasons = _attempt_label_removal(plan, transport)
-    if label_reasons and "session-closure.readback-unavailable" in label_reasons:
+    if "session-closure.readback-unavailable" in label_reasons:
         return {"status": "closed-unverified", "reason_codes": label_reasons, "issue_number": plan.issue_number}
     comment_present, comment_reasons = _post_comment_once(plan, transport)
     if not comment_present:
@@ -731,31 +716,8 @@ def _recover_closed(plan: SessionClosurePlan, transport: SessionClosureTransport
     if status == "unverified":
         return {"status": "closed-unverified", "reason_codes": reasons, "issue_number": plan.issue_number}
     if status == "label-flagged" or label_flagged:
-        return {"status": "already-closed-recovered-label-reconciliation-required", "reason_codes": (), "issue_number": plan.issue_number}
-    return {"status": "already-closed-recovered", "reason_codes": (), "issue_number": plan.issue_number}
-
-
-def _reconcile(plan: SessionClosurePlan, transport: SessionClosureTransport, after_close: FreshRead) -> dict:
-    """Label + comment + final readback for a freshly verified closure.
-
-    The label step is surgical-or-stop: without surgical support the
-    outcome is flagged, the closure stays verified, and no label
-    mutation of any kind is attempted.
-    """
-    label_flagged, label_reasons = _attempt_label_removal(plan, transport)
-    if label_reasons and "session-closure.readback-unavailable" in label_reasons:
-        return {"status": "closed-unverified", "reason_codes": label_reasons, "issue_number": plan.issue_number}
-    comment_present, comment_reasons = _post_comment_once(plan, transport)
-    if not comment_present:
-        if "session-closure.readback-unavailable" in comment_reasons:
-            return {"status": "closed-unverified", "reason_codes": comment_reasons, "issue_number": plan.issue_number}
-        return {"status": "unresolved", "reason_codes": comment_reasons, "issue_number": plan.issue_number}
-    status, reasons = _final_verify_closed(plan, transport)
-    if status == "unverified":
-        return {"status": "closed-unverified", "reason_codes": reasons, "issue_number": plan.issue_number}
-    if status == "label-flagged" or label_flagged:
-        return {"status": "closed-verified-label-reconciliation-required", "reason_codes": (), "issue_number": plan.issue_number}
-    return {"status": "closed-verified", "reason_codes": (), "issue_number": plan.issue_number}
+        success_status += "-label-reconciliation-required"
+    return {"status": success_status, "reason_codes": (), "issue_number": plan.issue_number}
 
 
 def execute_plan(plan: SessionClosurePlan, transport: SessionClosureTransport, *, recovery_authorized: bool = False) -> dict:
@@ -785,7 +747,7 @@ def execute_plan(plan: SessionClosurePlan, transport: SessionClosureTransport, *
                 "issue_number": plan.issue_number,
                 "label_present": bool(plan.label_required and READY_LABEL in fresh.labels),
             }
-        return _recover_closed(plan, transport, fresh)
+        return _reconcile_closed(plan, transport, success_status="already-closed-recovered")
     # status == ready: exact close step, payload fixed by contract.
     try:
         transport.close()
@@ -794,16 +756,16 @@ def execute_plan(plan: SessionClosurePlan, transport: SessionClosureTransport, *
             after = transport.fresh_read()
         except TransportUnavailable:
             return {"status": "unresolved", "reason_codes": ("session-closure.close-uncertain-readback-unavailable",), "issue_number": plan.issue_number}
-        if after.snapshot.issue_state != "closed" or after.state_reason != "completed":
+        if not _matches_target(plan, after) or after.snapshot.issue_state != "closed" or after.state_reason != "completed":
             return {"status": "unresolved", "reason_codes": ("session-closure.close-uncertain",), "issue_number": plan.issue_number}
-        return _reconcile(plan, transport, after)
+        return _reconcile_closed(plan, transport, success_status="closed-verified")
     try:
         after_close = transport.fresh_read()
     except TransportUnavailable:
         return {"status": "closed-unverified", "reason_codes": ("session-closure.readback-unavailable",), "issue_number": plan.issue_number}
-    if after_close.snapshot.issue_state != "closed" or after_close.state_reason != "completed":
+    if not _matches_target(plan, after_close) or after_close.snapshot.issue_state != "closed" or after_close.state_reason != "completed":
         return {"status": "closed-unverified", "reason_codes": ("session-closure.post-close-readback-mismatch",), "issue_number": plan.issue_number}
-    return _reconcile(plan, transport, after_close)
+    return _reconcile_closed(plan, transport, success_status="closed-verified")
 
 
 def execute_session_closure(
