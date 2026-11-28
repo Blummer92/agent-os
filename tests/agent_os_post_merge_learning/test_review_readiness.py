@@ -39,6 +39,11 @@ class ReviewReadinessTests(ReportCase):
             ("    @unittest.skip('control')\n    def test_case(self): pass\n", 5),
             ("    def test_case(self): self.fail('control')\n", 1),
             ("    def test_case(self): pass\n", 0),
+            (
+                "    def test_run(self): pass\n"
+                "    @unittest.skip('control')\n    def test_skip(self): pass\n",
+                0,
+            ),
         ):
             with self.subTest(code=code, body=body), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp)
