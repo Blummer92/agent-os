@@ -1,0 +1,46 @@
+# Disposable control. NEVER MERGE. No authoritative verdict or publication.
+name: Never merge CI control 09
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths: [.github/workflows/agent-os-never-merge-ci-control.yml]
+permissions:
+  contents: read
+jobs:
+  control:
+    name: Observe refuse contract C09
+    if: >-
+      github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.head.ref == 'test/never-merge-ci-c09-20261128'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      PYTHONPATH: src:08_Tooling/workflow-scheduler/src
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - name: Verify exact head before installing or running tests
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install standard validation dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+      - name: Verify C09 expected refuse inside the control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -o addopts='' -q tests/test_agent_os_ci_branch_coverage.py -k 'invalid_evidence_fails_with_bounded_reason and below-floor'
+          printf 'C09: expected refuse contract observed (non-authoritative)\n' >> "$GITHUB_STEP_SUMMARY"
