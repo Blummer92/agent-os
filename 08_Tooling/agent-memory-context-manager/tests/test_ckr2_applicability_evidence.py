@@ -119,10 +119,14 @@ def ll102_row(**overrides):
     return row(102, **kwargs)
 
 
-def ll102_candidate(**overrides):
-    normalized = normalize_lesson_row(ll102_row())
+def _candidate_from_row(raw):
+    normalized = normalize_lesson_row(raw)
     assert not isinstance(normalized, LessonActivationSkip)
-    candidate = _as_selection_candidate(normalized)
+    return _as_selection_candidate(normalized)
+
+
+def ll102_candidate(**overrides):
+    candidate = _candidate_from_row(ll102_row())
     return replace(candidate, **overrides) if overrides else candidate
 
 
@@ -225,12 +229,10 @@ NEW_CASES = (
 
 
 def new_lesson_candidate():
-    normalized = normalize_lesson_row(row(
+    return _candidate_from_row(row(
         9000, title=NEW_TITLE, guidance=NEW_GUIDANCE, guardrail=NEW_GUARDRAIL,
         cases=NEW_CASES, source="https://github.com/Blummer92/agent-os/issues/4026",
     ))
-    assert not isinstance(normalized, LessonActivationSkip)
-    return _as_selection_candidate(normalized)
 
 
 def new_lesson_request(*, generic_only=False, exclusion=False):
@@ -261,6 +263,7 @@ def new_lesson_request(*, generic_only=False, exclusion=False):
 
 def test_new_fixture_lesson_selects_without_matcher_edit():
     candidate = new_lesson_candidate()
+    assert evaluate_applicability(new_lesson_request(), candidate).exclusions_fired == ()
     assert _match_candidate(new_lesson_request(), candidate) == (2, (REASON,))
     decision = select_coding_knowledge(new_lesson_request(), (candidate,))
     assert [s.candidate.knowledge_id for s in decision.selected] == ["LL-9000"]
@@ -289,12 +292,10 @@ HELD_CASES = (
 
 
 def held_candidate():
-    normalized = normalize_lesson_row(row(
+    return _candidate_from_row(row(
         9001, title=HELD_TITLE, guidance=HELD_GUIDANCE, guardrail=HELD_GUARDRAIL,
         cases=HELD_CASES, source="https://github.com/Blummer92/agent-os/issues/4026",
     ))
-    assert not isinstance(normalized, LessonActivationSkip)
-    return _as_selection_candidate(normalized)
 
 
 def test_held_out_new_lesson_positive():
@@ -317,11 +318,6 @@ def test_held_out_new_lesson_generic_only():
         specialized_knowledge_required=True,
     )
     assert _match_candidate(request, held_candidate())[0] == 0
-
-
-def test_held_out_exclusion_present_but_not_evidenced_does_not_veto():
-    candidate = new_lesson_candidate()
-    assert _match_candidate(new_lesson_request(), candidate) == (2, (REASON,))
 
 
 def test_held_out_nine_cases_refuse_without_legacy_fallback():
@@ -379,18 +375,9 @@ def test_supporting_links_split_is_separately_tested():
         "https://github.com/Blummer92/agent-os/issues/3200, "
         "https://github.com/Blummer92/agent-os/pull/4102#issuecomment-7198014711"
     )
-    properties = row(
-        102, title=LL102_TITLE, guidance=LL102_NEXT_TIME, guardrail=LL102_GUARDRAIL,
-        cases=None, revision=LL102_REVISION,
-    )["properties"]
-    properties["Supporting Source Links"] = {
-        "type": "rich_text",
-        "rich_text": [{"type": "text", "plain_text": joined, "text": {"content": joined}}],
-    }
-    normalized = normalize_lesson_row({
-        "object": "page", "id": "fixture-102", "url": "https://www.notion.so/fixture-102",
-        "last_edited_time": LL102_REVISION, "properties": properties,
-    })
+    raw = ll102_row(cases=None)
+    raw["properties"]["Supporting Source Links"] = _rich(joined)
+    normalized = normalize_lesson_row(raw)
     assert not isinstance(normalized, LessonActivationSkip)
     assert normalized.canonical_github_refs == (
         "https://github.com/Blummer92/agent-os/issues/3418",
@@ -519,9 +506,13 @@ def test_distinct_task_hints_cannot_be_combined_into_one_positive_case():
     assert _match_candidate(actual_export, candidate) == (2, (REASON,))
 
 
-def test_opposite_primary_guidance_refuses_even_with_matching_applicability():
-    candidate = _document_export_candidate(
-        "Do not check document layout for digital PDF export."
+@pytest.mark.parametrize("guidance_slot", ["primary", "avoid"])
+def test_opposite_guidance_refuses_even_with_matching_applicability(guidance_slot):
+    contradiction = "Do not check document layout for digital PDF export."
+    candidate = (
+        _document_export_candidate(contradiction)
+        if guidance_slot == "primary"
+        else replace(_document_export_candidate(), avoid_when=(contradiction,))
     )
     request = CodingKnowledgeRequest(
         task_reference="Validate a digital PDF export",
@@ -570,6 +561,8 @@ def test_exclusion_requires_coherent_task_evidence():
         LL102_REQUEST, language_hints=("python",), capability_keywords=("integration tests", positive),
     )
     assert evaluate_applicability(unrelated, candidate).matched is True
+    language_only = replace(unrelated, language_hints=("Python unit tests",))
+    assert evaluate_applicability(language_only, candidate).matched is True
     related = replace(unrelated, capability_keywords=("Python unit tests", positive))
     assert evaluate_applicability(related, candidate).exclusions_fired == (0,)
 
@@ -587,7 +580,7 @@ def test_exclusion_recognizes_short_technical_terms(topic):
 @pytest.mark.parametrize("field", [
     None, {"type": "select", "select": {"name": "webhook delivery"}},
     {"type": "rich_text", "rich_text": [{"text": {"content": "missing plain_text"}}]},
-    _rich("; ;"), _rich("x" * 50000),
+    _rich("; ;"), _rich("x" * 513), _rich("x" * 50000),
 ])
 def test_present_invalid_supporting_cases_refuse_normalization(field):
     raw = ll102_row()
@@ -606,3 +599,54 @@ def test_blank_notion_rich_text_retains_legacy_behavior():
     assert candidate.applicability_cases == ()
     request = replace(LL102_REQUEST, capability_keywords=(candidate.capability_kind,))
     assert _match_candidate(request, candidate) == (2, ("ecosystem-capability-match",))
+
+
+@pytest.mark.parametrize("case, hint", [
+    ("PDF export", "PDF export"),
+    ("Using this schema", "Using this migration"),
+])
+def test_positive_cases_require_two_distinctive_long_tokens(case, hint):
+    candidate = ll102_candidate(applicability_cases=(case,))
+    request = replace(LL102_REQUEST, capability_keywords=(hint,))
+    result = evaluate_applicability(request, candidate)
+    assert result.reason_codes == ("applicability-conditions-unsatisfied",)
+    assert result.evidence == ()
+
+
+def test_evidence_tie_is_stable_when_hints_are_reordered():
+    candidate = ll102_candidate(applicability_cases=("webhook delivery retry budget",))
+    hints = ("delivery retry", "budget webhook")
+    request = replace(LL102_REQUEST, capability_keywords=hints)
+    forward = evaluate_applicability(request, candidate)
+    backward = evaluate_applicability(replace(request, capability_keywords=hints[::-1]), candidate)
+    assert forward == backward
+    assert forward.evidence == ((0, ("delivery", "retry")),)
+
+
+def test_eight_provider_cases_are_preserved_and_evaluated():
+    cases = tuple(f"Verify webhook delivery case {index}." for index in range(8))
+    raw = ll102_row(cases="; ".join(cases[:4]) + "\n" + "\n".join(cases[4:]))
+    candidate = _candidate_from_row(raw)
+    assert candidate.applicability_cases == cases
+    request = replace(LL102_REQUEST, capability_keywords=("webhook delivery",))
+    result = evaluate_applicability(request, candidate)
+    assert result.matched is True
+    assert result.satisfied == tuple(range(8))
+
+
+@pytest.mark.parametrize("path", [
+    "/docs/document_layout.md",
+    "../docs/document_layout.md",
+    "docs/../document_layout.md",
+    "docs/./document_layout.md",
+    "docs//document_layout.md",
+])
+def test_malformed_file_case_cannot_match_even_an_identical_hint(path):
+    candidate = ll102_candidate(applicability_cases=(path, "Preserve document layout"))
+    request = replace(
+        LL102_REQUEST, target_path_hints=(path,), capability_keywords=("document layout",),
+    )
+    result = evaluate_applicability(request, candidate)
+    assert result.reason_codes == ("applicability-conditions-unsatisfied",)
+    assert result.unsatisfied == (0,)
+    assert _match_candidate(request, candidate)[0] == 0

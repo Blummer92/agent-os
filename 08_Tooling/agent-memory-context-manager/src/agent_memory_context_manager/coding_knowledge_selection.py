@@ -823,7 +823,7 @@ _APPLICABILITY_NEGATION = re.compile(
     r"\b(?:never|do not|must not|should not|don['\u2019\u02bc]t|avoid|skip|reject|not|no)\b"
 )
 _APPLICABILITY_PATH = re.compile(
-    r"^(?:\./|[a-z0-9_.-]+/)[a-z0-9_./-]+\.(?:yml|yaml|py|md|json|toml|txt|sh|js|ts)$"
+    r"^(?:/+|[a-z0-9_.-]+/)[a-z0-9_./-]+\.(?:yml|yaml|py|md|json|toml|txt|sh|js|ts)$"
 )
 
 
@@ -887,14 +887,21 @@ def _applicability_case_kind(case: str) -> str:
     reviewed = _reviewed_text(case).translate(_APPLICABILITY_APOSTROPHES)
     if _APPLICABILITY_EXCLUSION.match(reviewed):
         return "exclusion"
-    # One terminal prose period is optional; never strip the leading ./.
-    if _APPLICABILITY_PATH.fullmatch(case.strip().removesuffix(".").casefold()) is not None:
+    # Path-shaped but malformed cases must not become topical evidence.
+    if _APPLICABILITY_PATH.fullmatch(_case_path_text(case).casefold()) is not None:
         return "path"
     return "positive"
 
 
+def _case_path_text(case: str) -> str:
+    # One terminal prose period is optional; never strip the leading ./.
+    return case.strip().removesuffix(".")
+
+
 def _path_case_satisfied(case: str, request: CodingKnowledgeRequest) -> bool:
-    wanted = case.strip().removesuffix(".").removeprefix("./")
+    wanted = _case_path_text(case).removeprefix("./")
+    if any(part in {"", ".", ".."} for part in wanted.split("/")):
+        return False
     return any(
         hint.strip().removeprefix("./") == wanted
         for hint in request.target_path_hints
