@@ -108,6 +108,10 @@ class LessonRecordEvidence:
     library_name: str | None = None
     archived: bool = False
     authority_conflict: bool = False
+    # Parsed source-owned applicability cases from the lesson's
+    # "Supporting Cases" record. Empty for lessons without that record;
+    # the matcher then decides exactly as before.
+    applicability_cases: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -121,6 +125,7 @@ class LessonRecordEvidence:
             _text(self.library_name, "library_name")
         for name in ("canonical_github_refs", "evidence_refs", "keywords", "dropped_supporting_refs"):
             _items(getattr(self, name), name)
+        _items(self.applicability_cases, "applicability_cases")
         if type(self.surface_before_work) is not bool:
             raise TypeError("surface_before_work must be bool")
         if type(self.archived) is not bool or type(self.authority_conflict) is not bool:
@@ -384,6 +389,7 @@ def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCand
         canonical_github_refs=lesson.canonical_github_refs,
         evidence_refs=lesson.evidence_refs,
         authority_conflict=lesson.authority_conflict,
+        applicability_cases=lesson.applicability_cases,
     )
 
 

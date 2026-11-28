@@ -31,6 +31,7 @@ from .coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
+    _APPLICABILITY_REASON,
     _EXECUTED_REVISION_REASON,
     _LIBRARY_TIE_REASON,
     _NOTION_EXECUTOR_REASON,
@@ -94,6 +95,12 @@ _GOVERNANCE_PREFIXES = (
 )
 _GUARDRAIL_PROPERTY = "Guardrail"
 _NEXT_TIME_PROPERTY = "What To Do Next Time"
+# Optional source-owned applicability record ("Supporting Cases"): a
+# semicolon-separated list of target paths, positive conditions, and
+# exclusions. Read-only; never written by this module. Absent on legacy
+# rows, which behave exactly as today.
+_SUPPORTING_CASES_PROPERTY = "Supporting Cases"
+MAX_APPLICABILITY_CASES = 8
 
 REQUIRED_LESSON_PROPERTIES = (
     _LESSON_ID_PROPERTY,
@@ -340,6 +347,10 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
     if applies_to is None:
         return LessonActivationSkip(lesson_id, "ambiguous-applies-to-vocabulary")
 
+    applicability_cases = _parse_applicability_cases(
+        _supporting_cases_text(properties.get(_SUPPORTING_CASES_PROPERTY))
+    )
+
     canonical_ref = _github_source_link(properties.get(_SOURCE_LINK_PROPERTY))
     currentness = KnowledgeCurrentness.CURRENT if canonical_ref else KnowledgeCurrentness.UNVERIFIABLE
     supporting_valid, supporting_dropped = _supporting_source_links(
@@ -379,6 +390,7 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
             keywords=applies_to,
             dropped_supporting_refs=dropped_supporting_refs,
             archived=status == "Archived note",
+            applicability_cases=applicability_cases,
         )
         # Validate CKR2 text invariants inside the per-row isolation boundary.
         _as_selection_candidate(lesson)
@@ -532,7 +544,10 @@ def describe_selection_basis(
         basis = "rule-ckr6-mutation-boundary"
     # These source-text matches use the existing conservative tie fallback.
     # The exact mechanism reason travels on each selected lesson, not as a new basis.
-    elif reasons & (_GENERIC_REASONS | {_LIBRARY_TIE_REASON, _NOTION_EXECUTOR_REASON, _PR_REFRESH_REASON}):
+    # Applicability-evidence matches are lexical too, so they share the
+    # generic-tie abstention in the orchestrator; they are not verified
+    # mechanism evidence in the lesson_applicability.py sense.
+    elif reasons & (_GENERIC_REASONS | {_LIBRARY_TIE_REASON, _NOTION_EXECUTOR_REASON, _PR_REFRESH_REASON, _APPLICABILITY_REASON}):
         basis = "generic-unique" if len(tied) <= MAX_SELECTED else "generic-tie-lexical-cut"
     else:  # pragma: no cover - the matcher has no other reason vocabulary
         basis = "no-relevant-signal"
@@ -668,6 +683,44 @@ def _continuation_cursor(raw: Mapping[str, Any], *, at_row_bound: bool) -> str |
     return cursor
 
 
+def _supporting_cases_text(prop: Any) -> str | None:
+    """Joined Supporting Cases text, or None when absent/malformed/oversized.
+
+    Advisory metadata only: an oversized or malformed record yields no
+    applicability cases rather than voiding the lesson. Nothing is
+    truncated; over-bound text is dropped whole, never partially read.
+    """
+    if isinstance(prop, str):
+        text = prop.strip()
+        return text if text and len(text) <= MAX_GUIDANCE_TEXT_CHARS else None
+    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
+        return None
+    joined = _read_text_segments(prop.get("rich_text"))
+    if joined is None or len(joined) > MAX_GUIDANCE_TEXT_CHARS:
+        return None
+    return joined
+
+
+def _parse_applicability_cases(text: str | None) -> tuple[str, ...]:
+    """Split a Supporting Cases record into bounded cases, or () if unusable.
+
+    Cases are separated by semicolons (the motivating live record's separator)
+    or newlines. More than MAX_APPLICABILITY_CASES cases, or any case over
+    the row text bound, yields no cases: a partial applicability record
+    must never admit a lesson on a satisfied subset.
+    """
+    if text is None:
+        return ()
+    cases = tuple(
+        case.strip() for case in re.split(r"[;\n]+", text) if case.strip()
+    )
+    if not cases or len(cases) > MAX_APPLICABILITY_CASES:
+        return ()
+    if any(len(case) > MAX_ROW_TEXT_CHARS for case in cases):
+        return ()
+    return cases
+
+
 def _guidance_text(prop: Any) -> tuple[str | None, str]:
     """Advisory narrative text under the shared guidance bound.
 
@@ -782,12 +835,16 @@ def _is_supporting_ref(value: str) -> bool:
 def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Parse approved bounded supporting refs: (admitted, dropped).
 
-    One URL per rich-text item, no free-form parsing. A missing property
-    behaves exactly as today (legacy one-link rows). Malformed, foreign,
-    duplicate, oversized, or over-cap refs are dropped and reported -- never
-    admitted, and never voiding the lesson or its primary ref. Dropped
-    entries are truncated to the row text bound so the evidence record
-    itself stays within its finite validation.
+    One URL per rich-text item, no free-form parsing -- except that a
+    plain-text item with no link annotations whose text is a comma- or
+    semicolon-joined list is split into pieces, each validated on its own
+    (see the split branch below). A missing property behaves exactly as
+    today (legacy one-link rows). Malformed, foreign, duplicate, oversized,
+    or over-cap refs are dropped and reported -- never admitted, and never
+    voiding the lesson or its primary ref. Dropped entries are truncated
+    to the row text bound so the evidence record itself stays within its
+    finite validation. Supporting refs never substitute for a missing
+    primary Source Link and never evidence relevance.
     """
     if prop is None:
         return (), ()
@@ -810,6 +867,26 @@ def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str,
         ref = text.strip()
         if not ref:
             continue
+        # A plain-text list in one rich-text item (comma/semicolon joined,
+        # with no link annotations to bind the whole string to one target)
+        # is split into its pieces; each piece is validated on its own.
+        # Whether live rows use this shape is unverified through the
+        # flattening MCP read surface: both shapes are tested offline, and
+        # an annotated item is never split. See test_ckr2_applicability_evidence.
+        if not _has_link_annotations(item) and ("," in ref or ";" in ref):
+            for piece in (part.strip() for part in re.split(r"[,;]", ref)):
+                if not piece:
+                    continue
+                if (
+                    len(valid) >= MAX_SUPPORTING_REFS
+                    or piece in seen
+                    or not _is_supporting_ref(piece)
+                ):
+                    dropped.append(piece[:MAX_ROW_TEXT_CHARS])
+                    continue
+                seen.add(piece)
+                valid.append(piece)
+            continue
         if (
             not _annotations_agree(item, ref)
             or len(valid) >= MAX_SUPPORTING_REFS
@@ -821,6 +898,14 @@ def _supporting_source_links(prop: Any, primary: str | None) -> tuple[tuple[str,
         seen.add(ref)
         valid.append(ref)
     return tuple(valid), tuple(dropped)
+
+
+def _has_link_annotations(item: Mapping[str, Any]) -> bool:
+    """True when any link annotation binds the whole item to one target."""
+    if item.get("href") is not None or item.get("link") is not None:
+        return True
+    text = item.get("text")
+    return isinstance(text, Mapping) and text.get("link") is not None
 
 
 def _annotations_agree(item: Mapping[str, Any], ref: str) -> bool:
