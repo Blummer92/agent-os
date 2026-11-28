@@ -1,0 +1,60 @@
+# Disposable control. NEVER MERGE. No authoritative verdict or publication.
+name: Never merge CI control 02
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths: [.github/workflows/agent-os-never-merge-ci-control.yml]
+permissions:
+  contents: read
+jobs:
+  control:
+    name: Observe pass contract C02
+    if: >-
+      github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.head.ref == 'test/never-merge-ci-c02-20261128'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      PYTHONPATH: src:08_Tooling/workflow-scheduler/src
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+      - name: Verify exact head before installing or running tests
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install standard validation dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+      - name: Verify C02 expected pass inside the control
+        shell: bash
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d "$RUNNER_TEMP/identity.XXXXXX")"
+          for arm in a b; do
+            python -m pytest -o addopts='' -q tests/teacher_os_web/test_teacher_os_api.py \
+              -k unauthenticated_requests --junitxml="$workdir/$arm.xml" >"$workdir/$arm.log" 2>&1
+          done
+          python - "$workdir" <<'PY'
+          from pathlib import Path
+          import sys
+          from scripts.ci_perf.root_shadow import load_junit
+          root = Path(sys.argv[1])
+          left, right = (load_junit((root / name).read_bytes()) for name in ("a.xml", "b.xml"))
+          if len(left) != 9 or left != right or any(row[0] != "pass" for row in left.values()):
+              raise SystemExit("Independent processes did not preserve nine passing identities")
+          print("Exact identity and outcome parity: 9 passing cases in each process")
+          PY
+          printf 'C02: expected pass contract observed (non-authoritative)\n' >> "$GITHUB_STEP_SUMMARY"
