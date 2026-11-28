@@ -805,15 +805,12 @@ def _executed_revision_evidence_match(candidate: CodingKnowledgeCandidate) -> bo
 _APPLICABILITY_REASON = "applicability-evidence-text-match"
 _APPLICABILITY_MAX_CASES = 8
 _APPLICABILITY_MIN_SHARED_TOKENS = 2
-_APPLICABILITY_EXCLUSION_PREFIXES = (
-    "do not apply",
-    "do not use",
-    "never apply",
-    "not applicable",
-    "does not apply",
-    "excludes",
-    "do not",
+_APPLICABILITY_EXCLUSION = re.compile(
+    r"^(?:do not|don't|never apply|not applicable|does not apply|excludes)\b"
 )
+_APPLICABILITY_APOSTROPHES = str.maketrans({char: "'" for char in "‘’ʼ"})
+# Short domain words are useful for a veto but don't expand positive matches.
+_APPLICABILITY_SHORT_EXCLUSION_TOKENS = frozenset({"api", "ci", "pdf", "pr", "yml"})
 # Structural scaffolding, not topical evidence: negation and application
 # verbs that appear in exclusion phrasing and in guidance generally.
 _APPLICABILITY_SCAFFOLD = frozenset({
@@ -863,47 +860,41 @@ class ApplicabilityEvaluation:
         }
 
 
-def _applicability_tokens(text: str) -> frozenset[str]:
+def _applicability_tokens(text: str, *, exclusion: bool = False) -> frozenset[str]:
     return frozenset(
         token
         for token in _CONTEXT_TOKEN.findall(text.casefold())
-        if len(token) >= _MIN_CONTEXT_TOKEN_CHARS and token not in _APPLICABILITY_SCAFFOLD
+        if token not in _APPLICABILITY_SCAFFOLD
+        and (
+            len(token) >= _MIN_CONTEXT_TOKEN_CHARS
+            or (exclusion and token in _APPLICABILITY_SHORT_EXCLUSION_TOKENS)
+        )
     )
 
 
-def _applicability_signal_tokens(request: CodingKnowledgeRequest) -> frozenset[str]:
-    tokens: set[str] = set()
-    for value in (
-        *request.ecosystem_hints,
-        *request.language_hints,
-        *request.library_hints,
-        *request.capability_keywords,
-    ):
-        # A filename establishes scope only through _path_case_satisfied.
-        tokens |= _applicability_tokens(value)
-    # Canonical refs contribute topical words only: numeric identities
-    # (issue/PR numbers) are dropped by the length/scaffold rules and by
-    # excluding digit-only tokens here, so an ID can never evidence a case.
-    for value in request.canonical_rule_refs:
-        tokens |= {
-            token
-            for token in _applicability_tokens(value)
-            if not token.isdigit()
-        }
-    return frozenset(tokens)
+def _strongest_case_evidence(
+    case_tokens: frozenset[str], task_signals: tuple[frozenset[str], ...],
+) -> tuple[str, ...]:
+    # Resolve equally strong signals deterministically without merging them.
+    return max(
+        (tuple(sorted(case_tokens & signal)) for signal in task_signals),
+        key=lambda match: (len(match), match),
+        default=(),
+    )
 
 
 def _applicability_case_kind(case: str) -> str:
-    reviewed = _reviewed_text(case)
-    if reviewed.startswith(_APPLICABILITY_EXCLUSION_PREFIXES):
+    reviewed = _reviewed_text(case).translate(_APPLICABILITY_APOSTROPHES)
+    if _APPLICABILITY_EXCLUSION.match(reviewed):
         return "exclusion"
-    if _APPLICABILITY_PATH.fullmatch(reviewed.strip().strip(".")) is not None:
+    # One terminal prose period is optional; never strip the leading ./.
+    if _APPLICABILITY_PATH.fullmatch(case.strip().removesuffix(".").casefold()) is not None:
         return "path"
     return "positive"
 
 
 def _path_case_satisfied(case: str, request: CodingKnowledgeRequest) -> bool:
-    wanted = case.strip().removeprefix("./").removesuffix(".")
+    wanted = case.strip().removesuffix(".").removeprefix("./")
     return any(
         hint.strip().removeprefix("./") == wanted
         for hint in request.target_path_hints
@@ -950,8 +941,11 @@ def evaluate_applicability(
     if len(cases) > _APPLICABILITY_MAX_CASES:
         return _result(False, ("oversized-applicability-record",), (), (), (), (), ())
 
-    signals = _applicability_signal_tokens(request)
     task_signals = tuple(_applicability_tokens(hint) for hint in request.capability_keywords)
+    # As for positives, only one coherent task hint may evidence an exclusion.
+    exclusion_signals = tuple(
+        _applicability_tokens(hint, exclusion=True) for hint in request.capability_keywords
+    )
     kinds = [_applicability_case_kind(case) for case in cases]
     satisfied: list[int] = []
     unsatisfied: list[int] = []
@@ -960,7 +954,9 @@ def evaluate_applicability(
     for index, case in enumerate(cases):
         kind = kinds[index]
         if kind == "exclusion":
-            shared = tuple(sorted(_applicability_tokens(case) & signals))
+            shared = _strongest_case_evidence(
+                _applicability_tokens(case, exclusion=True), exclusion_signals
+            )
             if len(shared) >= _APPLICABILITY_MIN_SHARED_TOKENS:
                 fired.append(index)
                 evidence.append((index, shared))
@@ -972,13 +968,7 @@ def evaluate_applicability(
             else:
                 unsatisfied.append(index)
             continue
-        case_tokens = _applicability_tokens(case)
-        # Resolve equally strong signals deterministically without merging them.
-        shared = max(
-            (tuple(sorted(case_tokens & signal)) for signal in task_signals),
-            key=lambda match: (len(match), match),
-            default=(),
-        )
+        shared = _strongest_case_evidence(_applicability_tokens(case), task_signals)
         if len(shared) >= _APPLICABILITY_MIN_SHARED_TOKENS:
             satisfied.append(index)
             evidence.append((index, shared))
@@ -1040,9 +1030,7 @@ def _match_candidate(
     # Satisfied positives are remembered and applied only after the narrow
     # reviewed branches below have had their chance to decide.
     applicability = evaluate_applicability(request, candidate)
-    has_applicability = bool(candidate.applicability_cases) and len(
-        candidate.applicability_cases
-    ) <= _APPLICABILITY_MAX_CASES
+    has_applicability = bool(candidate.applicability_cases)
     if has_applicability and not applicability.matched:
         return 0, applicability.reason_codes
     applicability_matched = has_applicability and applicability.matched

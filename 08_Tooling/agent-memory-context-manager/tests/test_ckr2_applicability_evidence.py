@@ -324,16 +324,26 @@ def test_held_out_exclusion_present_but_not_evidenced_does_not_veto():
     assert _match_candidate(new_lesson_request(), candidate) == (2, (REASON,))
 
 
-def test_held_out_nine_cases_abstains_to_legacy_behavior():
+def test_held_out_nine_cases_refuse_without_legacy_fallback():
     cases = "; ".join(f"Case number {i} about webhook delivery retry budgets" for i in range(9))
     normalized = normalize_lesson_row(row(
         9002, title=NEW_TITLE, guidance=NEW_GUIDANCE, guardrail=NEW_GUARDRAIL,
         cases=cases, source="https://github.com/Blummer92/agent-os/issues/4026",
     ))
-    assert not isinstance(normalized, LessonActivationSkip)
-    candidate = _as_selection_candidate(normalized)
-    assert candidate.applicability_cases == ()
-    assert evaluate_applicability(new_lesson_request(), candidate).matched is False
+    assert isinstance(normalized, LessonActivationSkip)
+    assert normalized.reason == "invalid-supporting-cases"
+
+
+def test_oversized_direct_candidate_cannot_fall_back():
+    unrelated = replace(
+        new_lesson_request(),
+        capability_keywords=("quality-assurance",),
+    )
+    oversized = ll102_candidate(
+        applicability_cases=tuple(f"Case {i}" for i in range(9)),
+        capability_kind="quality-assurance",
+    )
+    assert _match_candidate(unrelated, oversized) == (0, ("oversized-applicability-record",))
 
 
 def test_held_out_lesson_without_cases_keeps_legacy_generic_path():
@@ -522,3 +532,77 @@ def test_opposite_primary_guidance_refuses_even_with_matching_applicability():
         0, ("applicability-contradicted-guidance",)
     )
     assert not select_coding_knowledge(request, (candidate,)).selected
+
+
+@pytest.mark.parametrize("prefix", ["Don't", "Don’t", "Don‘t", "Donʼt", "Do not"])
+def test_contracted_exclusion_refuses_instead_of_helping_match(prefix):
+    positive = "Preserve webhook delivery retries"
+    candidate = ll102_candidate(
+        applicability_cases=(f"{prefix} apply to a PR-only workflow.", positive),
+    )
+    request = replace(LL102_REQUEST, capability_keywords=("pr-only workflow", positive))
+    result = evaluate_applicability(request, candidate)
+    assert result.exclusions_fired == (0,)
+    assert _match_candidate(request, candidate) == (0, ("applicability-exclusion-fired",))
+
+
+@pytest.mark.parametrize("case", ["./docs/Layout.md", "./docs/Layout.md.", "docs/Layout.md"])
+@pytest.mark.parametrize("hint, matches", [
+    ("./docs/Layout.md", True), ("docs/Layout.md", True),
+    ("docs/layout.md", False), ("other/docs/Layout.md", False),
+])
+def test_path_case_prefix_and_punctuation_preserve_exact_scope(case, hint, matches):
+    positive = "Preserve webhook delivery retries"
+    candidate = ll102_candidate(applicability_cases=(case, positive))
+    request = replace(LL102_REQUEST, target_path_hints=(hint,), capability_keywords=(positive,))
+    result = evaluate_applicability(request, candidate)
+    assert result.matched is matches
+    assert result.unsatisfied == (() if matches else (0,))
+
+
+def test_exclusion_requires_coherent_task_evidence():
+    positive = "Preserve webhook delivery retries"
+    candidate = ll102_candidate(applicability_cases=(
+        "Do not apply to Python unit tests in the batch exporter.",
+        positive,
+    ))
+    unrelated = replace(
+        LL102_REQUEST, language_hints=("python",), capability_keywords=("integration tests", positive),
+    )
+    assert evaluate_applicability(unrelated, candidate).matched is True
+    related = replace(unrelated, capability_keywords=("Python unit tests", positive))
+    assert evaluate_applicability(related, candidate).exclusions_fired == (0,)
+
+
+@pytest.mark.parametrize("topic", ["PDF", "PR", "API", "YML", "CI"])
+def test_exclusion_recognizes_short_technical_terms(topic):
+    positive = "Preserve webhook delivery retries"
+    candidate = ll102_candidate(applicability_cases=(f"Do not apply to {topic} export.", positive))
+    request = replace(LL102_REQUEST, capability_keywords=(f"{topic} export", positive))
+    assert evaluate_applicability(request, candidate).exclusions_fired == (0,)
+    unrelated = replace(request, capability_keywords=("CSV export", positive))
+    assert evaluate_applicability(unrelated, candidate).matched is True
+
+
+@pytest.mark.parametrize("field", [
+    None, {"type": "select", "select": {"name": "webhook delivery"}},
+    {"type": "rich_text", "rich_text": [{"text": {"content": "missing plain_text"}}]},
+    _rich("; ;"), _rich("x" * 50000),
+])
+def test_present_invalid_supporting_cases_refuse_normalization(field):
+    raw = ll102_row()
+    raw["properties"]["Supporting Cases"] = field
+    normalized = normalize_lesson_row(raw)
+    assert isinstance(normalized, LessonActivationSkip)
+    assert normalized.reason == "invalid-supporting-cases"
+
+
+def test_blank_notion_rich_text_retains_legacy_behavior():
+    raw = ll102_row()
+    raw["properties"]["Supporting Cases"] = {"type": "rich_text", "rich_text": []}
+    normalized = normalize_lesson_row(raw)
+    assert not isinstance(normalized, LessonActivationSkip)
+    candidate = _as_selection_candidate(normalized)
+    assert candidate.applicability_cases == ()
+    request = replace(LL102_REQUEST, capability_keywords=(candidate.capability_kind,))
+    assert _match_candidate(request, candidate) == (2, ("ecosystem-capability-match",))

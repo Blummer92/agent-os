@@ -31,6 +31,7 @@ from .coding_knowledge_selection import (
     CodingKnowledgeRequest,
     KnowledgeCurrentness,
     RetrievalEscalation,
+    _APPLICABILITY_MAX_CASES,
     _APPLICABILITY_REASON,
     _EXECUTED_REVISION_REASON,
     _LIBRARY_TIE_REASON,
@@ -100,7 +101,6 @@ _NEXT_TIME_PROPERTY = "What To Do Next Time"
 # exclusions. Read-only; never written by this module. Absent on legacy
 # rows, which behave exactly as today.
 _SUPPORTING_CASES_PROPERTY = "Supporting Cases"
-MAX_APPLICABILITY_CASES = 8
 
 REQUIRED_LESSON_PROPERTIES = (
     _LESSON_ID_PROPERTY,
@@ -347,9 +347,13 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
     if applies_to is None:
         return LessonActivationSkip(lesson_id, "ambiguous-applies-to-vocabulary")
 
-    applicability_cases = _parse_applicability_cases(
-        _supporting_cases_text(properties.get(_SUPPORTING_CASES_PROPERTY))
+    applicability_cases = (
+        _parse_applicability_cases(properties[_SUPPORTING_CASES_PROPERTY])
+        if _SUPPORTING_CASES_PROPERTY in properties
+        else ()
     )
+    if applicability_cases is None:
+        return LessonActivationSkip(lesson_id, "invalid-supporting-cases")
 
     canonical_ref = _github_source_link(properties.get(_SOURCE_LINK_PROPERTY))
     currentness = KnowledgeCurrentness.CURRENT if canonical_ref else KnowledgeCurrentness.UNVERIFIABLE
@@ -683,41 +687,28 @@ def _continuation_cursor(raw: Mapping[str, Any], *, at_row_bound: bool) -> str |
     return cursor
 
 
-def _supporting_cases_text(prop: Any) -> str | None:
-    """Joined Supporting Cases text, or None when absent/malformed/oversized.
+def _parse_applicability_cases(prop: Any) -> tuple[str, ...] | None:
+    """Return cases, () for an empty provider field, or None for invalid data.
 
-    Advisory metadata only: an oversized or malformed record yields no
-    applicability cases rather than voiding the lesson. Nothing is
-    truncated; over-bound text is dropped whole, never partially read.
+    Never truncate to a subset or let malformed evidence reach the legacy
+    matcher. A Notion row can have an empty rich-text array for this column.
     """
     if isinstance(prop, str):
         text = prop.strip()
-        return text if text and len(text) <= MAX_GUIDANCE_TEXT_CHARS else None
-    if not isinstance(prop, Mapping) or prop.get("type") != "rich_text":
+    elif isinstance(prop, Mapping) and prop.get("type") == "rich_text":
+        items = prop.get("rich_text")
+        if isinstance(items, list) and not items:
+            return ()
+        text = _read_text_segments(items)
+    else:
         return None
-    joined = _read_text_segments(prop.get("rich_text"))
-    if joined is None or len(joined) > MAX_GUIDANCE_TEXT_CHARS:
+    if not text or len(text) > MAX_GUIDANCE_TEXT_CHARS:
         return None
-    return joined
-
-
-def _parse_applicability_cases(text: str | None) -> tuple[str, ...]:
-    """Split a Supporting Cases record into bounded cases, or () if unusable.
-
-    Cases are separated by semicolons (the motivating live record's separator)
-    or newlines. More than MAX_APPLICABILITY_CASES cases, or any case over
-    the row text bound, yields no cases: a partial applicability record
-    must never admit a lesson on a satisfied subset.
-    """
-    if text is None:
-        return ()
-    cases = tuple(
-        case.strip() for case in re.split(r"[;\n]+", text) if case.strip()
-    )
-    if not cases or len(cases) > MAX_APPLICABILITY_CASES:
-        return ()
+    cases = tuple(case.strip() for case in re.split(r"[;\n]+", text) if case.strip())
+    if not cases or len(cases) > _APPLICABILITY_MAX_CASES:
+        return None
     if any(len(case) > MAX_ROW_TEXT_CHARS for case in cases):
-        return ()
+        return None
     return cases
 
 
