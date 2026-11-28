@@ -69,6 +69,15 @@ class LiveLessonsClient:
                           filter={"property": "Lesson Learned", "title": {"equals": title}},
                           page_size=2, max_pages=1, max_results=2)
 
+    def find_create_candidates(self) -> Mapping:
+        # Create-only safety check: read all currently visible titles, not only
+        # exact-title hits. A capped, incomplete scan refuses creation; no
+        # comment-supplied query or caller-controlled destination is accepted.
+        if target_for(self.request_id) is not None:
+            raise WriteBlocked("create-only-duplicate-scan")
+        return self._read("query_data_source", data_source_id=self.source_id,
+                          page_size=100, max_pages=2, max_results=200)
+
     def find_lesson(self, number: int) -> Mapping:
         # Only the reviewed target of this request's update entry is queryable.
         target = target_for(self.request_id)

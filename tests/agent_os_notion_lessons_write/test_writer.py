@@ -97,6 +97,10 @@ class Client:
         rows = [page(intended=False)] if self.appear and self.query_count > 1 else self.rows
         return {"results": deepcopy(rows), "has_more": self.more}
 
+    def find_create_candidates(self):
+        self.calls.append("scan")
+        return {"results": deepcopy(self.rows), "has_more": self.more}
+
     def find_lesson(self, number):
         self.calls.append("query-id")
         self.lesson_number = number
@@ -206,7 +210,7 @@ class WriterTests(unittest.TestCase):
         self.assertTrue(result["readback_verified"])
         self.assertEqual(result["write_attempts"], 1)
         self.assertEqual(result["lesson_id"], "LL-93")
-        self.assertEqual(client.calls, ["binding", "schema", "query", "query", "write", "get"])
+        self.assertEqual(client.calls, ["binding", "schema", "query", "scan", "query", "scan", "write", "get"])
 
     def test_unchanged_skips_write_and_reads_exact_target(self):
         client = Client(page())
@@ -414,6 +418,67 @@ class WriterTests(unittest.TestCase):
         self.assertNotIn("private student", value)
         self.assertNotIn("properties", value)
         self.assertNotIn(LESSON["What Happened"], value)
+
+
+class SemanticDuplicateCreateTests(unittest.TestCase):
+    """#3417: a possible duplicate blocks BEFORE the create-once reservation."""
+
+    def test_ll82_continuation_paraphrase_blocks_with_canonical_id(self):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        duplicate = page()
+        duplicate["properties"]["Lesson ID"]["unique_id"]["number"] = 82
+        title = "Native execution hosts must enforce continuation; emitted continuation metadata alone is insufficient"
+        duplicate["properties"]["Lesson Learned"] = _prop("Lesson Learned", title)
+        client = Client()
+        client.rows = [duplicate]
+        # The exact-title lookup is absent, but the bounded scan sees LL-82.
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
+        result = execute(AdmittedRequest(100, request_id=CONTINUATION_CONSUMER_REQUEST_ID), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "possible-semantic-duplicate"))
+        self.assertEqual(result["duplicate_lesson_ids"], ["LL-82"])
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertNotIn("write", client.calls)
+
+    def test_unrelated_title_is_not_semantically_blocked(self):
+        from scripts.agent_os_notion_lessons_write.writer import _possible_same_lesson
+        title = "Connect continuation decisions to an actual host consumer before claiming automatic execution"
+        for other in (
+            "CKR6 must run in the actual execution path",
+            "Host deployment metadata needs privacy redaction",
+            "Continuation logs must redact student identifiers before execution",
+        ):
+            with self.subTest(other=other):
+                self.assertFalse(_possible_same_lesson(title, other))
+
+    def test_incomplete_duplicate_scan_blocks_before_reservation(self):
+        client = Client()
+        client.more = True
+        # Exact-title reconciliation is complete; only the new bounded scan
+        # is incomplete. Otherwise the older reconciliation guard wins first.
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
+        result = execute(AdmittedRequest(100), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "incomplete-duplicate-scan"))
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertNotIn("write", client.calls)
+
+    def test_ambiguous_duplicate_identity_blocks_without_mutation(self):
+        from scripts.agent_os_notion_lessons_write.catalog import CONTINUATION_CONSUMER_REQUEST_ID
+        duplicate = page()
+        duplicate["properties"]["Lesson Learned"] = _prop(
+            "Lesson Learned",
+            "Native execution hosts must enforce continuation; emitted continuation metadata alone is insufficient",
+        )
+        duplicate["properties"]["Lesson ID"]["unique_id"]["number"] = None
+        client = Client()
+        client.rows = [duplicate]
+        client.find_exact = lambda _title: {"results": [], "has_more": False}
+        result = execute(AdmittedRequest(100, request_id=CONTINUATION_CONSUMER_REQUEST_ID), client)
+        self.assertEqual((result["status"], result["reason_code"]),
+                         ("blocked", "ambiguous-duplicate-scan"))
+        self.assertEqual(result["write_attempts"], 0)
+        self.assertNotIn("write", client.calls)
 
 
 class RunnerTests(unittest.TestCase):
