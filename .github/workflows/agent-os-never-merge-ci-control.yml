@@ -1,46 +1,179 @@
-# Disposable control. NEVER MERGE. No authoritative verdict or publication.
+# NEVER MERGE. Disposable non-gating hosted root replay. Required workflows unchanged.
 name: Never merge CI control 06
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
-    paths: [.github/workflows/agent-os-never-merge-ci-control.yml]
+    paths:
+      - .github/workflows/agent-os-never-merge-ci-control.yml
 permissions:
   contents: read
+env:
+  SHADOW_HEAD: ${{ github.event.pull_request.head.sha }}
+  PYTHONPATH: src
+  PYTHONDONTWRITEBYTECODE: "1"
 jobs:
-  control:
-    name: Observe refuse contract C06
+  inventory:
     if: >-
       github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == github.repository_owner &&
-      github.event.pull_request.head.ref == 'test/never-merge-ci-c06-20261128'
+      github.event.pull_request.head.ref == 'test/never-merge-ci-c06-20261128' &&
+      github.event.pull_request.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-      PYTHONPATH: src:08_Tooling/workflow-scheduler/src
-      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.EXPECTED_HEAD }}
+          ref: ${{ env.SHADOW_HEAD }}
           persist-credentials: false
-      - name: Verify exact head before installing or running tests
-        shell: bash
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Verify exact head before install
+        run: test "$(git rev-parse HEAD)" = "$SHADOW_HEAD"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Install standard validation dependencies
+      - name: Install aggregate dependencies
         run: |
           python -m pip install -r requirements-dev.txt
           python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
           python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
-      - name: Verify C06 expected refuse inside the control
+      - name: Collect root files and assign whole modules
+        run: python -m scripts.ci_perf.root_shadow plan "$RUNNER_TEMP/root-shadow.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: c06-root-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/root-shadow.json
+          if-no-files-found: error
+          retention-days: 7
+
+  root:
+    needs: inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [serial, "0", "1", "2", "3"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHADOW_HEAD }}
+          persist-credentials: false
+      - name: Verify exact head before install
+        run: test "$(git rev-parse HEAD)" = "$SHADOW_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install aggregate dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+      - uses: actions/download-artifact@v7
+        with:
+          name: root-shadow-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - name: Run root tests and capture evidence
+        env:
+          LANE: ${{ matrix.lane }}
+        run: |
+          python -m scripts.ci_perf.root_shadow run "$RUNNER_TEMP/root-shadow" \
+            --plan "$RUNNER_TEMP/plan/root-shadow.json" --lane "$LANE"
+      - name: Check independent root completeness on serial reference
+        if: matrix.lane == 'serial'
+        run: |
+          python scripts/agent_os_ci_test_completeness.py --suite-dir "$GITHUB_WORKSPACE" \
+            --suite-name root --python-bin "$(command -v python)" \
+            --junit "$RUNNER_TEMP/root-shadow/root.xml" --receipt "$RUNNER_TEMP/root-shadow/completeness.json"
+      - name: Upload recovered lane evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: c06-recovered-lane-${{ matrix.lane }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/root-shadow/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload missing-arm evidence except lane 3
+        if: matrix.lane != '3'
+        uses: actions/upload-artifact@v7
+        with:
+          name: c06-missing-lane-${{ matrix.lane }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/root-shadow/
+          if-no-files-found: error
+          retention-days: 7
+
+  parity:
+    name: C06 hosted ${{ matrix.arm }} archive control
+    needs: [inventory, root]
+    if: ${{ always() && needs.inventory.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [missing, recovered]
+    env:
+      ROOT_RESULT: ${{ needs.root.result }}
+      ARM: ${{ matrix.arm }}
+    steps:
+      - name: Verify all source workers completed
+        run: test "$ROOT_RESULT" = success
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SHADOW_HEAD }}
+          persist-credentials: false
+      - name: Verify the exact checkout used by the comparator
+        run: test "$(git rev-parse HEAD)" = "$SHADOW_HEAD"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v7
+        with:
+          name: c06-root-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/plan
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: c06-${{ matrix.arm }}-lane-*-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/downloads
+      - name: Verify downloaded archive set and compare without publishing authority
         shell: bash
         run: |
           set -euo pipefail
-          python -m pytest -o addopts='' -q tests/ci_perf/test_root_shadow.py -k 'non_parity_is_refused and missing and wrong-lane-set'
-          printf 'C06: expected refuse contract observed (non-authoritative)\n' >> "$GITHUB_STEP_SUMMARY"
+          receipts="$RUNNER_TEMP/receipts"
+          mkdir "$receipts"
+          for lane in serial 0 1 2 3; do
+            source="$RUNNER_TEMP/downloads/c06-$ARM-lane-$lane-attempt-$GITHUB_RUN_ATTEMPT"
+            if [ "$ARM" = missing ] && [ "$lane" = 3 ]; then
+              test ! -e "$source"
+            else
+              test -d "$source"
+              mv "$source" "$receipts/$lane"
+            fi
+          done
+          test -z "$(find "$RUNNER_TEMP/downloads" -mindepth 1 -print -quit)"
+          status=0
+          python -m scripts.ci_perf.root_shadow compare "$receipts" \
+            --plan "$RUNNER_TEMP/plan/root-shadow.json" \
+            >"$RUNNER_TEMP/compare.out" 2>"$RUNNER_TEMP/compare.err" || status=$?
+          case "$ARM" in
+            missing)
+              test "$status" = 2
+              test ! -s "$RUNNER_TEMP/compare.out"
+              test "$(cat "$RUNNER_TEMP/compare.err")" = "Root shadow refused: wrong-lane-set"
+              echo 'C06 missing archive: comparator exit 2, wrong-lane-set' | tee -a "$GITHUB_STEP_SUMMARY"
+              ;;
+            recovered)
+              test "$status" = 0
+              test ! -s "$RUNNER_TEMP/compare.err"
+              python - "$RUNNER_TEMP/compare.out" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          result = json.loads(Path(sys.argv[1]).read_text())
+          if result.get("result") != "root-parity-only" or result.get("cases", 0) <= 0:
+              raise SystemExit("Missing successful root parity result")
+          PY
+              tee -a "$GITHUB_STEP_SUMMARY" <"$RUNNER_TEMP/compare.out"
+              ;;
+            *) exit 2 ;;
+          esac
