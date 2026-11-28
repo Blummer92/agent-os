@@ -784,9 +784,10 @@ def _executed_revision_evidence_match(candidate: CodingKnowledgeCandidate) -> bo
 # not evidenced also blocks the loose generic fallback, because its own
 # applicability record says the task does not exhibit what must be true.
 #
-# Evidence is whole-word token overlap against finite request signals only
-# (hints, target paths, canonical refs with numeric identities removed):
-# caller prose in task_reference is never read, lesson IDs/titles/URLs
+# A positive condition needs whole-word overlap within one explicit task
+# capability hint; do not assemble a match from unrelated hints, filenames,
+# or evidence URLs. Exclusions may still use the broader non-path context.
+# Caller prose in task_reference is never read, lesson IDs/titles/URLs
 # never prove relevance, and there is no stemming, synonym, or fuzzy
 # matching. A target-path case must name the same repository-relative file
 # against target_path_hints. A path is a scope constraint, not positive task
@@ -877,8 +878,8 @@ def _applicability_signal_tokens(request: CodingKnowledgeRequest) -> frozenset[s
         *request.language_hints,
         *request.library_hints,
         *request.capability_keywords,
-        *request.target_path_hints,
     ):
+        # A filename establishes scope only through _path_case_satisfied.
         tokens |= _applicability_tokens(value)
     # Canonical refs contribute topical words only: numeric identities
     # (issue/PR numbers) are dropped by the length/scaffold rules and by
@@ -950,6 +951,7 @@ def evaluate_applicability(
         return _result(False, ("oversized-applicability-record",), (), (), (), (), ())
 
     signals = _applicability_signal_tokens(request)
+    task_signals = tuple(_applicability_tokens(hint) for hint in request.capability_keywords)
     kinds = [_applicability_case_kind(case) for case in cases]
     satisfied: list[int] = []
     unsatisfied: list[int] = []
@@ -970,7 +972,13 @@ def evaluate_applicability(
             else:
                 unsatisfied.append(index)
             continue
-        shared = tuple(sorted(_applicability_tokens(case) & signals))
+        case_tokens = _applicability_tokens(case)
+        # Resolve equally strong signals deterministically without merging them.
+        shared = max(
+            (tuple(sorted(case_tokens & signal)) for signal in task_signals),
+            key=lambda match: (len(match), match),
+            default=(),
+        )
         if len(shared) >= _APPLICABILITY_MIN_SHARED_TOKENS:
             satisfied.append(index)
             evidence.append((index, shared))
@@ -993,17 +1001,16 @@ def evaluate_applicability(
             unsatisfied, (), (), evidence,
         )
 
-    # Contradictory guidance wins, but only on strong evidence: a later
-    # guidance segment (the guardrail and any avoid_when entry; never the
-    # primary guidance the cases summarize) that restates a satisfied
-    # positive case nearly in full and then negates it. Mere shared tokens
+    # Contradictory guidance wins, but only on strong evidence: the primary
+    # guidance, a guardrail, or an avoid_when entry that restates a satisfied
+    # positive case nearly in full and negates it. Mere shared tokens
     # plus a negation do not contradict: a guardrail like "never retry
     # without a budget cap" constrains the same action the case requires
     # and must not veto it. The bar is therefore a near-verbatim
     # restatement (all but at most one of the case's distinctive tokens,
     # at least three shared), not a two-token overlap.
     contradicted: list[int] = []
-    contradiction_sources = (*candidate.use_when[1:], *candidate.avoid_when)
+    contradiction_sources = (*candidate.use_when, *candidate.avoid_when)
     for index in satisfied:
         if kinds[index] != "positive":
             continue

@@ -449,3 +449,76 @@ def test_applicability_requires_positive_task_evidence_even_with_matching_metada
     assert not result.matched
     assert result.reason_codes == ("applicability-positive-case-missing",)
     assert _match_candidate(request, candidate) == (0, result.reason_codes)
+
+
+@pytest.mark.parametrize(
+    ("task", "capability_hints", "matched"),
+    [
+        ("Fix a spelling mistake in the file", ("spelling correction",), False),
+        ("Review the file", (), False),
+        ("Check document layout for digital PDF export", ("digital PDF export",), True),
+    ],
+    ids=["spelling-edit", "path-only", "actual-pdf-export"],
+)
+def test_matching_filename_is_scope_only_not_topic_evidence(task, capability_hints, matched):
+    path = "docs/document_layout.md"
+    request = CodingKnowledgeRequest(
+        task_reference=task,
+        capability_keywords=capability_hints,
+        target_path_hints=(path,),
+        specialized_knowledge_required=True,
+    )
+    candidate = ll102_candidate(
+        name="Synthetic document layout",
+        applicability_cases=(path, "Check document layout for digital PDF export"),
+        use_when=("Check document layout for digital PDF export.",),
+        avoid_when=(),
+    )
+    result = evaluate_applicability(request, candidate)
+    assert result.matched is matched
+    assert (0, (path,)) in result.evidence
+    decision = select_coding_knowledge(request, (candidate,))
+    assert (decision.sufficiency_status is SufficiencyStatus.SUFFICIENT) is matched
+    if not matched:
+        assert result.unsatisfied == (1,)
+        assert decision.selected == ()
+
+
+def _document_export_candidate(selection_guidance="Check document layout for digital PDF export."):
+    return ll102_candidate(
+        name="Synthetic digital PDF export",
+        applicability_cases=("Check document layout for digital PDF export",),
+        use_when=(selection_guidance, "Keep report formatting unchanged."),
+        avoid_when=(),
+    )
+
+
+def test_distinct_task_hints_cannot_be_combined_into_one_positive_case():
+    candidate = _document_export_candidate()
+    unrelated = CodingKnowledgeRequest(
+        task_reference="Correct typos and adjust menu layout",
+        ecosystem_hints=("agent-os",),
+        capability_keywords=("document typos", "menu layout"),
+        specialized_knowledge_required=True,
+    )
+    assert _match_candidate(unrelated, candidate) == (
+        0, ("applicability-conditions-unsatisfied",)
+    )
+    assert not select_coding_knowledge(unrelated, (candidate,)).selected
+    actual_export = replace(unrelated, capability_keywords=("digital PDF export",))
+    assert _match_candidate(actual_export, candidate) == (2, (REASON,))
+
+
+def test_opposite_primary_guidance_refuses_even_with_matching_applicability():
+    candidate = _document_export_candidate(
+        "Do not check document layout for digital PDF export."
+    )
+    request = CodingKnowledgeRequest(
+        task_reference="Validate a digital PDF export",
+        capability_keywords=("digital PDF export",),
+        specialized_knowledge_required=True,
+    )
+    assert _match_candidate(request, candidate) == (
+        0, ("applicability-contradicted-guidance",)
+    )
+    assert not select_coding_knowledge(request, (candidate,)).selected
