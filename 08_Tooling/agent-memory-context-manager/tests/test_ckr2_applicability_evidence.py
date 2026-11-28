@@ -580,7 +580,7 @@ def test_exclusion_recognizes_short_technical_terms(topic):
 @pytest.mark.parametrize("field", [
     None, {"type": "select", "select": {"name": "webhook delivery"}},
     {"type": "rich_text", "rich_text": [{"text": {"content": "missing plain_text"}}]},
-    _rich("; ;"), _rich("x" * 513), _rich("x" * 50000),
+    _rich("; ;"), _rich("x" * 513), _rich("x" * 50000), _rich(" " * 50000),
 ])
 def test_present_invalid_supporting_cases_refuse_normalization(field):
     raw = ll102_row()
@@ -588,17 +588,6 @@ def test_present_invalid_supporting_cases_refuse_normalization(field):
     normalized = normalize_lesson_row(raw)
     assert isinstance(normalized, LessonActivationSkip)
     assert normalized.reason == "invalid-supporting-cases"
-
-
-def test_blank_notion_rich_text_retains_legacy_behavior():
-    raw = ll102_row()
-    raw["properties"]["Supporting Cases"] = {"type": "rich_text", "rich_text": []}
-    normalized = normalize_lesson_row(raw)
-    assert not isinstance(normalized, LessonActivationSkip)
-    candidate = _as_selection_candidate(normalized)
-    assert candidate.applicability_cases == ()
-    request = replace(LL102_REQUEST, capability_keywords=(candidate.capability_kind,))
-    assert _match_candidate(request, candidate) == (2, ("ecosystem-capability-match",))
 
 
 @pytest.mark.parametrize("case, hint", [
@@ -650,3 +639,101 @@ def test_malformed_file_case_cannot_match_even_an_identical_hint(path):
     assert result.reason_codes == ("applicability-conditions-unsatisfied",)
     assert result.unsatisfied == (0,)
     assert _match_candidate(request, candidate)[0] == 0
+
+
+@pytest.mark.parametrize("case", [
+    "docs/document_layout.md.backup",
+    "docs/document_layout.md..",
+    "docs/document_layout.md?v=1",
+    "components/document_layout.tsx",
+    "docs/document layout.md",
+    "docs/document_layout.md?mode=two words",
+    "document_layout.md?v=1",
+    "document_layout.md",
+])
+def test_file_shaped_case_is_never_evidenced_by_filename_words(case):
+    candidate = ll102_candidate(applicability_cases=(case, "Review document layout"))
+    request = replace(
+        LL102_REQUEST, target_path_hints=("other/place.py",),
+        capability_keywords=("document layout",),
+    )
+    assert _match_candidate(request, candidate) == (0, ("applicability-conditions-unsatisfied",))
+    evaluation = evaluate_applicability(request, candidate)
+    assert evaluation.unsatisfied == (0,)
+    assert evaluation.evidence == ((1, ("document", "layout")),)
+
+
+@pytest.mark.parametrize("case, allowed", [
+    ("docs/document_layout.md.backup", False),
+    ("docs/document_layout.md..", False),
+    ("docs/document_layout.md?v=1", False),
+    ("components/document_layout.tsx", True),
+    ("document_layout.md", True),
+    ("./document_layout.md.", True),
+])
+def test_file_shaped_case_validates_syntax_before_comparison(case, allowed):
+    candidate = ll102_candidate(applicability_cases=(case, "Review document layout"))
+    hint = "document_layout.md" if case.startswith("./") else case
+    if case.endswith(".."):
+        hint = case[:-1]  # Would match after removing one terminal period.
+    request = replace(
+        LL102_REQUEST, target_path_hints=(hint,), capability_keywords=("document layout",),
+    )
+    evaluation = evaluate_applicability(request, candidate)
+    assert evaluation.matched is allowed
+    if allowed:
+        assert evaluation.evidence[0] == (0, (case,))
+    else:
+        assert evaluation.unsatisfied == (0,)
+
+
+@pytest.mark.parametrize("directive", ["Must not apply", "Never use this", "Should not apply"])
+def test_negative_directives_veto_without_adding_positive_evidence(directive):
+    candidate = ll102_candidate(applicability_cases=(
+        f"{directive} to a PR-only workflow.", "Review document layout",
+    ))
+    request = replace(LL102_REQUEST, capability_keywords=("pr-only workflow", "document layout"))
+    assert _match_candidate(request, candidate) == (0, ("applicability-exclusion-fired",))
+    assert evaluate_applicability(request, candidate).exclusions_fired == (0,)
+    unrelated = replace(request, capability_keywords=("document layout",))
+    assert _match_candidate(unrelated, candidate) == (2, (REASON,))
+
+
+@pytest.mark.parametrize("segments", [[], [" "], [" ", "\t\n", ""]])
+def test_empty_valid_rich_text_has_no_structured_cases(segments):
+    raw = ll102_row()
+    raw["properties"]["Supporting Cases"]["rich_text"] = [
+        {"plain_text": segment} for segment in segments
+    ]
+    candidate = _candidate_from_row(raw)
+    assert candidate.applicability_cases == ()
+    request = replace(LL102_REQUEST, capability_keywords=(candidate.capability_kind,))
+    assert _match_candidate(request, candidate) == (2, ("ecosystem-capability-match",))
+
+
+@pytest.mark.parametrize("separator", [";", "\n"])
+def test_rich_text_formatting_runs_are_not_case_boundaries(separator):
+    raw = ll102_row()
+    raw["properties"]["Supporting Cases"]["rich_text"] = [
+        {"plain_text": segment} for segment in (
+            "Do not apply to a PR-only workflow.", separator, "Review docu", "ment layout.",
+        )
+    ]
+    assert _candidate_from_row(raw).applicability_cases == (
+        "Do not apply to a PR-only workflow.", "Review document layout.",
+    )
+    raw["properties"]["Supporting Cases"]["rich_text"].pop(1)
+    assert _candidate_from_row(raw).applicability_cases == (
+        "Do not apply to a PR-only workflow.Review document layout.",
+    )
+
+
+def test_prose_that_mentions_a_filename_stays_a_text_case():
+    candidate = ll102_candidate(applicability_cases=("Review docs/document_layout.md for print.",))
+    request = replace(
+        LL102_REQUEST, target_path_hints=("other/place.py",),
+        capability_keywords=("document layout",),
+    )
+    evaluation = evaluate_applicability(request, candidate)
+    assert evaluation.matched
+    assert evaluation.evidence == ((0, ("document", "layout")),)

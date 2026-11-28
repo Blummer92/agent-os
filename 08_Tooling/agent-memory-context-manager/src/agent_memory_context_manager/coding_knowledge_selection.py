@@ -806,7 +806,8 @@ _APPLICABILITY_REASON = "applicability-evidence-text-match"
 _APPLICABILITY_MAX_CASES = 8
 _APPLICABILITY_MIN_SHARED_TOKENS = 2
 _APPLICABILITY_EXCLUSION = re.compile(
-    r"^(?:do not|don't|never apply|not applicable|does not apply|excludes)\b"
+    r"^(?:(?:do|must|should|shall) not|don't|never|"
+    r"not applicable|does not apply|excludes)\b"
 )
 _APPLICABILITY_APOSTROPHES = str.maketrans({char: "'" for char in "‘’ʼ"})
 # Short domain words are useful for a veto but don't expand positive matches.
@@ -822,8 +823,16 @@ _APPLICABILITY_SCAFFOLD = frozenset({
 _APPLICABILITY_NEGATION = re.compile(
     r"\b(?:never|do not|must not|should not|don['\u2019\u02bc]t|avoid|skip|reject|not|no)\b"
 )
+# Recognize file-shaped cases separately from validating them. Unsupported
+# extensions, query suffixes, and invalid segments must not become topical text.
+_APPLICABILITY_FILE_SHAPE = re.compile(r"(?:\S*[\\/]\S*|\S*\.[a-z0-9]\S*)")
+# A leading path segment keeps malformed paths with spaces out of prose
+# scoring, without classifying prose that merely mentions a filename.
+_APPLICABILITY_SPACED_FILE_SHAPE = re.compile(
+    r"(?:[a-z0-9_.-]+|[a-z]:)?[\\/][^\r\n]*\.[a-z0-9]+(?:[?#][^\r\n]*|\.*)"
+)
 _APPLICABILITY_PATH = re.compile(
-    r"^(?:/+|[a-z0-9_.-]+/)[a-z0-9_./-]+\.(?:yml|yaml|py|md|json|toml|txt|sh|js|ts)$"
+    r"(?:[a-z0-9_.-]+/)*[a-z0-9_.-]+\.(?:yml|yaml|py|md|json|toml|txt|sh|js|jsx|ts|tsx)"
 )
 
 
@@ -888,7 +897,11 @@ def _applicability_case_kind(case: str) -> str:
     if _APPLICABILITY_EXCLUSION.match(reviewed):
         return "exclusion"
     # Path-shaped but malformed cases must not become topical evidence.
-    if _APPLICABILITY_PATH.fullmatch(_case_path_text(case).casefold()) is not None:
+    path_text = _case_path_text(case).casefold()
+    if (
+        _APPLICABILITY_FILE_SHAPE.fullmatch(path_text)
+        or _APPLICABILITY_SPACED_FILE_SHAPE.fullmatch(path_text)
+    ):
         return "path"
     return "positive"
 
@@ -900,6 +913,8 @@ def _case_path_text(case: str) -> str:
 
 def _path_case_satisfied(case: str, request: CodingKnowledgeRequest) -> bool:
     wanted = _case_path_text(case).removeprefix("./")
+    if not _APPLICABILITY_PATH.fullmatch(wanted.casefold()):
+        return False
     if any(part in {"", ".", ".."} for part in wanted.split("/")):
         return False
     return any(

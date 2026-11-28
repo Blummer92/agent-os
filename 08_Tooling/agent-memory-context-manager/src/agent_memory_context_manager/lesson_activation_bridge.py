@@ -694,16 +694,15 @@ def _parse_applicability_cases(prop: Any) -> tuple[str, ...] | None:
     matcher. A Notion row can have an empty rich-text array for this column.
     """
     if isinstance(prop, str):
-        text = prop.strip()
+        text = prop
     elif isinstance(prop, Mapping) and prop.get("type") == "rich_text":
-        items = prop.get("rich_text")
-        if isinstance(items, list) and not items:
-            return ()
-        text = _read_text_segments(items)
+        text = _read_text_segments(prop.get("rich_text"), preserve_whitespace=True)
     else:
         return None
-    if not text or len(text) > MAX_GUIDANCE_TEXT_CHARS:
+    if text is None or len(text) > MAX_GUIDANCE_TEXT_CHARS:
         return None
+    if isinstance(prop, Mapping) and not text.strip():
+        return ()
     cases = tuple(case.strip() for case in re.split(r"[;\n]+", text) if case.strip())
     if not cases or len(cases) > _APPLICABILITY_MAX_CASES:
         return None
@@ -731,7 +730,7 @@ def _guidance_text(prop: Any) -> tuple[str | None, str]:
     return joined, "ok"
 
 
-def _read_text_segments(items: Any) -> str | None:
+def _read_text_segments(items: Any, *, preserve_whitespace: bool = False) -> str | None:
     """Join a bounded provider rich-text array without coercing malformed items."""
     if not isinstance(items, list) or len(items) > MAX_ROW_LIST_ITEMS:
         return None
@@ -743,7 +742,8 @@ def _read_text_segments(items: Any) -> str | None:
         if not isinstance(text, str):
             return None
         parts.append(text)
-    return "".join(parts).strip() or None
+    joined = "".join(parts)
+    return joined if preserve_whitespace else joined.strip() or None
 
 
 def _plain_text(rich_text: Any) -> str | None:
