@@ -17,6 +17,14 @@ import urllib.request
 import pytest
 
 from agent_os_execution_service import ckr6_github_bridge as bridge
+from agent_memory_context_manager.lesson_applicability import (
+    ApplicabilityCondition,
+    ApplicabilityRecord,
+    InvariantRef,
+    ShadowLessonState,
+    TaskEvidence,
+    describe_applicability_match,
+)
 
 
 def candidate(**changes):
@@ -150,6 +158,70 @@ def _postback(monkeypatch, event, result):
     body = posted_bodies[0]
     assert len(body.encode("utf-8")) <= bridge.MAX_RESULT_COMMENT_BYTES
     return bridge.parse_ckr6_result_comment(body)
+
+
+def _reviewed_shadow_fixture(*, mechanism="test-mechanism", boundary="test-boundary"):
+    """Fully eligible PR-2 lesson with synthetic, test-only identifiers."""
+    revision = "2026-11-18T12:00:00.000Z"
+    record = ApplicabilityRecord(
+        "LL-12", revision, (mechanism,),
+        (InvariantRef(boundary, "production-boundary"),),
+        (ApplicabilityCondition(mechanism, boundary),), (),
+        "fixture-reviewer", "https://github.com/Blummer92/agent-os/pull/4030", "reviewed",
+    )
+    lesson = ShadowLessonState("LL-12", revision, "Synthetic reviewed lesson",
+                               False, True, "current")
+    return record, lesson
+
+
+def test_postback_hints_cannot_qualify_pr2_without_verified_observation(monkeypatch):
+    captured = capture(monkeypatch)
+    posted = _postback(monkeypatch, _capture_event(), captured)
+    hints = tuple(posted["lesson_proposal"]["proposed_applicability_hints"])
+    assert hints == ("issue creation", "label plan")
+
+    record, lesson = _reviewed_shadow_fixture()
+    # Even transporting the hints into the task's untrusted references
+    # cannot substitute for a separately authenticated observation.
+    task = TaskEvidence(
+        "https://github.com/Blummer92/agent-os/issues/3418",
+        static_inferred_refs=hints,
+    )
+    match = describe_applicability_match(record, lesson, task)
+    assert match.matched is False
+    assert match.confidence == "none"
+    assert match.verified_mechanisms == ()
+    assert "positive-applicability-condition-unsatisfied" in match.reason_codes
+    assert "static-inferred-link-is-not-verified-detection" in match.reason_codes
+
+
+def test_exact_mechanism_boundary_hints_are_still_unverified_claims(monkeypatch):
+    # Synthetic IDs deliberately coincide with the PR-2 condition; these
+    # are not an approved production mechanism/boundary vocabulary.
+    hint_values = ["test-boundary", "test-mechanism"]
+    captured = capture(monkeypatch, future_use_hints=hint_values)
+    posted = _postback(
+        monkeypatch, _capture_event(future_use_hints=hint_values), captured,
+    )
+    hints = posted["lesson_proposal"]["proposed_applicability_hints"]
+    assert hints == ["test-boundary", "test-mechanism"]
+
+    record, lesson = _reviewed_shadow_fixture()
+    task = TaskEvidence(
+        "https://github.com/Blummer92/agent-os/issues/3418",
+        claimed_mechanisms=("test-mechanism",),
+        claimed_boundaries=("test-boundary",),
+    )
+    match = describe_applicability_match(record, lesson, task)
+    assert match.matched is False
+    assert match.verified_mechanisms == ()
+    assert "positive-applicability-condition-unsatisfied" in match.reason_codes
+    assert "caller-asserted-evidence-ignored" in match.reason_codes
+    # Directly passing proposed strings as observation objects is invalid.
+    with pytest.raises(TypeError, match="VerifiedObservation"):
+        describe_applicability_match(
+            record, lesson, task, verified_observations=tuple(hints),
+        )
 
 
 def test_capture_hints_are_posted_intact_when_the_result_fits(monkeypatch):
