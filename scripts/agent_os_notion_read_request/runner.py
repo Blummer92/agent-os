@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Mapping
 
 from .admission import admit_notion_read_request
@@ -48,9 +49,27 @@ DISPATCH_FAILED = "failed"
 RECEIPT_REASON_TRANSPORT_BYTE_BOUND = "transport-exceeds-byte-bound"
 RECEIPT_REASON_TRANSPORT_UNREADABLE = "transport-unreadable"
 RECEIPT_REASON_TRANSPORT_INVALID_JSON = "transport-invalid-json"
+RECEIPT_REASON_TRANSPORT_INVALID_ENCODING = "transport-invalid-encoding"
+RECEIPT_REASON_EXECUTION_UNAVAILABLE = "execution-unavailable"
 RECEIPT_REASON_REQUEST_ERROR = "notion-read-request-error"
 RECEIPT_REASON_RECEIPT_WRITE_FAILED = "receipt-write-failed"
 RECEIPT_REASON_UNHANDLED = "unhandled-runner-exception"
+
+
+def _require_completed_execution(execution: object) -> None:
+    """Reject explicit failed executor envelopes before reporting dispatch completion.
+
+    Successful execution helpers return validated, bounded projections; a
+    status/error from a failed injected helper is never a completed read.
+    Currentness and identity dispositions within successful evidence are
+    separate from transport/execution completion.
+    """
+    if not isinstance(execution, Mapping):
+        raise NotionReadRequestError("execution-return-contract-invalid")
+    if ("status" in execution and execution["status"] != "success") or (
+        "error" in execution and execution["error"] is not None
+    ):
+        raise NotionReadRequestError("execution-returned-non-success")
 
 
 def run_notion_read_request(
@@ -103,6 +122,7 @@ def run_notion_read_request(
             catalog=resolved_catalog,
             scheduler_task_executor_factory=scheduler_task_executor_factory,
         )
+        _require_completed_execution(execution)
         evidence["dispatch_status"] = DISPATCH_COMPLETED
         evidence["dispatch_reason"] = "bounded-source-schema-projected"
         evidence["result"] = project_source_schema_result(
@@ -119,6 +139,7 @@ def run_notion_read_request(
             catalog=resolved_catalog,
             scheduler_task_executor_factory=scheduler_task_executor_factory,
         )
+        _require_completed_execution(execution)
         evidence["dispatch_status"] = DISPATCH_COMPLETED
         evidence["dispatch_reason"] = "bounded-lesson-content-projected"
         evidence["result"] = project_lesson_content_result(
@@ -132,6 +153,7 @@ def run_notion_read_request(
             admission,
             scheduler_task_executor_factory=scheduler_task_executor_factory,
         )
+        _require_completed_execution(execution)
         evidence["dispatch_status"] = DISPATCH_COMPLETED
         evidence["dispatch_reason"] = "bounded-destination-verification-projected"
         evidence["result"] = {
@@ -150,6 +172,7 @@ def run_notion_read_request(
             scheduler_task_executor_factory=scheduler_task_executor_factory,
             current_context=current_context,
         )
+        _require_completed_execution(execution)
         evidence["dispatch_status"] = DISPATCH_COMPLETED
         evidence["dispatch_reason"] = "bounded-read-projected"
         evidence["result"] = project_public_result(
@@ -164,12 +187,16 @@ def run_notion_read_request(
 
 def _classify_runner_exception(exc: BaseException, *, phase: str) -> str:
     """Map an exception to a closed-vocabulary receipt reason code."""
-    if isinstance(exc, json.JSONDecodeError):
+    if phase == "transport" and isinstance(exc, json.JSONDecodeError):
         return RECEIPT_REASON_TRANSPORT_INVALID_JSON
+    if isinstance(exc, UnicodeDecodeError) and phase == "transport":
+        return RECEIPT_REASON_TRANSPORT_INVALID_ENCODING
     if isinstance(exc, OSError):
         if phase == "write":
             return RECEIPT_REASON_RECEIPT_WRITE_FAILED
-        return RECEIPT_REASON_TRANSPORT_UNREADABLE
+        if phase == "transport":
+            return RECEIPT_REASON_TRANSPORT_UNREADABLE
+        return RECEIPT_REASON_EXECUTION_UNAVAILABLE
     if isinstance(exc, NotionReadRequestError):
         # In the transport phase the only NotionReadRequestError source is the
         # byte-bound guard in _read_transport.
@@ -177,6 +204,26 @@ def _classify_runner_exception(exc: BaseException, *, phase: str) -> str:
             return RECEIPT_REASON_TRANSPORT_BYTE_BOUND
         return RECEIPT_REASON_REQUEST_ERROR
     return RECEIPT_REASON_UNHANDLED
+
+
+def _write_receipt(output: Path, payload: str) -> None:
+    """Publish only a complete JSON receipt; leave any prior file intact on failure."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output.parent,
+            prefix=".notion-read-receipt-", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload + "\n")
+        temporary.replace(output)
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass  # cleanup must not obscure the original failure
 
 
 def _publish_failure_receipt(
@@ -189,12 +236,12 @@ def _publish_failure_receipt(
     """Write a bounded sanitized failure receipt; return the exit code.
 
     The receipt reuses the evidence contract with a non-success disposition.
-    Only developer-authored domain messages are published in the detail
-    field; other exceptions contribute their class name only, so provider
-    responses, paths, and secrets cannot leak through it.
+    Exception messages are never published: even a domain exception can
+    wrap provider-supplied content. Fixed reason codes and error classes
+    distinguish failures without exposing credentials or private data.
     """
     reason = _classify_runner_exception(exc, phase=phase)
-    detail = str(exc)[:500] if isinstance(exc, NotionReadRequestError) else None
+    detail = None  # Never echo untrusted/provider-derived exception messages.
     receipt: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "admission": None,
@@ -216,8 +263,7 @@ def _publish_failure_receipt(
     reject_credential_keys(receipt, "evidence")
     payload = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(payload + "\n", encoding="utf-8")
+        _write_receipt(output, payload)
     except OSError:
         pass  # best effort; the nonzero exit still signals the failure
     print(payload)
@@ -225,9 +271,12 @@ def _publish_failure_receipt(
 
 
 def _read_transport(path: Path) -> object:
-    if path.stat().st_size > MAX_TRANSPORT_BYTES:
+    # Bound the actual bytes consumed, not an earlier stat() snapshot.
+    with path.open("rb") as source:
+        raw = source.read(MAX_TRANSPORT_BYTES + 1)
+    if len(raw) > MAX_TRANSPORT_BYTES:
         raise NotionReadRequestError("transport evidence exceeds byte bound")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(raw.decode("utf-8"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,10 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
+        _write_receipt(
+            args.output, json.dumps(evidence, sort_keys=True, separators=(",", ":"))
         )
     except OSError as exc:
         return _publish_failure_receipt(
